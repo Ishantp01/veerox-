@@ -1,6 +1,6 @@
 # Veerox AI — Voice + WhatsApp Agent
 
-Veerox AI is a multi-channel conversational agent that handles inbound voice calls (via Twilio + OpenAI Realtime API) and WhatsApp messages (via Meta Cloud API). It captures leads, books appointments, and escalates to a human operator — all backed by a FastAPI + PostgreSQL + Redis stack and managed through a Next.js admin dashboard.
+Veerox AI is a multi-channel conversational agent that handles inbound voice calls (via Plivo + OpenAI Realtime API) and WhatsApp messages (via Meta Cloud API). It captures leads, books appointments, and escalates to a human operator — all backed by a FastAPI + PostgreSQL + Redis stack and managed through a Next.js admin dashboard.
 
 For architecture decisions, data-flow diagrams, and the full build plan, see [`longrunning/README.md`](longrunning/README.md).
 
@@ -10,7 +10,7 @@ For architecture decisions, data-flow diagrams, and the full build plan, see [`l
 
 ```bash
 cp .env.example .env
-# Fill in OPENAI_API_KEY, TWILIO_*, META_*, and ADMIN_TOKEN
+# Fill in OPENAI_API_KEY, PLIVO_*, META_*, and ADMIN_TOKEN
 
 ./scripts/dev.sh          # boots Postgres + Redis, runs migrations, starts FastAPI on :8000
 

@@ -128,7 +128,7 @@ mktable([
     ["Admin dashboard (7 pages)", "DONE", "Polished UI, runs on :3001"],
     ["Database + Redis + migrations", "DONE", "Neon Postgres + Redis"],
     ["Admin API (stats, kill-switch, escalations)", "DONE", "Complete"],
-    ["Voice channel (Twilio + Realtime)", "NOT BUILT", "3 stub files — main gap"],
+    ["Voice channel (Plivo + Realtime)", "NOT BUILT", "3 stub files — main gap"],
     ["Outbound dial backend", "MISSING", "calls.py to build"],
     ["Cost tracking (pricing constants)", "PARTIAL", "costs.py missing"],
     ["Production deployment + CI/CD", "NOT DONE", "Local only today"],
@@ -147,7 +147,7 @@ mktable([
     ["AI — chat", "OpenAI GPT-4o", "Strong Hindi/English + tool calling"],
     ["AI — voice", "OpenAI Realtime API", "Native speech-to-speech, low latency"],
     ["Transcription", "OpenAI Whisper", "WhatsApp voice notes → text"],
-    ["Telephony", "Twilio Voice + Media Streams", "Phone numbers + audio WebSocket"],
+    ["Telephony", "Plivo Voice + Audio Streaming", "Phone numbers + audio WebSocket"],
     ["WhatsApp", "Meta Cloud API (direct)", "Lower cost, full control"],
     ["Database", "PostgreSQL 16 + SQLAlchemy + Alembic", "Relational, multi-tenant ready"],
     ["Cache / state", "Redis", "Kill-switch, rate limits, idempotency"],
@@ -165,15 +165,15 @@ para("Phased so each phase ends with something demonstrable. Build order: "
 para("Phase A &mdash; Finish the feature set &nbsp;(~1 week)", h2)
 mktable([
     ["#", "Task", "File(s)"],
-    ["A1", "Build voice TwiML webhook", "channels/voice/twilio_webhook.py"],
-    ["A2", "Build Realtime audio bridge (WebSocket + interruption via mark/clear)", "channels/voice/realtime_bridge.py"],
+    ["A1", "Build voice Plivo XML webhook", "channels/voice/webhook.py"],
+    ["A2", "Build Realtime audio bridge (WebSocket + interruption via clearAudio)", "channels/voice/realtime_bridge.py"],
     ["A3", "Voice tool-call bridging (reuse same DISPATCH_TABLE)", "channels/voice/adapter.py"],
     ["A4", "Stream voice transcripts to DB during the call", "realtime_bridge.py"],
     ["A5", "Outbound dial endpoint", "routers/calls.py + main.py"],
     ["A6", "Pricing constants + USD-spend calc", "core/costs.py"],
 ], [22, 270, 158])
 gap(3)
-para("<b>Acceptance:</b> call the Twilio number &rarr; English/Hindi conversation &rarr; capture_lead "
+para("<b>Acceptance:</b> call the Plivo number &rarr; English/Hindi conversation &rarr; capture_lead "
      "fires &rarr; interrupting mid-sentence stops playback in ~200ms &rarr; transcript rows appear "
      "<i>during</i> the call.", small)
 

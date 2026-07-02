@@ -77,6 +77,67 @@ async def send_text(to_e164: str, body: str) -> dict[str, Any]:
     return data
 
 
+async def send_template(
+    to_e164: str,
+    template_name: str,
+    language_code: str = "en_US",
+    body_params: list[str] | None = None,
+) -> dict[str, Any]:
+    """Send a pre-approved WhatsApp **template** message via the Graph API.
+
+    Templates are the only way to message a user *outside* the 24-hour
+    customer-service window — free-form text there raises Meta error 131047
+    ("re-engagement message"). The template must already be approved in
+    WhatsApp Manager.
+
+    ``body_params`` fills the ``{{1}}``, ``{{2}}`` ... placeholders in the
+    template body, in order. Pass ``None`` for templates with no variables
+    (e.g. the built-in ``hello_world``).
+
+    Returns the raw JSON response (contains the outbound message id). Raises
+    ``httpx.HTTPStatusError`` on a non-2xx response.
+    """
+    url = _graph_url("/messages")
+    template: dict[str, Any] = {
+        "name": template_name,
+        "language": {"code": language_code},
+    }
+    if body_params:
+        template["components"] = [
+            {
+                "type": "body",
+                "parameters": [{"type": "text", "text": p} for p in body_params],
+            }
+        ]
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_e164,
+        "type": "template",
+        "template": template,
+    }
+    try:
+        r = await _http.post(url, json=payload, headers=_auth_headers())
+        r.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "whatsapp_send_template_failed",
+            to=to_e164,
+            template=template_name,
+            error=str(exc),
+            status=getattr(getattr(exc, "response", None), "status_code", None),
+        )
+        raise
+
+    data: dict[str, Any] = r.json()
+    logger.info(
+        "whatsapp_send_template_ok",
+        to=to_e164,
+        template=template_name,
+        wa_message_id=_extract_outbound_id(data),
+    )
+    return data
+
+
 async def download_media(media_id: str) -> bytes:
     """Download a media blob from Meta in two steps.
 

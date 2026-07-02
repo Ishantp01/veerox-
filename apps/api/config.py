@@ -23,20 +23,21 @@ class Settings(BaseSettings):
     openai_realtime_model: str = "gpt-4o-realtime-preview"
     openai_realtime_voice: str = "alloy"
 
-    # Twilio
-    twilio_account_sid: str | None = None
-    twilio_auth_token: str | None = None
-    twilio_phone_number: str | None = None
+    # Plivo
+    plivo_auth_id: str | None = None
+    plivo_auth_token: str | None = None
+    plivo_phone_number: str | None = None
 
     # Meta WhatsApp Cloud API
     meta_app_id: str | None = None
     meta_app_secret: str | None = None
+    meta_whatsapp_business_account_id: str | None = None
     meta_verify_token: str | None = None
     meta_phone_number_id: str | None = None
     meta_access_token: str | None = None
     meta_graph_api_version: str = "v21.0"
 
-    # Public base URL (used for TwiML <Stream url=...> and Meta webhook registration)
+    # Public base URL (used for Plivo XML <Stream url=...> and Meta webhook registration)
     public_base_url: str = "https://api.example.com"
 
     # CORS — comma-separated list of allowed frontend origins. The localhost

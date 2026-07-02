@@ -83,7 +83,7 @@ export default function DialPage() {
               </div>
               <div>
                 <CardTitle>Outbound Call</CardTitle>
-                <p className="text-xs text-slate-400">via Twilio + AI agent</p>
+                <p className="text-xs text-slate-400">via Plivo + AI agent</p>
               </div>
             </div>
           </CardHeader>
@@ -149,7 +149,7 @@ export default function DialPage() {
             <Info size={12} aria-hidden /> How it works
           </p>
           <p className="text-xs text-indigo-500">
-            Twilio calls the recipient → AI agent joins → conversation is logged
+            Plivo calls the recipient → AI agent joins → conversation is logged
             automatically.
           </p>
         </div>

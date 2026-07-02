@@ -12,6 +12,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
+from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.prompts import BASE_SYSTEM_PROMPT, VOICE_APPEND, WHATSAPP_APPEND
@@ -347,12 +348,14 @@ async def outbound_whatsapp(
         db.add(conversation)
         await db.flush()
 
+    # What we record in history: the literal text, or a marker for templates.
+    body_for_record = payload.text or f"[template:{payload.template_name}]"
     message = Message(
         org_id=org_id,
         conversation_id=conversation.id,
         user_id=user.id,
         role="assistant",
-        content=payload.text,
+        content=body_for_record,
         channel="whatsapp",
     )
     db.add(message)
@@ -365,12 +368,23 @@ async def outbound_whatsapp(
             phone=payload.phone,
             reason="skipping_real_send",
         )
-        return OutboundWhatsappOut(status="queued", phone=payload.phone, text=payload.text)
+        return OutboundWhatsappOut(status="queued", phone=payload.phone, text=body_for_record)
 
-    # Real send. Bubble the Graph response into the response status so the
-    # dashboard can correlate to the wa_message_id without a schema bump.
+    # Real send. A template is the ONLY way to reach a user OUTSIDE the 24-hour
+    # customer-service window (free-form text raises Meta error 131047); inside
+    # the window, plain text is fine. The caller chooses by supplying
+    # template_name (template) or text (free-form) — enforced by the schema.
     try:
-        graph_response = await wa_client.send_text(payload.phone, payload.text)
+        if payload.template_name:
+            graph_response = await wa_client.send_template(
+                payload.phone,
+                template_name=payload.template_name,
+                language_code=payload.template_lang,
+                body_params=payload.template_params,
+            )
+        else:
+            # text is guaranteed non-None here by OutboundWhatsappIn's validator.
+            graph_response = await wa_client.send_text(payload.phone, payload.text or "")
     except httpx.HTTPError as exc:
         logger.exception(
             "outbound_whatsapp_send_failed",
@@ -396,7 +410,7 @@ async def outbound_whatsapp(
     return OutboundWhatsappOut(
         status="sent",
         phone=payload.phone,
-        text=payload.text,
+        text=body_for_record,
         wa_message_id=wa_message_id,
     )
 
@@ -413,12 +427,41 @@ async def outbound_call(
     payload: OutboundCallIn,
     x_admin_token: str | None = Header(None),
 ) -> OutboundCallOut:
-    """STUB: dial an outbound call.
+    """Place an outbound voice call via Plivo.
 
-    Day 3 worker wires this through Twilio (`POST /calls/initiate`).
+    Local-dev fallback: when Plivo credentials + a from-number are not all
+    configured, return a STUB response (same convention as
+    ``outbound_whatsapp`` skipping the real send when ``meta_access_token`` is
+    unset). The moment ``PLIVO_AUTH_ID`` / ``PLIVO_AUTH_TOKEN`` /
+    ``PLIVO_PHONE_NUMBER`` are set, real calls go out automatically.
+
+    When Plivo answers it fetches ``{PUBLIC_BASE_URL}/voice/answer`` — see
+    ``channels/voice/webhook.py`` — which currently speaks a test message.
     """
     _verify_admin(x_admin_token)
-    return OutboundCallOut(call_sid=f"STUB-{uuid4()}", status="queued")
+
+    if not voice_plivo.is_configured():
+        logger.warning(
+            "outbound_call_plivo_not_configured",
+            to=payload.to_phone,
+            reason="skipping_real_call",
+        )
+        return OutboundCallOut(call_sid=f"STUB-{uuid4()}", status="stub")
+
+    answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer"
+    try:
+        result = await voice_plivo.initiate_call(payload.to_phone, answer_url)
+    except httpx.HTTPError as exc:
+        logger.exception(
+            "outbound_call_failed",
+            to=payload.to_phone,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=502, detail="Outbound call failed") from exc
+
+    request_uuid = result.get("request_uuid")
+    call_sid = request_uuid if isinstance(request_uuid, str) else str(uuid4())
+    return OutboundCallOut(call_sid=call_sid, status="queued")
 
 
 # ---------------------------------------------------------------------------

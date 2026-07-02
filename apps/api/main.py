@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from apps.api.channels.voice.realtime_bridge import router as voice_stream_router
+from apps.api.channels.voice.webhook import router as voice_router
 from apps.api.channels.whatsapp.webhook import router as whatsapp_router
 from apps.api.config import settings
 from apps.api.logging import setup_logging
@@ -51,6 +53,8 @@ def create_app() -> FastAPI:
     app.include_router(leads.router)
     app.include_router(admin.router)
     app.include_router(whatsapp_router)
+    app.include_router(voice_router)
+    app.include_router(voice_stream_router)
 
     return app
 
