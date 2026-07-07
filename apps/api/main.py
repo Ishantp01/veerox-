@@ -14,7 +14,7 @@ from apps.api.channels.whatsapp.webhook import router as whatsapp_router
 from apps.api.config import settings
 from apps.api.logging import setup_logging
 from apps.api.rate_limit import limiter
-from apps.api.routers import admin, conversations, health, leads
+from apps.api.routers import admin, conversations, diag, health, leads
 from apps.api.sentry import init_sentry
 
 
@@ -52,6 +52,7 @@ def create_app() -> FastAPI:
     app.include_router(conversations.router)
     app.include_router(leads.router)
     app.include_router(admin.router)
+    app.include_router(diag.router)
     app.include_router(whatsapp_router)
     app.include_router(voice_router)
     app.include_router(voice_stream_router)
