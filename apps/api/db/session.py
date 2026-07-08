@@ -10,6 +10,9 @@ engine = create_async_engine(
     settings.database_url,
     echo=settings.environment == "dev",
     pool_pre_ping=True,
+    # Neon's pooled endpoint runs PgBouncer in transaction-pooling mode, which
+    # is incompatible with asyncpg's server-side prepared statement cache.
+    connect_args={"statement_cache_size": 0},
 )
 
 AsyncSessionLocal = async_sessionmaker(
