@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from apps.api.channels.voice import plivo_client
 from apps.api.channels.voice.realtime_bridge import router as voice_stream_router
 from apps.api.channels.voice.webhook import router as voice_router
 from apps.api.channels.whatsapp.webhook import router as whatsapp_router
@@ -22,6 +23,7 @@ from apps.api.sentry import init_sentry
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging()
     init_sentry()
+    await plivo_client.register_inbound_answer_url()
     yield
 
 

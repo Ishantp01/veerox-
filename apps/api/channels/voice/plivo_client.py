@@ -80,3 +80,58 @@ async def initiate_call(to_e164: str, answer_url: str) -> dict[str, Any]:
         request_uuid=data.get("request_uuid"),
     )
     return data
+
+
+_INBOUND_APP_NAME = "veerox-voice-app"
+
+
+async def register_inbound_answer_url() -> None:
+    """Point the Plivo number's inbound Answer URL at PUBLIC_BASE_URL/voice/answer.
+
+    Runs on every app startup so the number always follows wherever this
+    backend is currently deployed, instead of needing a manual Plivo
+    console/API step after every redeploy to a new host. Idempotent: reuses
+    the existing ``veerox-voice-app`` Application if present, else creates it.
+    """
+    if not is_configured():
+        return
+
+    answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer"
+    number = (settings.plivo_phone_number or "").lstrip("+")
+    base = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}"
+    auth = (settings.plivo_auth_id or "", settings.plivo_auth_token or "")
+
+    try:
+        r = await _http.get(f"{base}/Application/", params={"limit": 20}, auth=auth)
+        r.raise_for_status()
+        existing = next(
+            (a for a in r.json().get("objects", []) if a.get("app_name") == _INBOUND_APP_NAME),
+            None,
+        )
+
+        if existing:
+            app_id = existing["app_id"]
+            r = await _http.post(
+                f"{base}/Application/{app_id}/",
+                json={"answer_url": answer_url, "answer_method": "POST"},
+                auth=auth,
+            )
+            r.raise_for_status()
+        else:
+            r = await _http.post(
+                f"{base}/Application/",
+                json={
+                    "app_name": _INBOUND_APP_NAME,
+                    "answer_url": answer_url,
+                    "answer_method": "POST",
+                },
+                auth=auth,
+            )
+            r.raise_for_status()
+            app_id = r.json()["app_id"]
+
+        r = await _http.post(f"{base}/Number/{number}/", json={"app_id": app_id}, auth=auth)
+        r.raise_for_status()
+        logger.info("plivo_inbound_answer_url_registered", answer_url=answer_url, app_id=app_id)
+    except httpx.HTTPError as exc:
+        logger.warning("plivo_inbound_registration_failed", error=str(exc))

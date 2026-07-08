@@ -45,9 +45,8 @@ class Settings(BaseSettings):
     # origin(s), e.g. "https://veerox-web.vercel.app".
     cors_allowed_origins: str = (
         "http://localhost:3000,http://localhost:3001,"
-        "http://127.0.0.1:3000,http://127.0.0.1:3001",
+        "http://127.0.0.1:3000,http://127.0.0.1:3001,"
         "https://veerox.vercel.app"
-
     )
 
     # Observability
