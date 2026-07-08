@@ -77,15 +77,16 @@ async def voice_stream(ws: WebSocket) -> None:
     log = logger.bind(caller=caller, call_uuid=call_uuid)
     log.info("voice_stream_connected")
 
-    user_id, conversation_id = await voice_adapter.open_voice_conversation(caller)
-    state = voice_adapter.CallState(user_id=user_id, conversation_id=conversation_id)
-
-    # No OpenAI-Beta header on the GA endpoint — sending it alongside a GA
-    # model name causes the connection to be rejected outright.
-    headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
-    url = f"{_OPENAI_REALTIME_URL}?model={settings.openai_realtime_model}"
-
+    conversation_id: Any = None
     try:
+        user_id, conversation_id = await voice_adapter.open_voice_conversation(caller)
+        state = voice_adapter.CallState(user_id=user_id, conversation_id=conversation_id)
+
+        # No OpenAI-Beta header on the GA endpoint — sending it alongside a GA
+        # model name causes the connection to be rejected outright.
+        headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
+        url = f"{_OPENAI_REALTIME_URL}?model={settings.openai_realtime_model}"
+
         async with websockets.connect(
             url, additional_headers=headers, max_size=None
         ) as oai:
@@ -155,5 +156,6 @@ async def voice_stream(ws: WebSocket) -> None:
     except Exception as exc:  # noqa: BLE001
         log.warning("voice_stream_error", error=str(exc))
     finally:
-        await voice_adapter.close_voice_conversation(conversation_id)
+        if conversation_id is not None:
+            await voice_adapter.close_voice_conversation(conversation_id)
         log.info("voice_stream_ended")
