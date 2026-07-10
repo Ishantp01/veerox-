@@ -126,7 +126,7 @@ async def test_text_message_triggers_agent_and_send(
         send_calls.append((to, body))
         return {"messages": [{"id": "wamid.out"}]}
 
-    async def fake_mark_read(msg_id: str) -> None:
+    async def fake_mark_read(msg_id: str, typing: bool = False) -> None:
         mark_calls.append(msg_id)
 
     # Patch where the adapter looks them up (it imports the names from the
@@ -169,7 +169,7 @@ async def test_duplicate_message_id_is_skipped_on_second_delivery(
         send_calls.append((to, body))
         return {"messages": [{"id": "wamid.out"}]}
 
-    async def fake_mark_read(_: str) -> None:
+    async def fake_mark_read(_: str, typing: bool = False) -> None:
         return None
 
     monkeypatch.setattr(adapter_module.agent_core, "handle_turn", fake_handle_turn)

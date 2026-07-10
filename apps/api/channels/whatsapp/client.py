@@ -189,18 +189,23 @@ async def download_media(media_id: str) -> bytes:
     return bin_r.content
 
 
-async def mark_read(message_id: str) -> None:
+async def mark_read(message_id: str, typing: bool = False) -> None:
     """POST a read receipt for an inbound message.
+
+    With ``typing=True`` the receipt also shows a typing indicator in the
+    user's chat (auto-dismissed by Meta after ~25s or when we send a reply).
 
     Best-effort: failures are logged but do NOT raise — losing a read
     receipt should not poison the surrounding reply pipeline.
     """
     url = _graph_url("/messages")
-    payload = {
+    payload: dict[str, Any] = {
         "messaging_product": "whatsapp",
         "status": "read",
         "message_id": message_id,
     }
+    if typing:
+        payload["typing_indicator"] = {"type": "text"}
     try:
         r = await _http.post(url, json=payload, headers=_auth_headers())
         r.raise_for_status()

@@ -111,6 +111,18 @@ def _extract_message(payload: dict[str, Any]) -> InboundMessage | None:
     return None
 
 
+# Keep strong references to fire-and-forget tasks so the event loop doesn't
+# garbage-collect them mid-flight.
+_pending_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _fire_and_forget(coro: Any) -> None:
+    """Run a best-effort coroutine without blocking the caller."""
+    task = asyncio.create_task(coro)
+    _pending_tasks.add(task)
+    task.add_done_callback(_pending_tasks.discard)
+
+
 # Rolling window of per-turn stage timings, readable via GET /diag/latency.
 # Temporary, tied to the latency investigation — delete with the diag probe.
 _TIMINGS_KEY = "veerox:diag:wa_timings"
@@ -182,6 +194,11 @@ async def process_inbound(payload: dict[str, Any]) -> None:
             logger.info("whatsapp_inbound_duplicate_skipped", wa_message_id=msg.id)
             return
 
+        # Read receipt + typing indicator straight away, off the critical
+        # path — the user sees "typing…" while the agent works. mark_read
+        # swallows its own errors, so fire-and-forget is safe.
+        _fire_and_forget(wa_client.mark_read(msg.id, typing=True))
+
         org_id = UUID(settings.default_org_id)
 
         started = time.monotonic()
@@ -203,17 +220,10 @@ async def process_inbound(payload: dict[str, Any]) -> None:
             )
             agent_done = time.monotonic()
 
-        # mark_read is best-effort (it swallows errors internally) and doesn't
-        # gate the reply, so fire it concurrently with send_text instead of
-        # waiting on it first. send_text can still raise — that bubbles into
-        # the outer except so structlog and Sentry capture the failure.
-        _, reply_result = await asyncio.gather(
-            wa_client.mark_read(msg.id),
-            wa_client.send_text(msg.from_phone, reply),
-            return_exceptions=True,
-        )
-        if isinstance(reply_result, BaseException):
-            raise reply_result
+        # send_text can raise — we let it bubble into the outer except so
+        # structlog and Sentry capture the failure. (The read receipt was
+        # already fired above, before the agent ran.)
+        await wa_client.send_text(msg.from_phone, reply)
         send_done = time.monotonic()
 
         timings = {
