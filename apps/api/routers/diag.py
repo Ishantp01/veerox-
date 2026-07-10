@@ -66,7 +66,12 @@ async def latency_probe(x_admin_token: str | None = Header(None)) -> dict:
     timings["llm_ms"] = round((perf_counter() - t0) * 1000)
     timings["llm_reply"] = (result.content or "")[:40]
 
-    return {"ok": True, "timings": timings}
+    # Per-stage timings of the most recent real WhatsApp turns, recorded by
+    # the adapter (see _record_turn_timings there).
+    raw_turns = await redis.lrange("veerox:diag:wa_timings", 0, 9)  # type: ignore[misc]
+    recent_turns = [json.loads(t) for t in raw_turns]
+
+    return {"ok": True, "timings": timings, "recent_turns": recent_turns}
 
 
 @router.get("/openai-realtime")

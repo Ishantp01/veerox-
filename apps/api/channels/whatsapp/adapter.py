@@ -8,6 +8,7 @@ wrapped in a try/except so a bad message never crashes the worker.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -110,6 +111,22 @@ def _extract_message(payload: dict[str, Any]) -> InboundMessage | None:
     return None
 
 
+# Rolling window of per-turn stage timings, readable via GET /diag/latency.
+# Temporary, tied to the latency investigation — delete with the diag probe.
+_TIMINGS_KEY = "veerox:diag:wa_timings"
+_TIMINGS_KEEP = 10
+
+
+async def _record_turn_timings(timings: dict[str, Any]) -> None:
+    """Best-effort push of one turn's timings onto a capped Redis list."""
+    try:
+        redis = get_redis_pool()
+        await redis.lpush(_TIMINGS_KEY, json.dumps(timings))  # type: ignore[misc]
+        await redis.ltrim(_TIMINGS_KEY, 0, _TIMINGS_KEEP - 1)  # type: ignore[misc]
+    except Exception:
+        logger.warning("wa_timings_record_failed", exc_info=True)
+
+
 async def _claim_message_id(msg_id: str) -> bool:
     """Redis SETNX with 24h TTL — first claim wins, retries return False."""
     redis = get_redis_pool()
@@ -199,18 +216,18 @@ async def process_inbound(payload: dict[str, Any]) -> None:
             raise reply_result
         send_done = time.monotonic()
 
-        logger.info(
-            "whatsapp_inbound_processed",
-            wa_message_id=msg.id,
-            from_phone=msg.from_phone,
-            type=msg.type,
-            reply_chars=len(reply),
-            db_ms=int((db_done - started) * 1000),
-            resolve_ms=int((resolve_done - db_done) * 1000),
-            agent_ms=int((agent_done - resolve_done) * 1000),
-            send_ms=int((send_done - agent_done) * 1000),
-            total_ms=int((send_done - started) * 1000),
-        )
+        timings = {
+            "wa_message_id": msg.id,
+            "type": msg.type,
+            "reply_chars": len(reply),
+            "db_ms": int((db_done - started) * 1000),
+            "resolve_ms": int((resolve_done - db_done) * 1000),
+            "agent_ms": int((agent_done - resolve_done) * 1000),
+            "send_ms": int((send_done - agent_done) * 1000),
+            "total_ms": int((send_done - started) * 1000),
+        }
+        logger.info("whatsapp_inbound_processed", from_phone=msg.from_phone, **timings)
+        await _record_turn_timings(timings)
     except Exception as exc:
         # Catch-all so a single bad message can't kill the background loop.
         # Sentry is wired via structlog -> sentry_sdk in apps.api.sentry.
