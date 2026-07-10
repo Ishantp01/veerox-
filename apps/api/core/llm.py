@@ -7,6 +7,7 @@ means rewriting this module only.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -116,7 +117,9 @@ async def chat_completion(
         request["tools"] = tools
         request["tool_choice"] = "auto"
 
+    started = time.monotonic()
     response = await _create_completion(**request)
+    duration_ms = int((time.monotonic() - started) * 1000)
 
     choice = response.choices[0]
     message = choice.message
@@ -149,6 +152,7 @@ async def chat_completion(
         tokens_out=tokens_out,
         finish_reason=finish_reason,
         tool_call_count=len(tool_calls),
+        duration_ms=duration_ms,
     )
 
     return ChatResult(

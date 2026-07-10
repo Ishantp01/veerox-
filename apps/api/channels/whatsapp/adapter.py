@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -166,19 +167,24 @@ async def process_inbound(payload: dict[str, Any]) -> None:
 
         org_id = UUID(settings.default_org_id)
 
+        started = time.monotonic()
         async with AsyncSessionLocal() as db:
             user = await _get_or_create_user(db, org_id, msg.from_phone)
             # Commit the user row before the (potentially long) LLM call so a
             # later failure doesn't lose the contact record.
             await db.commit()
+            db_done = time.monotonic()
 
             text = await _resolve_text(msg)
+            resolve_done = time.monotonic()
+
             reply = await agent_core.handle_turn(
                 db,
                 user_id=user.id,
                 channel="whatsapp",
                 input_text=text,
             )
+            agent_done = time.monotonic()
 
         # mark_read is best-effort (it swallows errors internally) and doesn't
         # gate the reply, so fire it concurrently with send_text instead of
@@ -191,6 +197,7 @@ async def process_inbound(payload: dict[str, Any]) -> None:
         )
         if isinstance(reply_result, BaseException):
             raise reply_result
+        send_done = time.monotonic()
 
         logger.info(
             "whatsapp_inbound_processed",
@@ -198,6 +205,11 @@ async def process_inbound(payload: dict[str, Any]) -> None:
             from_phone=msg.from_phone,
             type=msg.type,
             reply_chars=len(reply),
+            db_ms=int((db_done - started) * 1000),
+            resolve_ms=int((resolve_done - db_done) * 1000),
+            agent_ms=int((agent_done - resolve_done) * 1000),
+            send_ms=int((send_done - agent_done) * 1000),
+            total_ms=int((send_done - started) * 1000),
         )
     except Exception as exc:
         # Catch-all so a single bad message can't kill the background loop.
