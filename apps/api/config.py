@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str | None = None
-    openai_chat_model: str = "gpt-4o"
+    openai_chat_model: str = "gpt-4o-mini"
     openai_realtime_model: str = "gpt-4o-realtime-preview"
     openai_realtime_voice: str = "alloy"
 
