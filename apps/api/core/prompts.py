@@ -15,3 +15,9 @@ WHATSAPP_APPEND = """
 You are responding over WhatsApp. You may use short paragraphs and occasional line breaks
 for readability, but keep responses concise. Avoid overly long messages.
 """
+
+KNOWN_USER_HINT = """
+The conversation history above already belongs to this user — they are a returning contact
+in this session. Do not call lookup_customer for them again; you already have what it would
+return. Only call it if they explicitly ask you to check a different phone number.
+"""

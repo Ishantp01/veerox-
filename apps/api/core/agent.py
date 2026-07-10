@@ -21,7 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.config import settings
 from apps.api.core.llm import ChatResult, ToolCall, chat_completion
 from apps.api.core.memory import load_last_n, persist_turn
-from apps.api.core.prompts import BASE_SYSTEM_PROMPT, VOICE_APPEND, WHATSAPP_APPEND
+from apps.api.core.prompts import (
+    BASE_SYSTEM_PROMPT,
+    KNOWN_USER_HINT,
+    VOICE_APPEND,
+    WHATSAPP_APPEND,
+)
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
 from apps.api.db.models.conversation import Conversation
 from apps.api.redis_client import get_redis_pool
@@ -203,8 +208,16 @@ class AgentCore:
         conversation = await _get_or_open_conversation(db, user_id, channel, org_id)
 
         history = await load_last_n(db, user_id)
+
+        system_prompt = _system_prompt_for(channel)
+        if history:
+            # We already have this user's history loaded — skip the redundant
+            # lookup_customer round-trip the model would otherwise make on
+            # nearly every turn of a returning conversation.
+            system_prompt = f"{system_prompt}\n\n{KNOWN_USER_HINT.strip()}"
+
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _system_prompt_for(channel)},
+            {"role": "system", "content": system_prompt},
             *history,
             {"role": "user", "content": input_text},
         ]

@@ -7,6 +7,7 @@ wrapped in a try/except so a bad message never crashes the worker.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -179,11 +180,17 @@ async def process_inbound(payload: dict[str, Any]) -> None:
                 input_text=text,
             )
 
-        # mark_read is best-effort (it swallows errors internally); send_text
-        # can raise — we let it bubble into the outer except so structlog and
-        # Sentry capture the failure.
-        await wa_client.mark_read(msg.id)
-        await wa_client.send_text(msg.from_phone, reply)
+        # mark_read is best-effort (it swallows errors internally) and doesn't
+        # gate the reply, so fire it concurrently with send_text instead of
+        # waiting on it first. send_text can still raise — that bubbles into
+        # the outer except so structlog and Sentry capture the failure.
+        _, reply_result = await asyncio.gather(
+            wa_client.mark_read(msg.id),
+            wa_client.send_text(msg.from_phone, reply),
+            return_exceptions=True,
+        )
+        if isinstance(reply_result, BaseException):
+            raise reply_result
 
         logger.info(
             "whatsapp_inbound_processed",
