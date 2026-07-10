@@ -19,6 +19,56 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/diag", tags=["diag"])
 
 
+@router.get("/latency")
+async def latency_probe(x_admin_token: str | None = Header(None)) -> dict:
+    """Time each dependency of a WhatsApp turn from inside the deployment.
+
+    Measures Redis (idempotency/kill-switch path), Postgres (fresh-session
+    checkout + query, then a second query on the warm connection), and one
+    chat completion on the configured model. Temporary, like the realtime
+    probe above — delete once the latency investigation is done.
+    """
+    if x_admin_token != settings.admin_token:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    from sqlalchemy import text
+
+    from apps.api.core.llm import chat_completion
+    from apps.api.db.session import AsyncSessionLocal
+    from apps.api.redis_client import get_redis_pool
+
+    timings: dict = {"chat_model": settings.openai_chat_model}
+
+    # Redis round trips — same pool the webhook/agent path uses.
+    redis = get_redis_pool()
+    t0 = perf_counter()
+    await redis.ping()
+    timings["redis_ping_ms"] = round((perf_counter() - t0) * 1000)
+    t0 = perf_counter()
+    await redis.set("veerox:diag:latency", "1", ex=60)
+    timings["redis_set_ms"] = round((perf_counter() - t0) * 1000)
+
+    # Postgres — first query pays connection checkout (incl. pool_pre_ping),
+    # second shows the per-query cost on a warm connection.
+    t0 = perf_counter()
+    async with AsyncSessionLocal() as db:
+        await db.execute(text("SELECT 1"))
+        timings["db_first_query_ms"] = round((perf_counter() - t0) * 1000)
+        t0 = perf_counter()
+        await db.execute(text("SELECT 1"))
+        timings["db_warm_query_ms"] = round((perf_counter() - t0) * 1000)
+
+    # One real chat completion on the configured model.
+    t0 = perf_counter()
+    result = await chat_completion(
+        [{"role": "user", "content": "Reply with the single word: ok"}]
+    )
+    timings["llm_ms"] = round((perf_counter() - t0) * 1000)
+    timings["llm_reply"] = (result.content or "")[:40]
+
+    return {"ok": True, "timings": timings}
+
+
 @router.get("/openai-realtime")
 async def openai_realtime_probe(x_admin_token: str | None = Header(None)) -> dict:
     """Reproduce the exact outbound WSS the voice bridge does.
