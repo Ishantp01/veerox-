@@ -26,7 +26,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from apps.api.channels.voice import adapter as voice_adapter
 from apps.api.config import settings
-from apps.api.core.prompts import BASE_SYSTEM_PROMPT, VOICE_APPEND
+from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND
 
 logger = structlog.get_logger(__name__)
 
@@ -36,7 +36,7 @@ _OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 
 
 def _system_instructions() -> str:
-    return f"{BASE_SYSTEM_PROMPT.strip()}\n\n{VOICE_APPEND.strip()}"
+    return f"{OUTBOUND_CALL_PROMPT.strip()}\n\n{VOICE_APPEND.strip()}"
 
 
 def _session_update_event() -> dict[str, Any]:

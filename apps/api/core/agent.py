@@ -22,8 +22,8 @@ from apps.api.config import settings
 from apps.api.core.llm import ChatResult, ToolCall, chat_completion
 from apps.api.core.memory import load_last_n, persist_turn
 from apps.api.core.prompts import (
-    BASE_SYSTEM_PROMPT,
     KNOWN_USER_HINT,
+    OUTBOUND_CALL_PROMPT,
     VOICE_APPEND,
     WHATSAPP_APPEND,
 )
@@ -71,7 +71,7 @@ def _system_prompt_for(channel: Channel) -> str:
     output.
     """
     append = VOICE_APPEND if channel == "voice" else WHATSAPP_APPEND
-    return f"{BASE_SYSTEM_PROMPT.strip()}\n\n{append.strip()}"
+    return f"{OUTBOUND_CALL_PROMPT.strip()}\n\n{append.strip()}"
 
 
 async def _is_kill_switch_active() -> bool:

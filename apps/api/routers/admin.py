@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
-from apps.api.core.prompts import BASE_SYSTEM_PROMPT, VOICE_APPEND, WHATSAPP_APPEND
+from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND, WHATSAPP_APPEND
 from apps.api.core.tools import TOOL_DEFINITIONS
 from apps.api.db.models import Conversation, Lead, Message, User
 from apps.api.deps import DbDep, RedisDep
@@ -250,7 +250,7 @@ async def get_prompts(
     """Read-only view of the active system prompts."""
     _verify_admin(x_admin_token)
     return PromptsOut(
-        base=BASE_SYSTEM_PROMPT,
+        base=OUTBOUND_CALL_PROMPT,
         voice_append=VOICE_APPEND,
         whatsapp_append=WHATSAPP_APPEND,
     )
