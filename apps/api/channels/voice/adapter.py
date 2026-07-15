@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.config import settings
 from apps.api.core.memory import persist_turn
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
+from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.user import User
 from apps.api.db.session import AsyncSessionLocal
@@ -44,6 +45,9 @@ class CallState:
     conversation_id: UUID
     plivo_stream_id: str | None = None
     pending_user_transcript: str | None = None
+    # Set only for calls placed by the campaign dialer — lets qualify_lead
+    # find the CampaignTarget row to update (see core/tools.py).
+    campaign_target_id: UUID | None = None
 
 
 def realtime_tools() -> list[dict[str, Any]]:
@@ -82,33 +86,91 @@ async def _get_or_create_user(db: AsyncSession, org_id: UUID, phone: str) -> Use
     return user
 
 
-async def open_voice_conversation(caller: str) -> tuple[UUID, UUID]:
+async def open_voice_conversation(caller: str, call_uuid: str | None = None) -> tuple[UUID, UUID]:
     """Resolve the caller to a User and open a fresh voice Conversation.
 
     Owns its own session and commits immediately so transcripts persisted
     later (during the call) have a committed parent row to attach to.
+    ``call_uuid`` is stored so the recording-finished webhook (which only
+    reports CallUUID) can find its way back to this row.
     """
     org_id = UUID(settings.default_org_id)
     phone = _normalize_phone(caller)
     async with AsyncSessionLocal() as db:
         user = await _get_or_create_user(db, org_id, phone)
-        conversation = Conversation(org_id=org_id, user_id=user.id, channel="voice")
+        conversation = Conversation(
+            org_id=org_id, user_id=user.id, channel="voice", plivo_call_uuid=call_uuid or None
+        )
         db.add(conversation)
         await db.commit()
         return user.id, conversation.id
 
 
-async def close_voice_conversation(conversation_id: UUID) -> None:
-    """Mark the conversation ended when the call drops."""
+async def attach_campaign_conversation(campaign_target_id: UUID, conversation_id: UUID) -> None:
+    """Record that a campaign target's call actually connected.
+
+    Called once the realtime bridge opens (``realtime_bridge.voice_stream``)
+    — a target with ``conversation_id`` set is proof a real conversation
+    happened, which is what tells the hangup webhook (``campaign_dialer.
+    handle_call_ended``) NOT to re-dial this person just because the AI
+    forgot to call ``qualify_lead`` before hanging up.
+    """
+    async with AsyncSessionLocal() as db:
+        target = await db.get(CampaignTarget, campaign_target_id)
+        if target is not None:
+            target.conversation_id = conversation_id
+            await db.commit()
+
+
+async def close_voice_conversation(
+    conversation_id: UUID, campaign_target_id: UUID | None = None
+) -> None:
+    """Mark the conversation ended when the call drops.
+
+    If this was a campaign call and it ended without ``qualify_lead`` ever
+    being invoked (no answer, hang-up mid-script, etc.), flip the target to
+    ``failed`` so the dialer doesn't stall waiting on a target stuck
+    ``calling`` forever. Always ``failed`` here, never re-queued to
+    ``pending`` — by the time this runs the bridge connected (a real
+    conversation happened), so retrying would re-call someone who already
+    answered.
+    """
     async with AsyncSessionLocal() as db:
         conversation = await db.get(Conversation, conversation_id)
         if conversation is not None and conversation.ended_at is None:
             conversation.ended_at = datetime.now(UTC)
-            await db.commit()
+
+        if campaign_target_id is not None:
+            target = await db.get(CampaignTarget, campaign_target_id)
+            if target is not None and target.status == "calling":
+                target.status = "failed"
+
+        await db.commit()
+
+
+async def save_call_recording(
+    call_uuid: str, recording_url: str, duration_secs: float | None
+) -> bool:
+    """Attach a finished Plivo recording to its Conversation, matched by
+    ``plivo_call_uuid``. Returns False if no matching conversation exists
+    (e.g. the callback arrived for a call we didn't start recording for).
+    """
+    async with AsyncSessionLocal() as db:
+        stmt = select(Conversation).where(Conversation.plivo_call_uuid == call_uuid)
+        conversation = (await db.execute(stmt)).scalar_one_or_none()
+        if conversation is None:
+            return False
+        conversation.recording_url = recording_url
+        conversation.recording_duration_secs = duration_secs
+        await db.commit()
+        return True
 
 
 async def _dispatch_realtime_tool(
-    name: str, arguments_json: str, user_id: UUID
+    name: str,
+    arguments_json: str,
+    user_id: UUID,
+    campaign_target_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Run a Realtime function call through the shared ``DISPATCH_TABLE``.
 
@@ -126,7 +188,13 @@ async def _dispatch_realtime_tool(
     if not isinstance(args, dict):
         return {"status": "error", "reason": "arguments_not_object"}
     async with AsyncSessionLocal() as db:
-        result = await handler(db, user_id=user_id, **args)
+        result = await handler(
+            db,
+            user_id=user_id,
+            channel="voice",
+            campaign_target_id=campaign_target_id,
+            **args,
+        )
     return result if isinstance(result, dict) else {"status": "ok", "result": str(result)}
 
 
@@ -197,7 +265,9 @@ async def handle_openai_event(
         call_id = event.get("call_id")
         name = event.get("name") or ""
         args_json = event.get("arguments") or "{}"
-        result = await _dispatch_realtime_tool(name, args_json, state.user_id)
+        result = await _dispatch_realtime_tool(
+            name, args_json, state.user_id, campaign_target_id=state.campaign_target_id
+        )
         # Feed the tool result back into the session, then ask the model to
         # continue speaking with that result in context.
         await oai_ws.send(

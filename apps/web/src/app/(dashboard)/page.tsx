@@ -1,39 +1,38 @@
 "use client";
 
-import {
-  AlertTriangle,
-  DollarSign,
-  PhoneCall,
-  Sparkles,
-  Users,
-} from "lucide-react";
+import Link from "next/link";
+import { MessageSquare, Phone, BarChart3, ArrowRight } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
-import { QueryBoundary } from "@/components/layout/query-boundary";
-import { StatCard } from "@/components/dashboard/stat-card";
 import { KillSwitchBanner } from "@/components/dashboard/kill-switch-banner";
-import { Skeleton, useToast } from "@/components/ui";
-import { useStats, useKillSwitch, useSetKillSwitch } from "@/lib/hooks";
-import { formatUsd } from "@/lib/format";
+import { StatsGrid } from "@/components/dashboard/stats-grid";
+import { useToast } from "@/components/ui";
+import { useKillSwitch, useSetKillSwitch } from "@/lib/hooks";
 
-function StatCardSkeletons() {
-  return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-      {Array.from({ length: 5 }).map((_, i) => (
-        <div
-          key={i}
-          className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
-        >
-          <Skeleton className="h-3 w-20" />
-          <Skeleton className="mt-4 h-9 w-16" />
-          <Skeleton className="mt-3 h-3 w-24" />
-        </div>
-      ))}
-    </div>
-  );
-}
+const SECTIONS = [
+  {
+    href: "/whatsapp",
+    label: "WhatsApp AI Agent",
+    description: "Conversations, leads, escalations, and settings for the WhatsApp channel.",
+    Icon: MessageSquare,
+    accent: "bg-emerald-600 shadow-emerald-200",
+  },
+  {
+    href: "/calling",
+    label: "AI Calling Agent",
+    description: "Conversations, leads, escalations, and settings for the voice channel.",
+    Icon: Phone,
+    accent: "bg-indigo-600 shadow-indigo-200",
+  },
+  {
+    href: "/reports",
+    label: "Reports",
+    description: "Trends across both channels and per-campaign qualification rates for the sales team.",
+    Icon: BarChart3,
+    accent: "bg-amber-600 shadow-amber-200",
+  },
+] as const;
 
-export default function DashboardPage() {
-  const stats = useStats();
+export default function LandingPage() {
   const killSwitch = useKillSwitch();
   const setKillSwitch = useSetKillSwitch();
   const { toast } = useToast();
@@ -63,10 +62,11 @@ export default function DashboardPage() {
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="Dashboard"
-        description="Real-time overview of your Veerox AI agent"
+        description="Real-time overview across both agent channels — the kill switch below pauses both at once."
       />
 
-      {/* Kill-switch control reflects server state once loaded. */}
+      {/* Kill-switch control reflects server state once loaded. It's global
+          by design: there's a single agent pause flag, not one per channel. */}
       {!killSwitch.isLoading && !killSwitch.isError && (
         <KillSwitchBanner
           enabled={enabled}
@@ -75,54 +75,32 @@ export default function DashboardPage() {
         />
       )}
 
-      <QueryBoundary
-        isLoading={stats.isLoading}
-        isError={stats.isError}
-        error={stats.error}
-        onRetry={() => stats.refetch()}
-        loadingFallback={<StatCardSkeletons />}
-      >
-        {stats.data && (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-            <StatCard
-              label="Users Today"
-              value={stats.data.users_today}
-              icon={Users}
-              accent="from-indigo-500 to-violet-500"
-            />
-            <StatCard
-              label="Calls Today"
-              value={stats.data.calls_today}
-              icon={PhoneCall}
-              accent="from-sky-500 to-cyan-500"
-            />
-            <StatCard
-              label="Leads Today"
-              value={stats.data.leads_today}
-              icon={Sparkles}
-              accent="from-emerald-500 to-teal-500"
-            />
-            <StatCard
-              label="USD Spend Today"
-              value={formatUsd(stats.data.usd_spend_today)}
-              sublabel="LLM + audio cost"
-              icon={DollarSign}
-              accent="from-rose-500 to-pink-500"
-            />
-            <StatCard
-              label="Errors Today"
-              value={stats.data.error_count_today ?? 0}
-              sublabel={
-                stats.data.p50_turn_latency_ms != null
-                  ? `p50 latency ${stats.data.p50_turn_latency_ms} ms`
-                  : "p50 latency —"
-              }
-              icon={AlertTriangle}
-              accent="from-amber-500 to-orange-500"
-            />
-          </div>
-        )}
-      </QueryBoundary>
+      <StatsGrid variant="all" />
+
+      <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {SECTIONS.map(({ href, label, description, Icon, accent }) => (
+          <Link
+            key={href}
+            href={href}
+            className="group flex items-start gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-all hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          >
+            <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white shadow-sm ${accent}`}>
+              <Icon size={18} aria-hidden />
+            </div>
+            <div className="flex-1">
+              <p className="flex items-center gap-1.5 text-sm font-bold text-slate-800">
+                {label}
+                <ArrowRight
+                  size={14}
+                  aria-hidden
+                  className="text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-500"
+                />
+              </p>
+              <p className="mt-1 text-xs text-slate-500">{description}</p>
+            </div>
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }

@@ -7,6 +7,8 @@ import { UrgencyBadge } from "./urgency-badge";
 
 export interface EscalationTableProps {
   escalations: Escalation[];
+  /** Base path for the conversation link, e.g. "/whatsapp/conversations". */
+  conversationBasePath: string;
 }
 
 /**
@@ -14,7 +16,7 @@ export interface EscalationTableProps {
  * Escalation row shape — queue (live) and lead (history) — with source +
  * urgency badges and a link to the conversation when present.
  */
-export function EscalationTable({ escalations }: EscalationTableProps) {
+export function EscalationTable({ escalations, conversationBasePath }: EscalationTableProps) {
   return (
     <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
       <Table>
@@ -51,7 +53,7 @@ export function EscalationTable({ escalations }: EscalationTableProps) {
               <TableCell>
                 {e.conversation_id ? (
                   <Link
-                    href={`/conversations/${e.conversation_id}`}
+                    href={`${conversationBasePath}/${e.conversation_id}`}
                     className="rounded-sm text-sm font-semibold text-indigo-600 hover:text-indigo-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                   >
                     Open →

@@ -45,6 +45,22 @@ export function formatUsd(amount: number | null | undefined): string {
   return `$${n.toFixed(2)}`;
 }
 
+/** Short date for chart axis ticks / table rows, e.g. "15 Jul". Accepts a
+ * plain "YYYY-MM-DD" bucket key (as returned by GET /admin/reports/timeseries)
+ * or a full ISO timestamp. Returns "—" for null/invalid. */
+export function formatShortDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr.length <= 10 ? `${dateStr}T00:00:00` : dateStr);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
+}
+
+/** Percentage with 0 decimals, e.g. "42%". Returns "—" for null. */
+export function formatPercent(ratio: number | null | undefined): string {
+  if (ratio == null || Number.isNaN(ratio)) return "—";
+  return `${Math.round(ratio * 100)}%`;
+}
+
 /** Seconds → "Xm Ys" / "Ys". Returns "—" for null. */
 export function formatDuration(seconds: number | null | undefined): string {
   if (seconds == null || Number.isNaN(seconds)) return "—";

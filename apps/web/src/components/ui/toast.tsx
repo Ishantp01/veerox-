@@ -42,14 +42,14 @@ const VARIANT_META: Record<
   success: {
     icon: CheckCircle2,
     accent: "border-l-emerald-500",
-    iconColor: "text-emerald-600",
+    iconColor: "text-emerald-600 dark:text-emerald-400",
   },
   error: {
     icon: AlertCircle,
     accent: "border-l-red-500",
-    iconColor: "text-red-600",
+    iconColor: "text-red-600 dark:text-red-400",
   },
-  info: { icon: Info, accent: "border-l-indigo-500", iconColor: "text-indigo-600" },
+  info: { icon: Info, accent: "border-l-primary-500", iconColor: "text-primary-600 dark:text-primary-400" },
 };
 
 let nextId = 0;
@@ -128,22 +128,22 @@ export function Toaster({ toasts, onDismiss }: ToasterProps) {
             key={t.id}
             role={t.variant === "error" ? "alert" : "status"}
             className={cn(
-              "pointer-events-auto flex items-start gap-3 rounded-xl border border-slate-200 border-l-4 bg-white px-4 py-3 shadow-lg",
+              "pointer-events-auto flex items-start gap-3 rounded-xl border border-slate-200 border-l-4 bg-white px-4 py-3 shadow-elevated-lg dark:border-slate-700 dark:bg-slate-900",
               meta.accent,
             )}
           >
             <Icon size={18} className={cn("mt-0.5 shrink-0", meta.iconColor)} aria-hidden />
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-slate-800">{t.title}</p>
+              <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{t.title}</p>
               {t.description && (
-                <p className="mt-0.5 text-sm text-slate-500">{t.description}</p>
+                <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">{t.description}</p>
               )}
             </div>
             <button
               type="button"
               onClick={() => onDismiss(t.id)}
               aria-label="Dismiss notification"
-              className="shrink-0 rounded-md p-0.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              className="shrink-0 rounded-md p-0.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
             >
               <X size={16} aria-hidden />
             </button>

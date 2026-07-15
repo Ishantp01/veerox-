@@ -12,9 +12,9 @@ For architecture decisions, data-flow diagrams, and the full build plan, see [`l
 cp .env.example .env
 # Fill in OPENAI_API_KEY, PLIVO_*, META_*, and ADMIN_TOKEN
 
-./scripts/dev.sh          # boots Postgres + Redis, runs migrations, starts FastAPI on :8000
+./scripts/dev.sh          # boots Postgres + Redis, runs migrations, starts FastAPI on :8001
 
-# In a separate terminal — admin dashboard on :3000
+# In a separate terminal — admin dashboard on :3001
 cd apps/web && npm install && npm run dev
 ```
 

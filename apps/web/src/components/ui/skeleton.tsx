@@ -9,7 +9,7 @@ export function Skeleton({
   return (
     <div
       aria-hidden
-      className={cn("animate-pulse rounded-md bg-slate-200", className)}
+      className={cn("animate-pulse rounded-md bg-slate-200 dark:bg-slate-800", className)}
       {...props}
     />
   );
@@ -31,7 +31,7 @@ export function SkeletonRows({ rows = 5, cols = 4, className }: SkeletonRowsProp
   return (
     <>
       {Array.from({ length: rows }).map((_, r) => (
-        <tr key={r} className={cn("border-t border-slate-100", className)}>
+        <tr key={r} className={cn("border-t border-slate-100 dark:border-slate-800", className)}>
           {Array.from({ length: cols }).map((__, c) => (
             <td key={c} className="px-5 py-3.5">
               <Skeleton className="h-4 w-full max-w-[160px]" />

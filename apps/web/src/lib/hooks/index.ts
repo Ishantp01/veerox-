@@ -8,13 +8,28 @@ export {
   type ConversationFilters,
   type ConversationMessagesOptions,
 } from "./useConversations";
-export { useLeads, type LeadFilters } from "./useLeads";
-export { useEscalations } from "./useEscalations";
+export {
+  useLeads,
+  useLead,
+  useUpdateLead,
+  type LeadFilters,
+  type LeadUpdateInput,
+} from "./useLeads";
+export { useEscalations, type EscalationFilters } from "./useEscalations";
 export { useKillSwitch, useSetKillSwitch } from "./useKillSwitch";
-export { usePrompts, useTools } from "./useConfig";
+export { usePrompts, useTools, useWhatsAppSettings, useCallingSettings } from "./useConfig";
 export {
   useOutboundCall,
   useOutboundWhatsApp,
   type OutboundCallInput,
   type OutboundWhatsAppInput,
 } from "./useOutbound";
+export {
+  useCampaigns,
+  useCampaign,
+  useCreateCampaign,
+  usePauseCampaign,
+  useResumeCampaign,
+  type CreateCampaignInput,
+} from "./useCampaigns";
+export { useReportsTimeseries, useReportsCampaigns } from "./useReports";

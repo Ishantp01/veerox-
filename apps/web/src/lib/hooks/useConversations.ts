@@ -5,12 +5,14 @@ import { POLL, queryKeys } from "@/lib/query";
 import type { Conversation, Message } from "@/lib/types";
 
 export interface ConversationFilters {
+  channel?: "voice" | "whatsapp";
   limit?: number;
   offset?: number;
 }
 
 function buildConversationsPath(filters?: ConversationFilters): string {
   const params = new URLSearchParams();
+  if (filters?.channel) params.set("channel", filters.channel);
   if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
   if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
   const qs = params.toString();
@@ -19,17 +21,14 @@ function buildConversationsPath(filters?: ConversationFilters): string {
 
 /**
  * Conversation list, newest first. Polls every 10s (POLL.conversationList).
- * Optional `limit`/`offset` map straight onto the backend query params.
+ * Optional `channel` filters server-side; `limit`/`offset` map straight onto
+ * the backend query params.
  *
  * GET /admin/conversations → Conversation[]
- *
- * Note: queryKeys.conversations() is typed for { channel, status } filters,
- * not { limit, offset }. We pass no args to the key here so pagination shares
- * one cache entry — see report. Pass the raw filters to the path only.
  */
 export function useConversations(filters?: ConversationFilters) {
   return useQuery<Conversation[]>({
-    queryKey: queryKeys.conversations(),
+    queryKey: queryKeys.conversations(filters && { channel: filters.channel }),
     queryFn: () => apiFetch<Conversation[]>(buildConversationsPath(filters)),
     refetchInterval: POLL.conversationList,
   });

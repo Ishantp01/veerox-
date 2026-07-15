@@ -9,22 +9,22 @@ import { Spinner } from "./spinner";
  * (they pass `variant="default"`). New code should prefer `primary`.
  */
 export const buttonVariants = cva(
-  "inline-flex items-center justify-center rounded-xl font-semibold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex items-center justify-center rounded-xl font-semibold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
         primary:
-          "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm shadow-indigo-200",
+          "bg-gradient-to-b from-primary-500 to-primary-600 text-white hover:from-primary-600 hover:to-primary-700 shadow-elevated shadow-primary-900/10",
         default:
-          "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm shadow-indigo-200",
+          "bg-gradient-to-b from-primary-500 to-primary-600 text-white hover:from-primary-600 hover:to-primary-700 shadow-elevated shadow-primary-900/10",
         secondary:
-          "bg-slate-100 text-slate-700 hover:bg-slate-200 focus-visible:ring-slate-400",
+          "bg-slate-100 text-slate-700 hover:bg-slate-200 focus-visible:ring-slate-400 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700",
         ghost:
-          "bg-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus-visible:ring-slate-400",
+          "bg-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus-visible:ring-slate-400 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100",
         danger:
-          "bg-red-600 text-white hover:bg-red-700 shadow-sm shadow-red-200 focus-visible:ring-red-500",
+          "bg-red-600 text-white hover:bg-red-700 shadow-sm shadow-red-200 dark:shadow-none focus-visible:ring-red-500",
         outline:
-          "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus-visible:ring-slate-400",
+          "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus-visible:ring-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800",
       },
       size: {
         sm: "px-3 py-1.5 text-xs gap-1.5",

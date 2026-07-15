@@ -15,6 +15,16 @@ class ConversationOut(BaseModel):
     channel: str
     started_at: datetime
     ended_at: datetime | None
+    recording_url: str | None = None
+    recording_duration_secs: float | None = None
+
+
+class ConversationSummaryOut(ConversationOut):
+    """ConversationOut plus a message count — used wherever a conversation is
+    listed without its full transcript (GET /admin/conversations, and the
+    lead-detail conversation-history list)."""
+
+    message_count: int
 
 
 class MessageOut(BaseModel):

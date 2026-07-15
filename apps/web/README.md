@@ -8,14 +8,14 @@ Next.js 14 (App Router) admin dashboard for the Veerox AI backend.
 cd apps/web
 cp .env.example .env.local    # fill in NEXT_PUBLIC_API_URL
 npm install
-npm run dev                   # http://localhost:3000
+npm run dev                   # http://localhost:3001
 ```
 
 ## Environment variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `NEXT_PUBLIC_API_URL` | Yes | Base URL of the FastAPI backend, e.g. `http://localhost:8000`. No trailing slash. |
+| `NEXT_PUBLIC_API_URL` | Yes | Base URL of the FastAPI backend, e.g. `http://localhost:8001`. No trailing slash. |
 
 The admin token is **not** an env var — it is entered via the `/login` page and persisted in `localStorage` under the key `veerox_admin_token`. It is injected as the `X-Admin-Token` header on every API request.
 

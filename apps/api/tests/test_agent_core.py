@@ -18,20 +18,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.core import agent as agent_module
 from apps.api.core.agent import agent_core
 from apps.api.core.llm import ChatResult, ToolCall
-from apps.api.db.models import Conversation, Message, Org, User
+from apps.api.db.models import Conversation, Lead, Message, Org, User
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000ccc")
 
 
 class _FakeRedis:
-    """Just enough of Redis for the kill-switch check."""
+    """Just enough of Redis for the kill-switch check (plus capture_lead's
+    SETNX dedupe and transfer_to_human's rpush, needed by the channel
+    dispatch test below, which exercises a real tool handler)."""
 
     def __init__(self) -> None:
         self.kv: dict[str, str] = {}
+        self.lists: dict[str, list[str]] = {}
 
     async def get(self, key: str) -> str | None:
         return self.kv.get(key)
+
+    async def set(
+        self, key: str, value: str, *, nx: bool = False, ex: int | None = None
+    ) -> bool | None:
+        if nx and key in self.kv:
+            return None
+        self.kv[key] = value
+        return True
+
+    async def rpush(self, key: str, value: str) -> int:
+        self.lists.setdefault(key, []).append(value)
+        return len(self.lists[key])
 
 
 @pytest.fixture
@@ -198,6 +213,51 @@ async def test_handle_turn_dispatches_tool_then_replies(
     # Token totals accumulate across both LLM calls.
     assert by_role["assistant"].tokens_in == 50
     assert by_role["assistant"].tokens_out == 17
+
+
+async def test_handle_turn_forwards_channel_into_tool_dispatch(
+    db_session: AsyncSession,
+    fake_redis: _FakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The channel handle_turn was called with reaches the tool handler's Lead row."""
+    from apps.api.core import tools as tools_module
+
+    monkeypatch.setattr(tools_module, "get_redis_pool", lambda: fake_redis)
+
+    _patch_llm_sequence(
+        monkeypatch,
+        [
+            ChatResult(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        id="call_1",
+                        name="capture_lead",
+                        arguments_json='{"phone":"+910000000001","intent":"quote"}',
+                    )
+                ],
+                tokens_in=10,
+                tokens_out=2,
+                finish_reason="tool_calls",
+            ),
+            ChatResult(content="Got it, thanks!", tokens_in=5, tokens_out=3),
+        ],
+    )
+    await _seed_org_and_user(db_session)
+
+    reply = await agent_core.handle_turn(
+        db=db_session,
+        user_id=USER_ID,
+        channel="whatsapp",
+        input_text="I'd like a quote",
+    )
+
+    assert reply == "Got it, thanks!"
+    lead = (
+        await db_session.execute(select(Lead).where(Lead.intent == "quote"))
+    ).scalars().one()
+    assert lead.channel == "whatsapp"
 
 
 async def test_handle_turn_unknown_tool_returns_error_to_model(

@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
+from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.lead import Lead
 from apps.api.db.models.user import User
@@ -106,6 +107,36 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "qualify_lead",
+            "description": (
+                "Record the qualification verdict for a prospect on an outbound calling "
+                "campaign, once you have asked enough questions to judge them against the "
+                "stated criteria. Call this exactly once, near the end of the call, "
+                "regardless of whether the prospect qualifies or not."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "interested": {
+                        "type": "boolean",
+                        "description": "Whether the prospect meets the criteria and is interested.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief explanation of the verdict, referencing the criteria.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "The prospect's name, if given during the call.",
+                    },
+                },
+                "required": ["interested", "reason"],
             },
         },
     },
@@ -194,6 +225,7 @@ async def capture_lead(
     intent: str,
     name: str | None = None,
     user_id: UUID | None = None,
+    channel: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     """Persist a new lead. Idempotent on ``(org_id, phone, intent)`` for 10 min.
@@ -227,6 +259,7 @@ async def capture_lead(
         name=name or user.name,
         phone=_normalize_phone(phone),
         intent=intent,
+        channel=channel,
     )
     db.add(lead)
     await db.commit()
@@ -247,6 +280,7 @@ async def book_appointment(
     date: str,
     time: str,
     notes: str | None = None,
+    channel: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     """Record a booking by writing to ``Lead.metadata`` with ``intent='booking'``.
@@ -271,6 +305,7 @@ async def book_appointment(
         org_id=org_id,
         user_id=booking_user_id,
         intent="booking",
+        channel=channel,
         metadata_=metadata,
     )
     db.add(lead)
@@ -296,6 +331,7 @@ async def transfer_to_human(
     reason: str,
     urgency: str = "medium",
     user_id: UUID | None = None,
+    channel: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     """Escalate to a human: enqueue in Redis and write an escalation ``Lead``.
@@ -312,6 +348,7 @@ async def transfer_to_human(
         "urgency": urgency,
         "user_id": str(user_id) if user_id else None,
         "org_id": str(org_id),
+        "channel": channel,
         "requested_at": datetime.now(UTC).isoformat(),
     }
     # redis-py stubs type rpush as `Awaitable[int] | int` because the same
@@ -325,6 +362,7 @@ async def transfer_to_human(
             org_id=org_id,
             user_id=user_id,
             intent="escalation",
+            channel=channel,
             metadata_={"reason": reason, "urgency": urgency},
         )
         db.add(lead)
@@ -344,6 +382,67 @@ async def transfer_to_human(
         "message": "I'm connecting you to a human agent, please hold.",
         "lead_id": lead_id,
     }
+
+
+async def qualify_lead(
+    db: AsyncSession,
+    interested: bool,
+    reason: str,
+    name: str | None = None,
+    user_id: UUID | None = None,
+    campaign_target_id: UUID | None = None,
+    channel: str | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Record a campaign call's qualification verdict.
+
+    Only meaningful mid-campaign-call — ``campaign_target_id`` is injected by
+    the voice adapter from call context, never supplied by the LLM. Writes a
+    ``Lead`` row only when ``interested`` is true, so uninterested prospects
+    never reach the CRM.
+    """
+    if campaign_target_id is None:
+        logger.warning("qualify_lead_no_campaign_target")
+        return {"status": "error", "reason": "no_campaign_target"}
+
+    target = await db.get(CampaignTarget, campaign_target_id)
+    if target is None:
+        return {"status": "error", "reason": "campaign_target_not_found"}
+
+    target.status = "completed"
+    target.qualified = interested
+    target.disposition_reason = reason
+
+    lead_id: str | None = None
+    if interested:
+        org_id = target.org_id
+        resolved_name = name or target.name
+        user = await _get_or_create_user_by_phone(
+            db, org_id=org_id, phone=target.phone, name=resolved_name
+        )
+        lead = Lead(
+            org_id=org_id,
+            user_id=user_id or user.id,
+            name=resolved_name,
+            phone=_normalize_phone(target.phone),
+            intent="qualified_campaign_lead",
+            channel=channel,
+            status="qualified",
+            metadata_={"campaign_id": str(target.campaign_id), "reason": reason},
+        )
+        db.add(lead)
+        await db.flush()
+        lead_id = str(lead.id)
+
+    await db.commit()
+
+    logger.info(
+        "qualify_lead_recorded",
+        campaign_target_id=str(campaign_target_id),
+        interested=interested,
+        lead_id=lead_id,
+    )
+    return {"status": "ok", "interested": interested, "lead_id": lead_id}
 
 
 async def lookup_customer(
@@ -393,5 +492,6 @@ DISPATCH_TABLE: dict[str, ToolHandler] = {
     "capture_lead": capture_lead,
     "book_appointment": book_appointment,
     "transfer_to_human": transfer_to_human,
+    "qualify_lead": qualify_lead,
     "lookup_customer": lookup_customer,
 }

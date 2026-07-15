@@ -146,7 +146,7 @@ export function DialogContent({
         if (e.target === e.currentTarget) setOpen(false);
       }}
     >
-      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" aria-hidden />
+      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm dark:bg-black/60" aria-hidden />
       <div
         ref={panelRef}
         role="dialog"
@@ -154,7 +154,7 @@ export function DialogContent({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cn(
-          "relative z-10 w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-xl focus-visible:outline-none",
+          "relative z-10 w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-elevated-lg focus-visible:outline-none dark:border-slate-800 dark:bg-slate-900",
           className,
         )}
         {...props}
@@ -163,7 +163,7 @@ export function DialogContent({
           type="button"
           onClick={() => setOpen(false)}
           aria-label="Close dialog"
-          className="absolute right-4 top-4 rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          className="absolute right-4 top-4 rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
         >
           <X size={18} aria-hidden />
         </button>
@@ -183,7 +183,7 @@ export function DialogTitle({
     <h2
       id={titleId}
       className={cn(
-        "px-6 pt-6 pr-12 text-lg font-semibold text-slate-900",
+        "px-6 pt-6 pr-12 text-lg font-semibold text-slate-900 dark:text-slate-100",
         className,
       )}
       {...props}
@@ -199,7 +199,7 @@ export function DialogBody({
   ...props
 }: HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn("px-6 py-4 text-sm text-slate-600", className)} {...props}>
+    <div className={cn("px-6 py-4 text-sm text-slate-600 dark:text-slate-400", className)} {...props}>
       {children}
     </div>
   );
@@ -213,7 +213,7 @@ export function DialogFooter({
   return (
     <div
       className={cn(
-        "flex items-center justify-end gap-3 border-t border-slate-100 px-6 py-4",
+        "flex items-center justify-end gap-3 border-t border-slate-100 px-6 py-4 dark:border-slate-800",
         className,
       )}
       {...props}

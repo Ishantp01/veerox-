@@ -66,3 +66,47 @@ class OutboundWhatsappOut(BaseModel):
 class OutboundCallOut(BaseModel):
     call_sid: str
     status: str
+
+
+class WhatsAppSettingsOut(BaseModel):
+    """Read-only status of the WhatsApp/Meta channel config. Secrets are
+    reported as booleans only — the values themselves live in Render env
+    vars (apps/api/config.py), not the DB, so there is nothing to edit here.
+    """
+
+    configured: bool = Field(
+        ...,
+        description="True when access token + phone number id are both set (real sends enabled).",
+    )
+    app_id_configured: bool
+    app_secret_configured: bool
+    verify_token_configured: bool
+    access_token_configured: bool
+    phone_number_id: str | None
+    whatsapp_business_account_id: str | None
+    graph_api_version: str
+    webhook_url: str
+
+
+class CallingSettingsOut(BaseModel):
+    """Read-only status of the Plivo voice channel config — see
+    WhatsAppSettingsOut for why this is view-only, not editable."""
+
+    configured: bool = Field(
+        ..., description="True when all Plivo credentials are set (real calls enabled)."
+    )
+    auth_id_configured: bool
+    auth_token_configured: bool
+    phone_number: str | None
+    answer_webhook_url: str
+
+
+class StatsTimeseriesPoint(BaseModel):
+    date: str  # YYYY-MM-DD, UTC
+    calls: int
+    whatsapp_messages: int
+    leads: int
+
+
+class StatsTimeseriesOut(BaseModel):
+    points: list[StatsTimeseriesPoint]

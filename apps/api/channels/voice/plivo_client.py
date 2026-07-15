@@ -42,21 +42,31 @@ def is_configured() -> bool:
     )
 
 
-async def initiate_call(to_e164: str, answer_url: str) -> dict[str, Any]:
+async def initiate_call(
+    to_e164: str, answer_url: str, hangup_url: str | None = None
+) -> dict[str, Any]:
     """Place an outbound call via ``POST /Account/{id}/Call/``.
 
     Plivo dials ``to_e164`` from the configured Plivo number; when the callee
     answers, Plivo fetches ``answer_url`` for the Plivo XML describing what to
     do. Returns the raw JSON response (contains ``request_uuid``). Raises
     ``httpx.HTTPStatusError`` on a non-2xx response.
+
+    ``hangup_url``, when given, is where Plivo POSTs call-status changes
+    (busy/no-answer/failed/completed) — the campaign dialer uses this to
+    learn a call is over within seconds instead of relying on a stale-call
+    timeout (see apps/api/workers/campaign_dialer.py).
     """
     url = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}/Call/"
-    payload = {
+    payload: dict[str, Any] = {
         "from": settings.plivo_phone_number,
         "to": to_e164,
         "answer_url": answer_url,
         "answer_method": "POST",
     }
+    if hangup_url:
+        payload["hangup_url"] = hangup_url
+        payload["hangup_method"] = "POST"
     try:
         r = await _http.post(
             url,
@@ -80,6 +90,36 @@ async def initiate_call(to_e164: str, answer_url: str) -> dict[str, Any]:
         request_uuid=data.get("request_uuid"),
     )
     return data
+
+
+async def start_recording(call_uuid: str, callback_url: str) -> None:
+    """Start server-side call recording via ``POST /Call/{call_uuid}/Record/``.
+
+    Runs concurrently with the live ``<Stream>`` bridge (they don't conflict —
+    recording is driven by the Call API, not the answer XML). Plivo hosts the
+    resulting audio file itself; when it's ready, Plivo POSTs
+    ``RecordingUrl``/``RecordingDurationMs`` to ``callback_url`` (see
+    ``channels/voice/webhook.recording_callback``). Best-effort: never raises,
+    since a failed recording request shouldn't fail call answering.
+    """
+    if not is_configured():
+        return
+
+    url = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}/Call/{call_uuid}/Record/"
+    try:
+        r = await _http.post(
+            url,
+            json={
+                "callback_url": callback_url,
+                "callback_method": "POST",
+                "format": "mp3",
+            },
+            auth=(settings.plivo_auth_id or "", settings.plivo_auth_token or ""),
+        )
+        r.raise_for_status()
+        logger.info("plivo_recording_started", call_uuid=call_uuid)
+    except httpx.HTTPError as exc:
+        logger.warning("plivo_recording_start_failed", call_uuid=call_uuid, error=str(exc))
 
 
 _INBOUND_APP_NAME = "veerox-voice-app"

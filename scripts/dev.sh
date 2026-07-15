@@ -50,5 +50,5 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Start FastAPI with hot-reload (replaces this shell process via exec)
 # ---------------------------------------------------------------------------
-echo "==> Starting FastAPI on http://0.0.0.0:8000 ..."
-exec uv run uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8000
+echo "==> Starting FastAPI on http://0.0.0.0:8001 ..."
+exec uv run uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8001

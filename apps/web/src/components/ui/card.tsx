@@ -9,7 +9,7 @@ export function Card({
   return (
     <div
       className={cn(
-        "rounded-2xl border border-slate-200 bg-white shadow-sm hover:shadow-md transition-shadow duration-200",
+        "rounded-2xl border border-slate-200 bg-white shadow-elevated transition-shadow duration-200 hover:shadow-elevated-lg dark:border-slate-800 dark:bg-slate-900 dark:shadow-none dark:hover:bg-slate-900/80",
         className,
       )}
       {...props}
@@ -26,7 +26,7 @@ export function CardHeader({
 }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("border-b border-slate-100 px-6 py-4", className)}
+      className={cn("border-b border-slate-100 px-6 py-4 dark:border-slate-800", className)}
       {...props}
     >
       {children}
@@ -41,7 +41,7 @@ export function CardTitle({
 }: HTMLAttributes<HTMLHeadingElement>) {
   return (
     <h3
-      className={cn("text-base font-semibold text-slate-800", className)}
+      className={cn("text-base font-semibold text-slate-800 dark:text-slate-100", className)}
       {...props}
     >
       {children}
@@ -69,7 +69,7 @@ export function CardFooter({
   return (
     <div
       className={cn(
-        "flex items-center gap-3 border-t border-slate-100 px-6 py-4",
+        "flex items-center gap-3 border-t border-slate-100 px-6 py-4 dark:border-slate-800",
         className,
       )}
       {...props}

@@ -22,6 +22,8 @@ dependencies = [
     "tiktoken",
     "tenacity",
     "psycopg2-binary>=2.9.12",
+    "python-multipart",
+    "openpyxl",
 ]
 
 [dependency-groups]
@@ -55,6 +57,11 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[[tool.mypy.overrides]]
+# No official type stubs are published for openpyxl.
+module = "openpyxl.*"
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # Channel adapters talk to third-party SDKs whose stubs are absent; keep lenient.

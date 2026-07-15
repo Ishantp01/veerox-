@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -17,6 +18,7 @@ from apps.api.logging import setup_logging
 from apps.api.rate_limit import limiter
 from apps.api.routers import admin, conversations, diag, health, leads
 from apps.api.sentry import init_sentry
+from apps.api.workers.campaign_dialer import run_campaign_dialer
 
 
 @asynccontextmanager
@@ -24,7 +26,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging()
     init_sentry()
     await plivo_client.register_inbound_answer_url()
-    yield
+    dialer_task = asyncio.create_task(run_campaign_dialer())
+    try:
+        yield
+    finally:
+        dialer_task.cancel()
+        try:
+            await dialer_task
+        except asyncio.CancelledError:
+            pass
 
 
 def create_app() -> FastAPI:
@@ -40,7 +50,7 @@ def create_app() -> FastAPI:
 
     # Read allowed CORS origins from settings (env-driven). Set
     # CORS_ALLOWED_ORIGINS in Render to include the deployed frontend URL,
-    # e.g. "https://veerox-web.vercel.app,http://localhost:3000".
+    # e.g. "https://veerox-web.vercel.app,http://localhost:3001".
     allowed_origins = [o.strip() for o in settings.cors_allowed_origins.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,

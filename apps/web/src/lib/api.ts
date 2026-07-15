@@ -21,7 +21,7 @@ export async function apiFetch<T>(
   path: string,
   init: RequestInit = {}
 ): Promise<T> {
-  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
   const url = `${base}${path}`;
 
   const token = getToken();
@@ -47,7 +47,10 @@ export async function apiFetch<T>(
     } catch {
       // ignore JSON parse failure — use the status message
     }
-    throw new Error(message);
+    // Status is attached (not just embedded in the message) so callers —
+    // notably the query client's retry policy — can tell a permanent auth
+    // failure (401/403) apart from a transient one without string-matching.
+    throw Object.assign(new Error(message), { status: response.status });
   }
 
   return response.json() as Promise<T>;

@@ -1,0 +1,12 @@
+Issue ID,Category,Type,Description,Date Raised,Priority,Status,Owner,Notes/Resolution
+1,WhatsApp Module,Question,"Could not locate a dedicated WhatsApp section in the platform. Need clarification on where it is located or if it is still under development.",2026-07-14,Medium,Open,,
+2,Lead Import,Question,"How can existing leads be imported into the system?",2026-07-14,High,Open,,
+3,Lead Import,Feature Request,"Confirm/support bulk lead import via CSV, Excel, API, or other methods.",2026-07-14,High,Open,,
+4,Separate Modules,Feature Request,"WhatsApp AI Agent and AI Calling Agent should be completely separate sections with their own dashboards, settings, analytics, and workflows. Currently not clearly separated.",2026-07-14,High,Open,,
+5,Interested Lead Management,Question,"After leads are filtered through WhatsApp conversations or AI calling, where can qualified/interested leads be viewed?",2026-07-14,High,Open,,
+6,Interested Lead Management,Feature Request,"Need a dedicated dashboard/CRM section storing filtered leads along with conversation history, call recordings, transcripts, lead status, and follow-up actions.",2026-07-14,High,Open,,
+7,Calling Workflow,Question,"Do phone numbers need to be entered manually one by one to initiate AI calls?",2026-07-14,Medium,Open,,
+8,Calling Workflow,Feature Request,"Support uploading a list of leads and letting the AI Calling Agent automatically call each lead, qualify them based on predefined criteria, and save only interested prospects into the CRM.",2026-07-14,High,Open,,
+9,Calling Workflow,Question,"If automatic calling is supported, how is the workflow configured?",2026-07-14,Medium,Open,,
+10,Automation Workflow,Feature Request,"End-to-end automation: bulk import leads; auto-initiate AI calls/WhatsApp conversations; qualify leads based on predefined conditions; store only interested/qualified leads in CRM; generate reports and analytics for the sales team.",2026-07-14,High,Open,,
+11,User Interface,UX Issue,"Current UI is functional but feels basic. As an AI-powered SaaS platform, it should have a more modern, premium, professional appearance with better layouts, dashboards, visual hierarchy, and overall UX.",2026-07-14,Medium,Open,,

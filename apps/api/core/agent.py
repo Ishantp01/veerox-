@@ -140,6 +140,7 @@ async def _dispatch_tool(
     db: AsyncSession,
     tool_call: ToolCall,
     user_id: UUID,
+    channel: Channel,
 ) -> dict[str, Any]:
     """Look up the handler, parse args, run it. Returns a JSON-serialisable dict.
 
@@ -162,7 +163,7 @@ async def _dispatch_tool(
         return {"status": "error", "reason": "arguments_not_object"}
 
     # Inject caller context the LLM args can't carry — handlers absorb extras via **_.
-    result = await handler(db, user_id=user_id, **args)
+    result = await handler(db, user_id=user_id, channel=channel, **args)
     if not isinstance(result, dict):
         # Defensive: every handler advertises dict[str, Any] but be paranoid here
         # because malformed results would poison the next LLM iteration.
@@ -244,7 +245,7 @@ class AgentCore:
             messages.append(_assistant_message_with_tool_calls(result.tool_calls))
 
             for tool_call in result.tool_calls:
-                tool_result = await _dispatch_tool(db, tool_call, user_id)
+                tool_result = await _dispatch_tool(db, tool_call, user_id, channel)
                 messages.append(
                     {
                         "role": "tool",

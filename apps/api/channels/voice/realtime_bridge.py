@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
+from uuid import UUID
 
 import structlog
 import websockets
@@ -26,7 +27,10 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from apps.api.channels.voice import adapter as voice_adapter
 from apps.api.config import settings
-from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND
+from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND, campaign_qualification_prompt
+from apps.api.db.models.call_campaign import CallCampaign
+from apps.api.db.models.campaign_target import CampaignTarget
+from apps.api.db.session import AsyncSessionLocal
 
 logger = structlog.get_logger(__name__)
 
@@ -35,11 +39,20 @@ router = APIRouter(tags=["voice"])
 _OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 
 
-def _system_instructions() -> str:
+async def _system_instructions(campaign_target_id: UUID | None) -> str:
+    """Pick the campaign-scoped qualification script when this call was
+    placed by the campaign dialer, else fall back to the fixed appointment-
+    booking script used by the single-number Dial page."""
+    if campaign_target_id is not None:
+        async with AsyncSessionLocal() as db:
+            target = await db.get(CampaignTarget, campaign_target_id)
+            campaign = await db.get(CallCampaign, target.campaign_id) if target else None
+        if campaign is not None:
+            return f"{campaign_qualification_prompt(campaign.criteria).strip()}\n\n{VOICE_APPEND.strip()}"
     return f"{OUTBOUND_CALL_PROMPT.strip()}\n\n{VOICE_APPEND.strip()}"
 
 
-def _session_update_event() -> dict[str, Any]:
+def _session_update_event(instructions: str) -> dict[str, Any]:
     """Initial session config: mu-law I/O, server VAD, shared tool schemas.
 
     GA Realtime API shape (the beta shape — flat input_audio_format /
@@ -50,7 +63,7 @@ def _session_update_event() -> dict[str, Any]:
         "type": "session.update",
         "session": {
             "type": "realtime",
-            "instructions": _system_instructions(),
+            "instructions": instructions,
             "audio": {
                 "input": {
                     "format": {"type": "audio/pcmu"},
@@ -74,13 +87,27 @@ async def voice_stream(ws: WebSocket) -> None:
     await ws.accept()
     caller = ws.query_params.get("from", "unknown")
     call_uuid = ws.query_params.get("call_uuid", "")
+    raw_campaign_target_id = ws.query_params.get("campaign_target_id")
+    campaign_target_id = UUID(raw_campaign_target_id) if raw_campaign_target_id else None
     log = logger.bind(caller=caller, call_uuid=call_uuid)
     log.info("voice_stream_connected")
 
     conversation_id: Any = None
     try:
-        user_id, conversation_id = await voice_adapter.open_voice_conversation(caller)
-        state = voice_adapter.CallState(user_id=user_id, conversation_id=conversation_id)
+        user_id, conversation_id = await voice_adapter.open_voice_conversation(
+            caller, call_uuid
+        )
+        state = voice_adapter.CallState(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            campaign_target_id=campaign_target_id,
+        )
+        if campaign_target_id is not None:
+            # Proof the call actually connected — tells the hangup webhook
+            # (campaign_dialer.handle_call_ended) not to re-dial this person
+            # just because qualify_lead didn't fire before they hung up.
+            await voice_adapter.attach_campaign_conversation(campaign_target_id, conversation_id)
+        instructions = await _system_instructions(campaign_target_id)
 
         # No OpenAI-Beta header on the GA endpoint — sending it alongside a GA
         # model name causes the connection to be rejected outright.
@@ -90,7 +117,7 @@ async def voice_stream(ws: WebSocket) -> None:
         async with websockets.connect(
             url, additional_headers=headers, max_size=None
         ) as oai:
-            await oai.send(json.dumps(_session_update_event()))
+            await oai.send(json.dumps(_session_update_event(instructions)))
             # Make the agent greet first instead of waiting for the caller.
             await oai.send(
                 json.dumps(
@@ -157,5 +184,7 @@ async def voice_stream(ws: WebSocket) -> None:
         log.warning("voice_stream_error", error=str(exc))
     finally:
         if conversation_id is not None:
-            await voice_adapter.close_voice_conversation(conversation_id)
+            await voice_adapter.close_voice_conversation(
+                conversation_id, campaign_target_id=campaign_target_id
+            )
         log.info("voice_stream_ended")
