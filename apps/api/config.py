@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # below the Plivo account's concurrent-call cap (verified >= 6 by manual
     # test on 2026-07-16); defaults conservative since raising it costs
     # nothing but lowering it after overshooting means dropped/rejected calls.
-    max_concurrent_calls: int = 5
+    max_concurrent_calls: int = 50
 
     # Meta WhatsApp Cloud API
     meta_app_id: str | None = None
