@@ -1,11 +1,12 @@
 """In-process background dialer for outbound calling campaigns.
 
 Started as an ``asyncio.create_task`` from the FastAPI lifespan (see
-``apps/api/main.py``) rather than a separate job-queue process — the real
-bottleneck on throughput is call duration on a single Plivo number, not queue
-overhead, so a simple sequential loop is enough. Durability across restarts
-is handled by requeuing any target stuck ``calling`` on startup rather than
-by a durable job broker.
+``apps/api/main.py``) rather than a separate job-queue process — throughput
+is bounded by ``settings.max_concurrent_calls`` in-flight calls at a time
+(the Plivo account's own concurrent-call cap is the ceiling on that number),
+not by queue overhead, so a simple poll loop is enough. Durability across
+restarts is handled by requeuing any target stuck ``calling`` on startup
+rather than by a durable job broker.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from uuid import UUID
 
 import httpx
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.config import settings
@@ -91,33 +92,35 @@ async def _reclaim_stale_calls(db) -> None:
         await db.commit()
 
 
-async def _any_call_in_flight(db) -> bool:
-    """Whether a voice call is currently in progress — the sequential gate.
+async def _count_calls_in_flight(db) -> int:
+    """How many voice calls are currently in progress — bounds concurrency.
 
-    Scoped to voice campaigns so an in-progress WhatsApp conversation (which
-    shares the "calling" status value) never blocks the phone dialer.
+    Scoped to voice campaigns so in-progress WhatsApp conversations (which
+    share the "calling" status value) never count against the phone dialer.
     """
     stmt = (
-        select(CampaignTarget.id)
+        select(func.count())
+        .select_from(CampaignTarget)
         .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
         .where(CampaignTarget.status == "calling", CallCampaign.channel == "voice")
-        .limit(1)
     )
-    return (await db.execute(stmt)).scalar_one_or_none() is not None
+    return (await db.execute(stmt)).scalar_one()
 
 
-async def _claim_next_target() -> tuple[str, str, int] | None:
-    """Atomically claim the oldest pending target of a running campaign.
+async def _claim_targets() -> list[tuple[str, str, int]]:
+    """Atomically claim up to the remaining concurrency budget's worth of the
+    oldest pending targets of running campaigns.
 
-    Returns ``(target_id, phone, attempt_count)`` as strings/int so the
-    caller can place the call outside this short-lived session, or ``None``
-    if there's nothing to dial right now (including "a call is already in
-    flight" — this is what keeps the dialer sequential).
+    Returns ``[(target_id, phone, attempt_count), ...]`` as strings/int so
+    the caller can place the calls outside this short-lived session. Empty
+    if there's nothing to dial right now or ``max_concurrent_calls`` voice
+    calls are already in flight.
     """
     async with AsyncSessionLocal() as db:
         await _reclaim_stale_calls(db)
-        if await _any_call_in_flight(db):
-            return None
+        capacity = settings.max_concurrent_calls - await _count_calls_in_flight(db)
+        if capacity <= 0:
+            return []
 
         stmt = (
             select(CampaignTarget)
@@ -128,17 +131,18 @@ async def _claim_next_target() -> tuple[str, str, int] | None:
                 CallCampaign.channel == "voice",
             )
             .order_by(CampaignTarget.created_at)
-            .limit(1)
+            .limit(capacity)
         )
-        target = (await db.execute(stmt)).scalar_one_or_none()
-        if target is None:
-            return None
-
-        target.status = "calling"
-        target.attempt_count += 1
-        target.called_at = datetime.now(UTC)
-        await db.commit()
-        return str(target.id), target.phone, target.attempt_count
+        targets = (await db.execute(stmt)).scalars().all()
+        claimed = []
+        for target in targets:
+            target.status = "calling"
+            target.attempt_count += 1
+            target.called_at = datetime.now(UTC)
+            claimed.append((str(target.id), target.phone, target.attempt_count))
+        if claimed:
+            await db.commit()
+        return claimed
 
 
 async def _mark_target(target_id: str, status: str) -> None:
@@ -150,9 +154,9 @@ async def _mark_target(target_id: str, status: str) -> None:
 
 
 async def handle_call_ended(target_id: str) -> None:
-    """Release the sequential lock as soon as Plivo reports a call is over.
+    """Free up a concurrency slot as soon as Plivo reports a call is over.
 
-    Wired as the ``hangup_url`` on the outbound call (see ``_dial_next``) so
+    Wired as the ``hangup_url`` on the outbound call (see ``_dial_batch``) so
     a no-answer/busy/dropped call frees up the dialer within seconds instead
     of waiting on the ``_STALE_CALL_TIMEOUT_SECS`` backstop. No-ops if the
     call already completed via ``qualify_lead`` (status is no longer
@@ -178,12 +182,7 @@ async def handle_call_ended(target_id: str) -> None:
         logger.info("campaign_dialer_call_ended", target_id=target_id, new_status=target.status)
 
 
-async def _dial_next() -> None:
-    claimed = await _claim_next_target()
-    if claimed is None:
-        return
-    target_id, phone, attempt_count = claimed
-
+async def _dial_one(target_id: str, phone: str, attempt_count: int) -> None:
     answer_url = (
         f"{settings.public_base_url.rstrip('/')}/voice/answer?campaign_target_id={target_id}"
     )
@@ -195,7 +194,7 @@ async def _dial_next() -> None:
     if not voice_plivo.is_configured():
         # Local-dev fallback, same convention as POST /admin/outbound/call:
         # leave the target "calling" (simulating a placed call) rather than
-        # failing it outright, so the dialer's sequential-lock and the
+        # failing it outright, so the dialer's concurrency gate and the
         # stuck-target requeue-on-restart path stay testable without real
         # Plivo credentials.
         logger.warning("campaign_dialer_plivo_not_configured", target_id=target_id)
@@ -208,13 +207,22 @@ async def _dial_next() -> None:
         await _mark_target(target_id, "pending" if attempt_count < _MAX_ATTEMPTS else "failed")
 
 
+async def _dial_batch() -> None:
+    claimed = await _claim_targets()
+    if not claimed:
+        return
+    await asyncio.gather(
+        *(_dial_one(target_id, phone, attempt_count) for target_id, phone, attempt_count in claimed)
+    )
+
+
 async def run_campaign_dialer() -> None:
     """The dialer's main loop — runs for the lifetime of the app process."""
     await _requeue_stuck_targets()
     while True:
         try:
             if not await _is_kill_switch_active():
-                await _dial_next()
+                await _dial_batch()
         except Exception:  # noqa: BLE001
             logger.exception("campaign_dialer_tick_failed")
         await asyncio.sleep(_POLL_INTERVAL_SECS)

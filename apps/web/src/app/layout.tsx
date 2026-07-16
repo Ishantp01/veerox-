@@ -21,7 +21,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning className={inter.variable}>
-      <body className="bg-gradient-to-b from-slate-50 to-slate-100 text-slate-700 antialiased font-sans dark:bg-[#0b1120] dark:text-slate-200">
+      <body className="bg-canvas-50 text-slate-700 antialiased font-sans dark:bg-[#0b1120] dark:text-slate-200">
         <Providers>{children}</Providers>
       </body>
     </html>

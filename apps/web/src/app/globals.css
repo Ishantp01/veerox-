@@ -16,9 +16,10 @@ body {
 }
 
 body {
-  background-color: #f1f5f9;
+  background-color: #fafafa;
   color: #0f172a;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 .dark body {

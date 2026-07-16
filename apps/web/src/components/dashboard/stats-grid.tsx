@@ -16,15 +16,16 @@ import { RecentActivity } from "@/components/dashboard/recent-activity";
 import { Skeleton } from "@/components/ui";
 import { useStats } from "@/lib/hooks";
 import { formatUsd } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 function DashboardSkeleton({ count }: { count: number }) {
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
       <div className="flex flex-col gap-4 lg:col-span-2">
-        <Skeleton className="h-64 w-full rounded-2xl" />
+        <Skeleton className="h-64 w-full rounded-xl" />
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           {Array.from({ length: count }).map((_, i) => (
-            <div key={i} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-elevated">
+            <div key={i} className="rounded-xl border border-slate-200 bg-white p-5 shadow-elevated">
               <Skeleton className="h-3 w-20" />
               <Skeleton className="mt-4 h-9 w-16" />
               <Skeleton className="mt-3 h-3 w-24" />
@@ -32,7 +33,7 @@ function DashboardSkeleton({ count }: { count: number }) {
           ))}
         </div>
       </div>
-      <Skeleton className="h-80 w-full rounded-2xl" />
+      <Skeleton className="h-80 w-full rounded-xl" />
     </div>
   );
 }
@@ -65,7 +66,12 @@ export function StatsGrid({ variant }: StatsGridProps) {
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:items-start">
           <div className="flex flex-col gap-6 lg:col-span-2">
             <StatsTrendChart variant={variant} />
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div
+              className={cn(
+                "grid grid-cols-1 gap-4 sm:grid-cols-2",
+                cardCount === 5 ? "lg:grid-cols-3 xl:grid-cols-5" : "lg:grid-cols-4",
+              )}
+            >
               {variant === "all" && (
                 <StatCard
                   label="Users Today"

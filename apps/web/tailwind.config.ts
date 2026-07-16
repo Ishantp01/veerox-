@@ -6,31 +6,41 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Extended indigo-based brand scale — replaces the previously-unused
-        // grayscale "primary" ramp. Tuned so 600/700 (primary actions, active
-        // nav) carry more depth than Tailwind's stock indigo at those steps.
+        // Muted indigo/violet brand scale (closer to a Linear-style accent
+        // than stock Tailwind indigo) — less saturated so it reads as a
+        // precise accent color rather than a loud "purple app" statement.
         primary: {
-          50: "#eef2ff",
-          100: "#e0e7ff",
-          200: "#c7d2fe",
-          300: "#a5b4fc",
-          400: "#818cf8",
-          500: "#6366f1",
-          600: "#4f46e5",
-          700: "#4338ca",
-          800: "#3730a3",
-          900: "#312e81",
-          950: "#1e1b4b",
+          50: "#f5f6fe",
+          100: "#ebedfd",
+          200: "#d4d8fa",
+          300: "#b0b8f5",
+          400: "#838fed",
+          500: "#5e6ad2",
+          600: "#4c56c4",
+          700: "#3f47a3",
+          800: "#363c85",
+          900: "#2f346d",
+          950: "#1d1f42",
+        },
+        // Flat, slightly-cool neutral scale used for the sidebar and other
+        // near-black surfaces — plain gray rather than slate's blue tint,
+        // for a calmer "console" feel.
+        canvas: {
+          50: "#fafafa",
+          100: "#f4f4f5",
+          900: "#111113",
+          950: "#0a0a0b",
         },
       },
       fontFamily: {
         sans: ["var(--font-inter)", "ui-sans-serif", "system-ui", "sans-serif"],
       },
       boxShadow: {
-        // Softer, more layered than Tailwind's stock shadow-sm/md — used on
-        // Card and other elevated surfaces for a less "flat" default look.
-        elevated: "0 1px 2px 0 rgb(15 23 42 / 0.04), 0 4px 16px -4px rgb(15 23 42 / 0.08)",
-        "elevated-lg": "0 2px 4px 0 rgb(15 23 42 / 0.04), 0 12px 32px -8px rgb(15 23 42 / 0.12)",
+        // Hairline elevation — a single soft, low-opacity layer instead of
+        // stacked colored shadows, so surfaces read as flat + precise with
+        // depth coming mostly from borders.
+        elevated: "0 1px 2px 0 rgb(0 0 0 / 0.04)",
+        "elevated-lg": "0 4px 16px -4px rgb(0 0 0 / 0.10)",
       },
     },
   },

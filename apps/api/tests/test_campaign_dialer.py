@@ -112,37 +112,37 @@ async def test_handle_call_ended_noop_when_already_resolved(db_session: AsyncSes
     assert target.status == "completed"
 
 
-async def test_any_call_in_flight_ignores_whatsapp_campaigns(db_session: AsyncSession) -> None:
+async def test_count_calls_in_flight_ignores_whatsapp_campaigns(db_session: AsyncSession) -> None:
     """CampaignTarget.status="calling" is shared with the WhatsApp dispatcher
-    — an in-progress WhatsApp conversation must never block the voice
-    dialer's sequential gate."""
+    — an in-progress WhatsApp conversation must never count against the
+    voice dialer's concurrency budget."""
     await _seed_org(db_session)
     await _seed_target(db_session, status="calling", campaign_channel="whatsapp")
 
-    assert await campaign_dialer._any_call_in_flight(db_session) is False
+    assert await campaign_dialer._count_calls_in_flight(db_session) == 0
 
 
-async def test_any_call_in_flight_true_for_voice_calling_target(
+async def test_count_calls_in_flight_counts_voice_calling_targets(
     db_session: AsyncSession,
 ) -> None:
     await _seed_org(db_session)
     await _seed_target(db_session, status="calling", campaign_channel="voice")
 
-    assert await campaign_dialer._any_call_in_flight(db_session) is True
+    assert await campaign_dialer._count_calls_in_flight(db_session) == 1
 
 
-async def test_claim_next_target_skips_whatsapp_campaigns(db_session: AsyncSession) -> None:
+async def test_claim_targets_skips_whatsapp_campaigns(db_session: AsyncSession) -> None:
     """A pending WhatsApp campaign target must never be claimed (and dialed)
     by the voice dialer — it belongs to whatsapp_dispatcher instead."""
     await _seed_org(db_session)
     await _seed_target(db_session, status="pending", attempt_count=0, campaign_channel="whatsapp")
 
-    claimed = await campaign_dialer._claim_next_target()
+    claimed = await campaign_dialer._claim_targets()
 
-    assert claimed is None
+    assert claimed == []
 
 
-async def test_claim_next_target_claims_pending_voice_campaign(
+async def test_claim_targets_claims_pending_voice_campaign(
     db_session: AsyncSession,
 ) -> None:
     await _seed_org(db_session)
@@ -150,10 +150,28 @@ async def test_claim_next_target_claims_pending_voice_campaign(
         db_session, status="pending", attempt_count=0, campaign_channel="voice"
     )
 
-    claimed = await campaign_dialer._claim_next_target()
+    claimed = await campaign_dialer._claim_targets()
 
-    assert claimed is not None
-    target_id, phone, attempt_count = claimed
+    assert len(claimed) == 1
+    target_id, phone, attempt_count = claimed[0]
     assert target_id == str(target.id)
     assert phone == target.phone
     assert attempt_count == 1
+
+
+async def test_claim_targets_stops_at_concurrency_limit(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With max_concurrent_calls=2 and one call already in flight, only one
+    more pending target should be claimed even though two are pending."""
+    from apps.api.config import settings
+
+    monkeypatch.setattr(settings, "max_concurrent_calls", 2)
+    await _seed_org(db_session)
+    await _seed_target(db_session, status="calling", campaign_channel="voice")
+    await _seed_target(db_session, status="pending", attempt_count=0, campaign_channel="voice")
+    await _seed_target(db_session, status="pending", attempt_count=0, campaign_channel="voice")
+
+    claimed = await campaign_dialer._claim_targets()
+
+    assert len(claimed) == 1

@@ -71,15 +71,15 @@ export default function Nav() {
   const section = SECTIONS[activeSection];
 
   return (
-    <nav className="flex h-screen w-60 flex-col overflow-y-auto border-r border-slate-800 bg-gradient-to-b from-slate-900 to-slate-950 px-3 py-6 shrink-0">
+    <nav className="flex h-screen w-60 flex-col overflow-y-auto border-r border-white/10 bg-canvas-950 px-3 py-6 shrink-0">
       {/* Logo */}
-      <div className="mb-6 px-3 flex items-center gap-3">
-        <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary-400 via-primary-600 to-violet-700 text-white shadow-elevated shadow-primary-950/50 shrink-0">
-          <Sparkles size={17} strokeWidth={2.25} />
+      <div className="mb-6 px-3 flex items-center gap-2.5">
+        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-600 text-white shrink-0">
+          <Sparkles size={15} strokeWidth={2.25} />
         </div>
         <div>
-          <p className="text-sm font-bold tracking-tight text-white leading-none">Veerox AI</p>
-          <p className="text-[10px] font-semibold text-primary-400 mt-0.5 uppercase tracking-widest">Admin Panel</p>
+          <p className="text-sm font-semibold tracking-tight text-white leading-none">Veerox AI</p>
+          <p className="text-[10px] font-medium text-slate-500 mt-1 uppercase tracking-widest">Admin Panel</p>
         </div>
       </div>
 
@@ -88,7 +88,7 @@ export default function Nav() {
       <div
         role="tablist"
         aria-label="Agent channel"
-        className="mb-6 grid grid-cols-2 gap-0.5 rounded-xl bg-slate-800/70 p-1"
+        className="mb-6 grid grid-cols-2 gap-0.5 rounded-lg bg-white/5 p-1"
       >
         {(Object.keys(SECTIONS) as Section[]).map((key) => {
           const isSelected = key === activeSection;
@@ -99,10 +99,10 @@ export default function Nav() {
               role="tab"
               aria-selected={isSelected}
               onClick={() => router.push(SECTIONS[key].root)}
-              className={`rounded-lg px-2 py-1.5 text-xs font-bold transition-all duration-150 ${
+              className={`rounded-md px-2 py-1.5 text-xs font-semibold transition-colors duration-150 ${
                 isSelected
-                  ? "bg-gradient-to-b from-primary-500 to-primary-600 text-white shadow-md shadow-primary-950/40"
-                  : "text-slate-400 hover:text-slate-100"
+                  ? "bg-white/10 text-white"
+                  : "text-slate-500 hover:text-slate-200"
               }`}
             >
               {SECTIONS[key].label}
@@ -113,7 +113,7 @@ export default function Nav() {
 
       {/* Nav items for the active section */}
       <div className="flex flex-1 flex-col">
-        <p className="px-3 mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-600">
+        <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">
           {section.label} AI Agent
         </p>
         <ul className="flex flex-col gap-0.5">
@@ -123,15 +123,17 @@ export default function Nav() {
               <li key={href}>
                 <Link
                   href={href}
-                  className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
+                  className={`relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150 ${
                     active
-                      ? "bg-gradient-to-b from-primary-500 to-primary-600 text-white shadow-lg shadow-primary-950/40"
-                      : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+                      ? "bg-white/[0.07] text-white"
+                      : "text-slate-500 hover:bg-white/[0.04] hover:text-slate-200"
                   }`}
                 >
-                  <Icon size={16} strokeWidth={active ? 2.5 : 2} className="shrink-0" />
+                  {active && (
+                    <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary-400" />
+                  )}
+                  <Icon size={16} strokeWidth={2} className="shrink-0" />
                   {label}
-                  {active && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-white/50" />}
                 </Link>
               </li>
             );
@@ -142,10 +144,10 @@ export default function Nav() {
       {/* Login (outside the channel switcher) */}
       <Link
         href="/login"
-        className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
+        className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150 ${
           pathname === "/login"
-            ? "bg-gradient-to-b from-primary-500 to-primary-600 text-white shadow-lg shadow-primary-950/40"
-            : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+            ? "bg-white/[0.07] text-white"
+            : "text-slate-500 hover:bg-white/[0.04] hover:text-slate-200"
         }`}
       >
         <LogIn size={16} className="shrink-0" />
@@ -153,8 +155,8 @@ export default function Nav() {
       </Link>
 
       {/* Footer */}
-      <div className="rounded-xl bg-slate-800/70 px-3 py-3 mt-2 border border-slate-700/50">
-        <p className="text-xs font-semibold text-slate-400">v0.1.0 · Dev Mode</p>
+      <div className="px-3 py-3 mt-2 border-t border-white/10">
+        <p className="text-xs font-medium text-slate-500">v0.1.0 · Dev Mode</p>
         <p className="text-[11px] text-slate-600 mt-0.5">Voice + WhatsApp Agent</p>
       </div>
     </nav>

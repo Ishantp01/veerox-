@@ -52,19 +52,19 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-full items-center justify-center bg-gradient-to-br from-slate-100 to-primary-50 dark:from-slate-950 dark:to-slate-900">
+    <div className="flex min-h-full items-center justify-center bg-canvas-50 dark:from-slate-950 dark:to-slate-900">
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 via-primary-600 to-violet-700 text-white shadow-elevated-lg shadow-primary-900/20 mb-4">
-            <Sparkles size={26} strokeWidth={2.25} />
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-600 text-white mb-4">
+            <Sparkles size={20} strokeWidth={2.25} />
           </div>
-          <h1 className="text-2xl font-extrabold text-slate-900 dark:text-slate-50 tracking-tight">Veerox AI</h1>
+          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-50 tracking-tight">Veerox AI</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Admin Dashboard</p>
         </div>
 
         {/* Card */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-elevated-lg dark:border-slate-800 dark:bg-slate-900">
+        <div className="rounded-xl border border-slate-200 bg-white p-8 shadow-elevated dark:border-slate-800 dark:bg-slate-900">
           <h2 className="text-base font-bold text-slate-800 dark:text-slate-100 mb-1">Sign in</h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">Enter your admin token to continue.</p>
 

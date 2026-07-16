@@ -3,12 +3,12 @@ import { cn } from "@/lib/utils";
 
 export type StatTint = "primary" | "sky" | "emerald" | "rose" | "amber";
 
-const TINT_CLASSES: Record<StatTint, { chip: string; accent: string }> = {
-  primary: { chip: "bg-primary-50 text-primary-600", accent: "from-primary-500 to-violet-500" },
-  sky: { chip: "bg-sky-50 text-sky-600", accent: "from-sky-500 to-cyan-500" },
-  emerald: { chip: "bg-emerald-50 text-emerald-600", accent: "from-emerald-500 to-teal-500" },
-  rose: { chip: "bg-rose-50 text-rose-600", accent: "from-rose-500 to-pink-500" },
-  amber: { chip: "bg-amber-50 text-amber-600", accent: "from-amber-500 to-orange-500" },
+const TINT_CLASSES: Record<StatTint, { chip: string }> = {
+  primary: { chip: "bg-primary-50 text-primary-600" },
+  sky: { chip: "bg-sky-50 text-sky-600" },
+  emerald: { chip: "bg-emerald-50 text-emerald-600" },
+  rose: { chip: "bg-rose-50 text-rose-600" },
+  amber: { chip: "bg-amber-50 text-amber-600" },
 };
 
 export interface StatCardProps {
@@ -35,35 +35,26 @@ export function StatCard({
   tint = "primary",
   className,
 }: StatCardProps) {
-  const { chip, accent } = TINT_CLASSES[tint];
+  const { chip } = TINT_CLASSES[tint];
   return (
     <div
       className={cn(
-        "group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-elevated transition-all duration-200 hover:-translate-y-0.5 hover:shadow-elevated-lg",
+        "rounded-xl border border-slate-200 bg-white p-5 shadow-elevated transition-colors duration-150 hover:border-slate-300",
         className,
       )}
     >
-      <div
-        aria-hidden
-        className={cn(
-          "absolute inset-x-0 top-0 h-1 bg-gradient-to-r opacity-90 transition-opacity group-hover:opacity-100",
-          accent,
-        )}
-      />
       <div className="flex items-start justify-between gap-3">
-        <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">
-          {label}
-        </p>
+        <p className="text-xs font-medium text-slate-500">{label}</p>
         {Icon && (
-          <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-xl", chip)}>
-            <Icon size={16} aria-hidden />
+          <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", chip)}>
+            <Icon size={15} aria-hidden />
           </div>
         )}
       </div>
-      <p className="mt-4 text-3xl font-extrabold tracking-tight text-slate-900">
+      <p className="mt-3 text-2xl font-semibold tabular-nums tracking-tight text-slate-900">
         {value}
       </p>
-      {sublabel && <p className="mt-2 text-xs text-slate-400">{sublabel}</p>}
+      {sublabel && <p className="mt-1.5 text-xs text-slate-400">{sublabel}</p>}
     </div>
   );
 }

@@ -27,10 +27,10 @@ export function KillSwitchBanner({
     <div
       aria-live="polite"
       className={cn(
-        "mb-6 flex flex-col gap-3 rounded-2xl border px-5 py-4 sm:flex-row sm:items-center sm:justify-between",
+        "mb-6 flex flex-col gap-3 rounded-xl border px-5 py-4 sm:flex-row sm:items-center sm:justify-between",
         enabled
-          ? "border-red-300 bg-red-600 text-white shadow-lg shadow-red-200"
-          : "border-slate-200 bg-white text-slate-700 shadow-sm",
+          ? "border-red-700 bg-red-600 text-white shadow-elevated"
+          : "border-slate-200 bg-white text-slate-700 shadow-elevated",
       )}
     >
       <div className="flex items-center gap-3">

@@ -1,7 +1,0 @@
-Feature ID,Related Issue ID,Feature Name,Description,Status,Priority,Owner,Start Date,Target Date,Shipped Date,Notes
-1,3,Bulk Lead Import,"Support bulk lead import via CSV, Excel, and API.",Planned,High,,,,,
-2,4,Separate WhatsApp/Calling Modules,"Split WhatsApp AI Agent and AI Calling Agent into fully separate sections with their own dashboards, settings, analytics, and workflows.",Planned,High,,,,,
-3,6,Qualified Leads CRM Dashboard,"Dedicated dashboard/CRM section storing filtered leads with conversation history, call recordings, transcripts, lead status, and follow-up actions.",Planned,High,,,,,
-4,8,Automated AI Calling Workflow,"Upload a lead list and let the AI Calling Agent automatically call each lead, qualify based on predefined criteria, and save only interested prospects to CRM.",Planned,High,,,,,
-5,10,End-to-End Lead Automation Pipeline,"Bulk import leads; auto-initiate AI calls/WhatsApp conversations; qualify leads on predefined conditions; store only qualified leads in CRM; generate reports and analytics for sales team.",Planned,High,,,,,
-6,11,UI/UX Redesign,"Modernize the platform UI — premium look, better layouts, dashboards, visual hierarchy, and overall UX befitting an AI SaaS product.",Planned,Medium,,,,,

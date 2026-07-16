@@ -64,9 +64,9 @@ export function QuickActions({ variant }: QuickActionsProps) {
           <Link
             key={href}
             href={href}
-            className="group flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-slate-50"
+            className="group flex items-center gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-slate-50"
           >
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-50 text-primary-600">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-600">
               <Icon size={17} aria-hidden />
             </div>
             <div className="min-w-0 flex-1">

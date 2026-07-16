@@ -14,26 +14,26 @@ export const font = {
   sans: "Inter (next/font/google, var(--font-inter))",
 } as const;
 
-/** Extended indigo brand scale — see tailwind.config.ts `theme.extend.colors.primary`. */
+/** Muted indigo/violet brand scale — see tailwind.config.ts `theme.extend.colors.primary`. */
 export const primaryScale = {
-  50: "#eef2ff",
-  100: "#e0e7ff",
-  200: "#c7d2fe",
-  300: "#a5b4fc",
-  400: "#818cf8",
-  500: "#6366f1",
-  600: "#4f46e5",
-  700: "#4338ca",
-  800: "#3730a3",
-  900: "#312e81",
-  950: "#1e1b4b",
+  50: "#f5f6fe",
+  100: "#ebedfd",
+  200: "#d4d8fa",
+  300: "#b0b8f5",
+  400: "#838fed",
+  500: "#5e6ad2",
+  600: "#4c56c4",
+  700: "#3f47a3",
+  800: "#363c85",
+  900: "#2f346d",
+  950: "#1d1f42",
 } as const;
 
 export const colors = {
-  bg: { light: "#f1f5f9", dark: "#0b1120" }, // app background
+  bg: { light: "#fafafa", dark: "#0b1120" }, // app background — flat neutral, not blue-tinted
   surface: { light: "#ffffff", dark: "#0f172a" }, // cards, tables
-  sidebar: "#0f172a", // slate-900 — navigation (same in both themes, already dark)
-  primary: primaryScale[600], // indigo-600 — actions, active nav
+  sidebar: "#0a0a0b", // near-black flat — navigation (same in both themes, already dark)
+  primary: primaryScale[600], // brand accent — actions, active nav
   text: { light: "#334155", dark: "#e2e8f0" }, // body
   muted: { light: "#64748b", dark: "#94a3b8" }, // secondary text
   border: { light: "#e2e8f0", dark: "#1e293b" },
@@ -47,9 +47,9 @@ export const radii = {
   container: "rounded-2xl", // 16px
 } as const;
 
-/** Elevation — see tailwind.config.ts `theme.extend.boxShadow`. Softer/more
- * layered than Tailwind's stock shadow-sm/md, used on Card and other raised
- * surfaces so the UI reads with real depth instead of flat borders alone. */
+/** Elevation — see tailwind.config.ts `theme.extend.boxShadow`. A single
+ * hairline layer, used alongside (not instead of) a border — depth comes
+ * mostly from the border, shadow is a subtle assist rather than the effect. */
 export const shadows = {
   card: "shadow-elevated",
   raised: "shadow-elevated-lg",

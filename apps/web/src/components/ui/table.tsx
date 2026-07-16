@@ -50,7 +50,7 @@ export function TableHeader({
     <th
       scope="col"
       className={cn(
-        "px-5 py-3.5 text-left text-[11px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500",
+        "px-5 py-3.5 text-left text-[11px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500",
         className,
       )}
       {...props}

@@ -14,21 +14,21 @@ const SECTIONS = [
     label: "WhatsApp AI Agent",
     description: "Conversations, leads, escalations, and settings for the WhatsApp channel.",
     Icon: MessageSquare,
-    accent: "bg-emerald-600 shadow-emerald-200",
+    chip: "bg-emerald-50 text-emerald-600",
   },
   {
     href: "/calling",
     label: "AI Calling Agent",
     description: "Conversations, leads, escalations, and settings for the voice channel.",
     Icon: Phone,
-    accent: "bg-indigo-600 shadow-indigo-200",
+    chip: "bg-primary-50 text-primary-600",
   },
   {
     href: "/reports",
     label: "Reports",
     description: "Trends across both channels and per-campaign qualification rates for the sales team.",
     Icon: BarChart3,
-    accent: "bg-amber-600 shadow-amber-200",
+    chip: "bg-amber-50 text-amber-600",
   },
 ] as const;
 
@@ -78,17 +78,17 @@ export default function LandingPage() {
       <StatsGrid variant="all" />
 
       <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {SECTIONS.map(({ href, label, description, Icon, accent }) => (
+        {SECTIONS.map(({ href, label, description, Icon, chip }) => (
           <Link
             key={href}
             href={href}
-            className="group flex items-start gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-all hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            className="group flex items-start gap-4 rounded-xl border border-slate-200 bg-white p-6 shadow-elevated transition-colors hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
           >
-            <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white shadow-sm ${accent}`}>
-              <Icon size={18} aria-hidden />
+            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${chip}`}>
+              <Icon size={17} aria-hidden />
             </div>
             <div className="flex-1">
-              <p className="flex items-center gap-1.5 text-sm font-bold text-slate-800">
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">
                 {label}
                 <ArrowRight
                   size={14}
