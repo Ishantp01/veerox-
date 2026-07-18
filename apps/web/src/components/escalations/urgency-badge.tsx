@@ -12,9 +12,9 @@ const URGENCY_META: Record<
   UrgencyLevel,
   { label: string; cls: string; icon: LucideIcon }
 > = {
-  high: { label: "High", cls: "bg-red-100 text-red-700", icon: AlertTriangle },
-  medium: { label: "Medium", cls: "bg-amber-100 text-amber-700", icon: ArrowUpCircle },
-  low: { label: "Low", cls: "bg-slate-100 text-slate-600", icon: ArrowDown },
+  high: { label: "High", cls: "bg-red-50 text-red-700 ring-red-200 dark:bg-red-500/15 dark:text-red-400 dark:ring-red-500/20", icon: AlertTriangle },
+  medium: { label: "Medium", cls: "bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-400 dark:ring-amber-500/20", icon: ArrowUpCircle },
+  low: { label: "Low", cls: "bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700", icon: ArrowDown },
 };
 
 /** Normalize the backend's free-form urgency string to one of three levels. */
@@ -37,7 +37,7 @@ export function UrgencyBadge({ urgency, className }: UrgencyBadgeProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap",
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold whitespace-nowrap ring-1 ring-inset",
         meta.cls,
         className,
       )}

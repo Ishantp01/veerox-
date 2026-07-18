@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, type ReactNode } from "react";
 import { Bot, ChevronRight, Plug, Wrench } from "lucide-react";
@@ -32,16 +32,16 @@ function CollapsibleSection({
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           aria-controls={contentId}
-          className="flex w-full items-center justify-between px-6 py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500"
+          className="flex w-full items-center justify-between px-6 py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
         >
           <span className="flex items-center gap-2">
             {icon}
-            <span className="text-sm font-bold text-slate-800">{title}</span>
+            <span className="text-sm font-bold text-slate-800 dark:text-slate-100">{title}</span>
           </span>
           <ChevronRight
             size={15}
             aria-hidden
-            className={`text-slate-400 transition-transform duration-200 ${open ? "rotate-90" : ""}`}
+            className={`text-slate-400 transition-transform duration-200 dark:text-slate-500 ${open ? "rotate-90 text-primary-500 dark:text-primary-400" : ""}`}
           />
         </button>
       </CardHeader>
@@ -88,7 +88,7 @@ function ToolsBlocks({ tools }: { tools: Tool[] }) {
           (typeof tool.name === "string" ? tool.name : `tool_${idx}`);
         return (
           <div key={`${name}_${idx}`}>
-            <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-indigo-500">
+            <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-primary-500">
               {name}
             </p>
             <CodeBlock>{JSON.stringify(tool, null, 2)}</CodeBlock>
@@ -105,9 +105,9 @@ function ConfiguredBadge({ ok }: { ok: boolean }) {
 
 function StatusRow({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-slate-100 py-2.5 last:border-0">
-      <span className="text-sm text-slate-600">{label}</span>
-      <span className="text-right text-sm font-medium break-all text-slate-800">{value}</span>
+    <div className="flex items-center justify-between gap-4 border-b border-slate-100 py-2.5 last:border-0 dark:border-slate-800">
+      <span className="text-sm text-slate-600 dark:text-slate-400">{label}</span>
+      <span className="text-right text-sm font-medium break-all text-slate-800 dark:text-slate-200">{value}</span>
     </div>
   );
 }

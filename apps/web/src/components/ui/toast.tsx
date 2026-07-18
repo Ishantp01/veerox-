@@ -128,7 +128,7 @@ export function Toaster({ toasts, onDismiss }: ToasterProps) {
             key={t.id}
             role={t.variant === "error" ? "alert" : "status"}
             className={cn(
-              "pointer-events-auto flex items-start gap-3 rounded-xl border border-slate-200 border-l-4 bg-white px-4 py-3 shadow-elevated-lg dark:border-slate-700 dark:bg-slate-900",
+              "pointer-events-auto flex animate-fade-up items-start gap-3 rounded-xl border border-slate-200 border-l-4 bg-white px-4 py-3 shadow-card-lg dark:border-slate-700 dark:bg-slate-900",
               meta.accent,
             )}
           >

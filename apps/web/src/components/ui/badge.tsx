@@ -17,17 +17,17 @@ import { cn } from "@/lib/utils";
  * voice=indigo, whatsapp=emerald, neutral=slate.
  */
 export const badgeVariants = cva(
-  "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap",
+  "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold whitespace-nowrap ring-1 ring-inset",
   {
     variants: {
       variant: {
-        live: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400",
-        ended: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400",
-        success: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400",
-        danger: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400",
-        voice: "bg-primary-100 text-primary-700 dark:bg-primary-500/15 dark:text-primary-400",
-        whatsapp: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400",
-        neutral: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400",
+        live: "bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-400 dark:ring-amber-500/20",
+        ended: "bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700",
+        success: "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:ring-emerald-500/20",
+        danger: "bg-red-50 text-red-700 ring-red-200 dark:bg-red-500/15 dark:text-red-400 dark:ring-red-500/20",
+        voice: "bg-primary-50 text-primary-700 ring-primary-200 dark:bg-primary-500/15 dark:text-primary-400 dark:ring-primary-500/20",
+        whatsapp: "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:ring-emerald-500/20",
+        neutral: "bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700",
       },
     },
     defaultVariants: {

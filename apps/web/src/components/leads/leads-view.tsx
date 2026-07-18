@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useRef, useState } from "react";
 import { Download, Search, Upload, Users } from "lucide-react";
@@ -145,7 +145,7 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
         title={title}
         description={description}
         action={
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="relative">
               <Search
                 size={14}
@@ -159,14 +159,14 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
                 onChange={(e) => setIntentInput(e.target.value)}
                 placeholder="Search intent…"
                 aria-label="Search leads by intent"
-                className="w-48 pl-8"
+                className="w-40 pl-8 sm:w-48"
               />
             </div>
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value as LeadStatus | "")}
               aria-label="Filter leads by status"
-              className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
+              className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             >
               <option value="">All statuses</option>
               {LEAD_STATUS_OPTIONS.map((s) => (
@@ -213,7 +213,7 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
         isEmpty={leads.length === 0}
         onRetry={() => refetch()}
         loadingFallback={
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
                 <SkeletonRows rows={5} cols={5} />

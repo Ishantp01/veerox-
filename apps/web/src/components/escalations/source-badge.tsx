@@ -7,9 +7,9 @@ const SOURCE_META: Record<
   { label: string; cls: string }
 > = {
   // Live, pending pickup → amber (matches the "live/in-progress" color, §8.2).
-  queue: { label: "Live", cls: "bg-amber-100 text-amber-700" },
+  queue: { label: "Live", cls: "bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-400 dark:ring-amber-500/20" },
   // History → slate.
-  lead: { label: "Lead", cls: "bg-slate-100 text-slate-600" },
+  lead: { label: "Lead", cls: "bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700" },
 };
 
 export interface SourceBadgeProps {
@@ -27,7 +27,7 @@ export function SourceBadge({ source, className }: SourceBadgeProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap",
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold whitespace-nowrap ring-1 ring-inset",
         meta.cls,
         className,
       )}

@@ -1,4 +1,4 @@
-import Link from "next/link";
+﻿import Link from "next/link";
 import { Table, TableHeader, TableRow, TableCell } from "@/components/ui";
 import { formatDateTime, formatPhone } from "@/lib/format";
 import type { Escalation } from "@/lib/types";
@@ -18,7 +18,7 @@ export interface EscalationTableProps {
  */
 export function EscalationTable({ escalations, conversationBasePath }: EscalationTableProps) {
   return (
-    <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
       <Table>
         <thead>
           <TableRow isHeader>
@@ -54,12 +54,12 @@ export function EscalationTable({ escalations, conversationBasePath }: Escalatio
                 {e.conversation_id ? (
                   <Link
                     href={`${conversationBasePath}/${e.conversation_id}`}
-                    className="rounded-sm text-sm font-semibold text-indigo-600 hover:text-indigo-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                    className="rounded-sm text-sm font-semibold text-primary-600 hover:text-primary-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-primary-400 dark:hover:text-primary-300"
                   >
                     Open →
                   </Link>
                 ) : (
-                  <span className="text-sm text-slate-300">—</span>
+                  <span className="text-sm text-slate-300 dark:text-slate-600">—</span>
                 )}
               </TableCell>
             </TableRow>

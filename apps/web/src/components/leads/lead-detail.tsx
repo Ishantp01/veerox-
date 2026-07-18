@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -95,7 +95,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
     <div className="mx-auto max-w-3xl">
       <Link
         href={backHref}
-        className="mb-4 inline-flex items-center gap-1.5 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+        className="mb-4 inline-flex items-center gap-1.5 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
       >
         <ArrowLeft size={15} aria-hidden />
         {backLabel}
@@ -126,7 +126,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                 <CardContent>
                   <dl className="grid grid-cols-2 gap-4 text-sm">
                     <div>
-                      <dt className="text-xs font-bold uppercase tracking-widest text-slate-400">
+                      <dt className="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
                         Intent
                       </dt>
                       <dd className="mt-1">
@@ -134,10 +134,10 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-xs font-bold uppercase tracking-widest text-slate-400">
+                      <dt className="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
                         Captured
                       </dt>
-                      <dd className="mt-1 text-slate-700">
+                      <dd className="mt-1 text-slate-700 dark:text-slate-300">
                         {formatDateTime(lead.data.created_at)}
                       </dd>
                     </div>
@@ -160,7 +160,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                         id="lead-status"
                         value={status}
                         onChange={(e) => setStatus(e.target.value as LeadStatus)}
-                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                       >
                         {LEAD_STATUS_OPTIONS.map((s) => (
                           <option key={s} value={s}>
@@ -177,7 +177,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                         type="datetime-local"
                         value={followUpAt}
                         onChange={(e) => setFollowUpAt(e.target.value)}
-                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                       />
                     </div>
 
@@ -221,7 +221,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                       className="border-0"
                     />
                   ) : (
-                    <div className="overflow-x-auto rounded-xl border border-slate-200">
+                    <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
                       <Table>
                         <thead>
                           <TableRow isHeader>
@@ -247,7 +247,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                                     router.push(href);
                                   }
                                 }}
-                                className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500"
+                                className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
                               >
                                 <TableCell>
                                   <ChannelBadge

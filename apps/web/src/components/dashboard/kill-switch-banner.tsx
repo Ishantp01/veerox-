@@ -27,23 +27,27 @@ export function KillSwitchBanner({
     <div
       aria-live="polite"
       className={cn(
-        "mb-6 flex flex-col gap-3 rounded-xl border px-5 py-4 sm:flex-row sm:items-center sm:justify-between",
+        "mb-6 flex flex-col gap-3 rounded-2xl border px-5 py-4 sm:flex-row sm:items-center sm:justify-between",
         enabled
-          ? "border-red-700 bg-red-600 text-white shadow-elevated"
-          : "border-slate-200 bg-white text-slate-700 shadow-elevated",
+          ? "border-red-500/40 bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-card-lg"
+          : "border-slate-200/80 bg-white text-slate-700 shadow-card dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200",
       )}
     >
       <div className="flex items-center gap-3">
         {enabled ? (
-          <AlertCircle size={20} className="shrink-0" aria-hidden />
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15">
+            <AlertCircle size={18} aria-hidden />
+          </span>
         ) : (
-          <CheckCircle2 size={20} className="shrink-0 text-emerald-600" aria-hidden />
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 text-white">
+            <CheckCircle2 size={18} aria-hidden />
+          </span>
         )}
         <div>
           <p className="text-sm font-bold">
             {enabled ? "Agent is PAUSED" : "Agent is live"}
           </p>
-          <p className={cn("text-xs", enabled ? "text-red-100" : "text-slate-500")}>
+          <p className={cn("text-xs", enabled ? "text-red-100" : "text-slate-500 dark:text-slate-400")}>
             {enabled
               ? "Incoming messages receive a hold response until you resume."
               : "Voice and WhatsApp messages are being answered automatically."}

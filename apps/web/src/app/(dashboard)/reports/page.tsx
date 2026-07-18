@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useMemo, useState } from "react";
 import { BarChart3, Download, Megaphone } from "lucide-react";
@@ -34,7 +34,7 @@ const DATE_RANGES = [
 
 function SummaryStat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+    <div className="rounded-2xl border border-slate-200/80 bg-white px-4 py-3.5 shadow-card dark:border-slate-800 dark:bg-slate-900">
       <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
         {label}
       </p>
@@ -108,9 +108,9 @@ export default function ReportsPage() {
             key={range.days}
             type="button"
             onClick={() => setDays(range.days)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
               days === range.days
-                ? "bg-primary-600 text-white shadow-sm"
+                ? "bg-gradient-to-b from-primary-500 to-primary-600 text-white shadow-glow"
                 : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
             }`}
           >
@@ -196,7 +196,7 @@ export default function ReportsPage() {
         isEmpty={campaignRows.length === 0}
         onRetry={() => campaigns.refetch()}
         loadingFallback={
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
                 <SkeletonRows rows={3} cols={6} />

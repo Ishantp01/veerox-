@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useRouter } from "next/navigation";
 import { Inbox } from "lucide-react";
@@ -40,7 +40,7 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
     : (["Live", "Channel", "Started", "Ended", "# Messages"] as const);
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
       <Table>
         <thead>
           <TableRow isHeader>
@@ -73,7 +73,7 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
                       router.push(`${detailBasePath}/${c.id}`);
                     }
                   }}
-                  className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500"
+                  className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
                 >
                   <TableCell>
                     {isLive ? <LiveDot /> : <Badge variant="ended">Ended</Badge>}

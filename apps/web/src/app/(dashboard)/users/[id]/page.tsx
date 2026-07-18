@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -16,7 +16,7 @@ export default function UserDetailPage() {
     <div className="mx-auto max-w-7xl">
       <Link
         href="/whatsapp/conversations"
-        className="mb-4 inline-flex items-center gap-1.5 rounded-sm text-sm text-slate-500 transition-colors hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+        className="mb-4 inline-flex items-center gap-1.5 rounded-sm text-sm text-slate-500 transition-colors hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
       >
         <ArrowLeft size={15} aria-hidden /> Back
       </Link>

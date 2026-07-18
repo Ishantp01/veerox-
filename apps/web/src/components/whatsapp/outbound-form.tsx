@@ -86,12 +86,12 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
     <Card className="max-w-xl">
       <CardHeader>
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-sm shadow-emerald-200">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 text-white shadow-sm">
             <MessageSquare size={16} aria-hidden />
           </div>
           <div>
             <CardTitle>Send WhatsApp Message</CardTitle>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-400 dark:text-slate-500">
               Outbound message attributed to the admin token.
             </p>
           </div>
@@ -143,7 +143,7 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
           {lastMessageId !== null && (
             <div
               role="status"
-              className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+              className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-400"
             >
               <p className="mb-1 flex items-center gap-1.5 font-bold">
                 <CheckCircle2 size={14} aria-hidden /> Message sent

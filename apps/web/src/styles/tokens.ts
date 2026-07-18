@@ -43,16 +43,27 @@ export const colors = {
 } as const;
 
 export const radii = {
-  card: "rounded-xl", // 12px
+  card: "rounded-2xl", // 16px — premium direction favors a softer, larger radius
   container: "rounded-2xl", // 16px
+  pill: "rounded-full",
 } as const;
 
-/** Elevation — see tailwind.config.ts `theme.extend.boxShadow`. A single
- * hairline layer, used alongside (not instead of) a border — depth comes
- * mostly from the border, shadow is a subtle assist rather than the effect. */
+/** Elevation — see tailwind.config.ts `theme.extend.boxShadow`. `card`/`card-lg`
+ * are soft ambient shadows (border + diffuse shadow) used on primary surfaces;
+ * `glow`/`glow-lg` are colored, brand-tinted shadows reserved for primary CTAs
+ * and active/selected states, so color-as-depth stays a deliberate accent
+ * rather than the default everywhere. */
 export const shadows = {
-  card: "shadow-elevated",
-  raised: "shadow-elevated-lg",
+  card: "shadow-card",
+  raised: "shadow-card-lg",
+  glow: "shadow-glow",
+} as const;
+
+/** Mesh background washes (tailwind.config.ts `backgroundImage`) — a faint
+ * multi-color radial gradient behind the app canvas (`bg-mesh-light` /
+ * `bg-mesh-dark`), applied once in `app/globals.css` on `body`. */
+export const backgrounds = {
+  mesh: { light: "bg-mesh-light", dark: "bg-mesh-dark" },
 } as const;
 
 /**

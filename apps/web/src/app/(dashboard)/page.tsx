@@ -14,21 +14,21 @@ const SECTIONS = [
     label: "WhatsApp AI Agent",
     description: "Conversations, leads, escalations, and settings for the WhatsApp channel.",
     Icon: MessageSquare,
-    chip: "bg-emerald-50 text-emerald-600",
+    chip: "from-emerald-400 to-emerald-600",
   },
   {
     href: "/calling",
     label: "AI Calling Agent",
     description: "Conversations, leads, escalations, and settings for the voice channel.",
     Icon: Phone,
-    chip: "bg-primary-50 text-primary-600",
+    chip: "from-primary-400 to-primary-600",
   },
   {
     href: "/reports",
     label: "Reports",
     description: "Trends across both channels and per-campaign qualification rates for the sales team.",
     Icon: BarChart3,
-    chip: "bg-amber-50 text-amber-600",
+    chip: "from-amber-400 to-amber-600",
   },
 ] as const;
 
@@ -82,21 +82,21 @@ export default function LandingPage() {
           <Link
             key={href}
             href={href}
-            className="group flex items-start gap-4 rounded-xl border border-slate-200 bg-white p-6 shadow-elevated transition-colors hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+            className="group flex items-start gap-4 rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-slate-800 dark:bg-slate-900"
           >
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${chip}`}>
-              <Icon size={17} aria-hidden />
+            <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-white shadow-sm transition-transform duration-200 group-hover:scale-105 ${chip}`}>
+              <Icon size={18} aria-hidden />
             </div>
             <div className="flex-1">
-              <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 dark:text-slate-100">
                 {label}
                 <ArrowRight
                   size={14}
                   aria-hidden
-                  className="text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-500"
+                  className="text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-primary-500 dark:text-slate-600"
                 />
               </p>
-              <p className="mt-1 text-xs text-slate-500">{description}</p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{description}</p>
             </div>
           </Link>
         ))}

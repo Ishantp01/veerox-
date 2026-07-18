@@ -15,22 +15,22 @@ import { cn } from "@/lib/utils";
 const INTENT_META: Record<string, { label: string; cls: string; icon: LucideIcon }> = {
   book_appointment: {
     label: "Book Appointment",
-    cls: "bg-indigo-100 text-indigo-700",
+    cls: "bg-primary-50 text-primary-700 ring-primary-200 dark:bg-primary-500/15 dark:text-primary-400 dark:ring-primary-500/20",
     icon: CalendarCheck,
   },
   product_inquiry: {
     label: "Product Inquiry",
-    cls: "bg-sky-100 text-sky-700",
+    cls: "bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-500/15 dark:text-sky-400 dark:ring-sky-500/20",
     icon: ShoppingBag,
   },
   support: {
     label: "Support",
-    cls: "bg-amber-100 text-amber-700",
+    cls: "bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-400 dark:ring-amber-500/20",
     icon: LifeBuoy,
   },
   other: {
     label: "Other",
-    cls: "bg-slate-100 text-slate-600",
+    cls: "bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700",
     icon: HelpCircle,
   },
 };
@@ -52,7 +52,7 @@ export function IntentBadge({ intent, className }: IntentBadgeProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap",
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold whitespace-nowrap ring-1 ring-inset",
         meta.cls,
         className,
       )}

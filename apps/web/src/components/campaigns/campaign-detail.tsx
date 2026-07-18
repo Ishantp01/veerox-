@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -50,7 +50,7 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
         isEmpty={campaign?.targets.length === 0}
         onRetry={() => refetch()}
         loadingFallback={
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
                 <SkeletonRows rows={5} cols={5} />
@@ -60,7 +60,7 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
         }
         emptyFallback={<EmptyState title="No contacts in this campaign" description="Nothing was uploaded." />}
       >
-        <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
           <Table>
             <thead>
               <TableRow isHeader>

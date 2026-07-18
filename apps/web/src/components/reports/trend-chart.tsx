@@ -94,7 +94,7 @@ export function ReportsTrendChart({ data }: { data: ReportsTimeseriesPoint[] }) 
   return (
     <div className="h-72 w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: -12 }}>
+        <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
           <CartesianGrid stroke={chrome.grid} vertical={false} />
           <XAxis
             dataKey="date"
@@ -108,7 +108,7 @@ export function ReportsTrendChart({ data }: { data: ReportsTimeseriesPoint[] }) 
             tick={{ fontSize: 11, fill: chrome.axis }}
             axisLine={false}
             tickLine={false}
-            width={32}
+            width={40}
           />
           <Tooltip
             content={<TrendTooltip colors={colors} />}

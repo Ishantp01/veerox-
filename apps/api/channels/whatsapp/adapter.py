@@ -25,7 +25,7 @@ from apps.api.core.agent import agent_core
 from apps.api.core.transcribe import transcribe
 from apps.api.db.models.user import User
 from apps.api.db.session import AsyncSessionLocal
-from apps.api.redis_client import get_redis_pool
+from apps.api.redis_client import get_redis_pool, record_error
 
 logger = structlog.get_logger(__name__)
 
@@ -246,3 +246,4 @@ async def process_inbound(payload: dict[str, Any]) -> None:
             error=str(exc),
             payload_object=payload.get("object"),
         )
+        await record_error()

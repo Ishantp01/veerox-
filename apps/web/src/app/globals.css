@@ -17,6 +17,11 @@ body {
 
 body {
   background-color: #fafafa;
+  background-image:
+    radial-gradient(at 20% 0%, rgb(94 106 210 / 0.08) 0px, transparent 50%),
+    radial-gradient(at 90% 8%, rgb(56 189 248 / 0.08) 0px, transparent 45%),
+    radial-gradient(at 85% 92%, rgb(16 185 129 / 0.05) 0px, transparent 50%);
+  background-attachment: fixed;
   color: #0f172a;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -24,10 +29,19 @@ body {
 
 .dark body {
   background-color: #0b1120;
+  background-image:
+    radial-gradient(at 20% 0%, rgb(94 106 210 / 0.16) 0px, transparent 50%),
+    radial-gradient(at 90% 8%, rgb(56 189 248 / 0.09) 0px, transparent 45%),
+    radial-gradient(at 85% 92%, rgb(16 185 129 / 0.07) 0px, transparent 50%);
   color: #e2e8f0;
 }
 
-::-webkit-scrollbar { width: 5px; height: 5px; }
+::selection {
+  background-color: rgb(94 106 210 / 0.25);
+  color: inherit;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
 ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
@@ -38,4 +52,30 @@ body {
 a {
   color: inherit;
   text-decoration: none;
+}
+
+/* Animated shimmer sweep for Skeleton — reads as "actively loading" rather
+   than a static pulsing block, closer to a premium product's loading state. */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background-image: linear-gradient(
+    100deg,
+    rgb(226 232 240) 30%,
+    rgb(241 245 249) 50%,
+    rgb(226 232 240) 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+.dark .shimmer {
+  background-image: linear-gradient(
+    100deg,
+    rgb(30 41 59) 30%,
+    rgb(51 65 85) 50%,
+    rgb(30 41 59) 70%
+  );
+  background-size: 200% 100%;
 }

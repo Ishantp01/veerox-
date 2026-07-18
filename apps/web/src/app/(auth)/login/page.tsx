@@ -52,25 +52,25 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-full items-center justify-center bg-canvas-50 dark:from-slate-950 dark:to-slate-900">
+    <div className="flex min-h-full items-center justify-center">
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-600 text-white mb-4">
-            <Sparkles size={20} strokeWidth={2.25} />
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 text-white mb-4 shadow-glow-lg">
+            <Sparkles size={22} strokeWidth={2.25} />
           </div>
-          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-50 tracking-tight">Veerox AI</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Admin Dashboard</p>
+          <h1 className="text-xl font-semibold text-white tracking-tight">Veerox AI</h1>
+          <p className="text-sm text-slate-400 mt-1">Admin Dashboard</p>
         </div>
 
         {/* Card */}
-        <div className="rounded-xl border border-slate-200 bg-white p-8 shadow-elevated dark:border-slate-800 dark:bg-slate-900">
-          <h2 className="text-base font-bold text-slate-800 dark:text-slate-100 mb-1">Sign in</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">Enter your admin token to continue.</p>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-8 shadow-card-lg backdrop-blur-xl">
+          <h2 className="text-base font-bold text-slate-100 mb-1">Sign in</h2>
+          <p className="text-sm text-slate-400 mb-6">Enter your admin token to continue.</p>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
-              <label htmlFor="token" className="block text-xs font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-2">
+              <label htmlFor="token" className="block text-xs font-semibold uppercase tracking-widest text-slate-500 mb-2">
                 Admin Token
               </label>
               <input
@@ -81,12 +81,12 @@ export default function LoginPage() {
                 onChange={(e) => { setToken(e.target.value); setError(null); }}
                 placeholder="Paste token here"
                 aria-invalid={error ? true : undefined}
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500 aria-[invalid=true]:border-red-400 aria-[invalid=true]:focus:ring-red-500"
+                className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-slate-100 shadow-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition aria-[invalid=true]:border-red-500/50 aria-[invalid=true]:focus:ring-red-500"
               />
             </div>
 
             {error && (
-              <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 flex items-center gap-2 dark:bg-red-500/10 dark:text-red-400">
+              <p className="text-sm text-red-300 bg-red-500/10 ring-1 ring-red-500/20 rounded-lg px-3 py-2 flex items-center gap-2">
                 <AlertCircle size={14} />{error}
               </p>
             )}
@@ -96,8 +96,8 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          <p className="mt-5 text-xs text-slate-400 dark:text-slate-500 text-center">
-            Token is sent as <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1 rounded">X-Admin-Token</code> on every request.
+          <p className="mt-5 text-xs text-slate-500 text-center">
+            Token is sent as <code className="font-mono bg-white/5 px-1 rounded">X-Admin-Token</code> on every request.
           </p>
         </div>
       </div>

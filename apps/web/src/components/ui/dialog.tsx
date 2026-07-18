@@ -146,7 +146,7 @@ export function DialogContent({
         if (e.target === e.currentTarget) setOpen(false);
       }}
     >
-      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm dark:bg-black/60" aria-hidden />
+      <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm dark:bg-black/70" aria-hidden />
       <div
         ref={panelRef}
         role="dialog"
@@ -154,7 +154,7 @@ export function DialogContent({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cn(
-          "relative z-10 w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-elevated-lg focus-visible:outline-none dark:border-slate-800 dark:bg-slate-900",
+          "relative z-10 w-full max-w-lg animate-fade-up rounded-2xl border border-slate-200 bg-white shadow-card-lg focus-visible:outline-none dark:border-slate-800 dark:bg-slate-900",
           className,
         )}
         {...props}

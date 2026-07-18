@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { ArrowLeft, MessageSquare } from "lucide-react";
@@ -54,7 +54,7 @@ export function ConversationDetail({ id, backHref, backLabel, channel }: Convers
     <div className="mx-auto max-w-3xl">
       <Link
         href={backHref}
-        className="mb-4 inline-flex items-center gap-1.5 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+        className="mb-4 inline-flex items-center gap-1.5 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
       >
         <ArrowLeft size={15} aria-hidden />
         {backLabel}
@@ -71,8 +71,8 @@ export function ConversationDetail({ id, backHref, backLabel, channel }: Convers
       />
 
       {conversation?.recording_url && (
-        <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="mb-2 text-xs font-bold uppercase tracking-widest text-slate-400">
+        <div className="mb-6 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900">
+          <p className="mb-2 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
             Call Recording
             {conversation.recording_duration_secs != null &&
               ` · ${formatDuration(conversation.recording_duration_secs)}`}

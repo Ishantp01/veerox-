@@ -9,7 +9,7 @@ import type { ReportsCampaignRow } from "@/lib/types";
  * same way everywhere in the app. */
 export function CampaignsConversionTable({ rows }: { rows: ReportsCampaignRow[] }) {
   return (
-    <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
       <Table>
         <thead>
           <TableRow isHeader>

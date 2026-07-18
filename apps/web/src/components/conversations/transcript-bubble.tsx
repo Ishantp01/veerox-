@@ -1,4 +1,4 @@
-import { Mic, type LucideIcon } from "lucide-react";
+﻿import { Mic, type LucideIcon } from "lucide-react";
 import type { Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -26,17 +26,17 @@ interface RoleStyle {
 const ROLE_STYLES: Record<Message["role"], RoleStyle> = {
   user: {
     wrapper: "items-end",
-    bubble: "bg-indigo-600 text-white",
+    bubble: "bg-gradient-to-br from-primary-500 to-primary-600 text-white shadow-sm",
     label: "User",
   },
   assistant: {
     wrapper: "items-start",
-    bubble: "border border-slate-200 bg-slate-50 text-slate-800",
+    bubble: "border border-slate-200 bg-slate-50 text-slate-800 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200",
     label: "Assistant",
   },
   tool: {
     wrapper: "items-start",
-    bubble: "border border-amber-200 bg-amber-50 font-mono text-amber-900",
+    bubble: "border border-amber-200 bg-amber-50 font-mono text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300",
     label: "Tool",
   },
 };
@@ -67,7 +67,7 @@ export function TranscriptBubble({
 
   return (
     <div className={cn("flex flex-col gap-1", styles.wrapper)}>
-      <span className="flex items-center gap-1.5 px-1 text-xs text-slate-400">
+      <span className="flex items-center gap-1.5 px-1 text-xs text-slate-400 dark:text-slate-500">
         {isVoice && <MicIcon size={11} aria-label="Voice message" className="shrink-0" />}
         <span className="font-medium">{styles.label}</span>
         <span aria-hidden>&middot;</span>

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { CheckCircle2 } from "lucide-react";
 
@@ -83,7 +83,7 @@ export function EscalationsView({
         isEmpty={escalations.length === 0}
         onRetry={() => refetch()}
         loadingFallback={
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
                 <SkeletonRows rows={4} cols={6} />

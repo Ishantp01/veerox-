@@ -5,7 +5,7 @@ import io
 import json
 import re
 from collections.abc import Iterable, Iterator
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import httpx
@@ -27,6 +27,7 @@ from apps.api.core.tools import (
 from apps.api.db.models import CallCampaign, CampaignTarget, Conversation, Lead, Message, User
 from apps.api.deps import DbDep, RedisDep
 from apps.api.rate_limit import limiter
+from apps.api.redis_client import ERROR_COUNTER_KEY_FMT
 from apps.api.schemas.admin import (
     CallingSettingsOut,
     KillSwitchIn,
@@ -63,7 +64,6 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 # Redis keys / channels used by the control plane.
 KILL_SWITCH_KEY = "veerox:kill_switch"
 HUMAN_HANDOFF_QUEUE = "human_handoff_queue"
-ERROR_COUNTER_KEY_FMT = "veerox:errors:{date}"  # date = YYYY-MM-DD UTC
 
 # Cost constants used by usd_spend_today. These mirror the planned values from
 # implementation-plan.md §5.6 and intentionally live here rather than in
@@ -141,8 +141,11 @@ async def get_stats(
         + float(audio_secs_sum) * _REALTIME_AUDIO_USD_PER_SECOND
     )
 
-    # error_count_today — Redis counter keyed by today's UTC date.
-    today_key = ERROR_COUNTER_KEY_FMT.format(date=date.today().isoformat())
+    # error_count_today — Redis counter keyed by today's UTC date. Written by
+    # apps.api.redis_client.record_error(), called from each channel/worker's
+    # top-level catch-all (whatsapp adapter, voice realtime bridge, campaign
+    # dialer tick).
+    today_key = ERROR_COUNTER_KEY_FMT.format(date=datetime.now(UTC).date().isoformat())
     raw_err = await redis.get(today_key)
     try:
         error_count_today = int(raw_err) if raw_err is not None else 0
@@ -177,24 +180,31 @@ async def get_reports_timeseries(
     _verify_admin(x_admin_token)
     since = datetime.now(UTC) - timedelta(days=days)
 
-    calls_by_day = dict(
-        (
+    # Keys are cast to str immediately — func.date(...) returns a raw
+    # `datetime.date` on Postgres, but `all_days`/the lookups below are
+    # strings, so leaving these as date-object keys means every .get(day)
+    # below silently misses and falls back to 0 (calls/whatsapp_messages
+    # always reading 0 on the reports chart even with real activity).
+    calls_by_day = {
+        str(day_val): count_val
+        for day_val, count_val in (
             await db.execute(
                 select(func.date(Conversation.started_at), func.count())
                 .where(Conversation.channel == "voice", Conversation.started_at >= since)
                 .group_by(func.date(Conversation.started_at))
             )
         ).all()
-    )
-    whatsapp_by_day = dict(
-        (
+    }
+    whatsapp_by_day = {
+        str(day_val): count_val
+        for day_val, count_val in (
             await db.execute(
                 select(func.date(Message.created_at), func.count())
                 .where(Message.channel == "whatsapp", Message.created_at >= since)
                 .group_by(func.date(Message.created_at))
             )
         ).all()
-    )
+    }
     leads_by_day_channel = (
         await db.execute(
             select(func.date(Lead.created_at), Lead.channel, func.count())
@@ -208,15 +218,16 @@ async def get_reports_timeseries(
         target = leads_voice_by_day if channel_val == "voice" else leads_whatsapp_by_day
         if channel_val in ("voice", "whatsapp"):
             target[str(day_val)] = count_val
-    qualified_by_day = dict(
-        (
+    qualified_by_day = {
+        str(day_val): count_val
+        for day_val, count_val in (
             await db.execute(
                 select(func.date(Lead.created_at), func.count())
                 .where(Lead.status == "qualified", Lead.created_at >= since)
                 .group_by(func.date(Lead.created_at))
             )
         ).all()
-    )
+    }
     spend_by_day = (
         await db.execute(
             select(

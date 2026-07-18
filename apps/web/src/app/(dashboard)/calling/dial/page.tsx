@@ -78,12 +78,12 @@ export default function DialPage() {
         <Card>
           <CardHeader>
             <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm shadow-indigo-200">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary-400 to-primary-600 text-white shadow-glow">
                 <Phone size={16} aria-hidden />
               </div>
               <div>
                 <CardTitle>Outbound Call</CardTitle>
-                <p className="text-xs text-slate-400">via Plivo + AI agent</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500">via Plivo + AI agent</p>
               </div>
             </div>
           </CardHeader>
@@ -120,7 +120,7 @@ export default function DialPage() {
               {callSid && (
                 <div
                   role="status"
-                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-400"
                 >
                   <p className="mb-1 flex items-center gap-1.5 font-bold">
                     <CheckCircle2 size={14} aria-hidden /> Call initiated
@@ -144,11 +144,11 @@ export default function DialPage() {
           </CardContent>
         </Card>
 
-        <div className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3">
-          <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-indigo-600">
+        <div className="mt-4 rounded-2xl border border-primary-100 bg-gradient-to-br from-primary-50 to-white px-4 py-3 dark:border-primary-500/15 dark:from-primary-500/10 dark:to-transparent">
+          <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-primary-600 dark:text-primary-400">
             <Info size={12} aria-hidden /> How it works
           </p>
-          <p className="text-xs text-indigo-500">
+          <p className="text-xs text-primary-500 dark:text-primary-400/80">
             Plivo calls the recipient → AI agent joins → conversation is logged
             automatically.
           </p>

@@ -25,6 +25,7 @@ from apps.api.core.agent import _is_kill_switch_active
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.session import AsyncSessionLocal
+from apps.api.redis_client import record_error
 
 logger = structlog.get_logger(__name__)
 
@@ -225,4 +226,5 @@ async def run_campaign_dialer() -> None:
                 await _dial_batch()
         except Exception:  # noqa: BLE001
             logger.exception("campaign_dialer_tick_failed")
+            await record_error()
         await asyncio.sleep(_POLL_INTERVAL_SECS)

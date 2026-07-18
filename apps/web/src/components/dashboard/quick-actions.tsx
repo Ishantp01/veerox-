@@ -64,18 +64,18 @@ export function QuickActions({ variant }: QuickActionsProps) {
           <Link
             key={href}
             href={href}
-            className="group flex items-center gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-slate-50"
+            className="group flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-primary-50/60 dark:hover:bg-primary-500/10"
           >
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-600">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-400 to-primary-600 text-white shadow-sm transition-transform duration-200 group-hover:scale-105">
               <Icon size={17} aria-hidden />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-slate-800">{label}</p>
-              <p className="truncate text-xs text-slate-400">{description}</p>
+              <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{label}</p>
+              <p className="truncate text-xs text-slate-400 dark:text-slate-500">{description}</p>
             </div>
             <ArrowRight
               size={15}
-              className="shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-primary-500"
+              className="shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-primary-500 dark:text-slate-600"
               aria-hidden
             />
           </Link>

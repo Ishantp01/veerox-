@@ -35,13 +35,13 @@ describe("Nav", () => {
 
   it("marks the Dashboard link active only on the section's exact root path", () => {
     renderAt("/whatsapp");
-    expect(screen.getByRole("link", { name: /dashboard/i })).toHaveClass("bg-indigo-600");
+    expect(screen.getByRole("link", { name: /dashboard/i })).toHaveClass("bg-white/[0.08]");
   });
 
   it("does not mark Dashboard active on a sub-route", () => {
     renderAt("/whatsapp/conversations");
-    expect(screen.getByRole("link", { name: /dashboard/i })).not.toHaveClass("bg-indigo-600");
-    expect(screen.getByRole("link", { name: /conversations/i })).toHaveClass("bg-indigo-600");
+    expect(screen.getByRole("link", { name: /dashboard/i })).not.toHaveClass("bg-white/[0.08]");
+    expect(screen.getByRole("link", { name: /conversations/i })).toHaveClass("bg-white/[0.08]");
   });
 
   it("defaults to the WhatsApp section on neutral routes like the landing page", () => {

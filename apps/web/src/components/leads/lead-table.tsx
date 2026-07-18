@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useRouter } from "next/navigation";
 import { Table, TableHeader, TableRow, TableCell } from "@/components/ui";
@@ -22,7 +22,7 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
   const router = useRouter();
 
   return (
-    <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
       <Table>
         <thead>
           <TableRow isHeader>
@@ -55,7 +55,7 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
                 }
                 className={
                   href
-                    ? "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500"
+                    ? "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
                     : undefined
                 }
               >

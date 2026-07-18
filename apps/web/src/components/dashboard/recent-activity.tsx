@@ -59,16 +59,16 @@ export function RecentActivity({ variant }: RecentActivityProps) {
                 <li key={c.id}>
                   <Link
                     href={href}
-                    className="flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-slate-50"
+                    className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-primary-50/60 dark:hover:bg-primary-500/10"
                   >
                     <ChannelBadge channel={c.channel} />
-                    <span className="min-w-0 flex-1 truncate text-sm text-slate-600">
+                    <span className="min-w-0 flex-1 truncate text-sm text-slate-600 dark:text-slate-300">
                       {c.message_count ?? 0} message{c.message_count === 1 ? "" : "s"}
                     </span>
                     {isLive ? (
                       <LiveDot />
                     ) : (
-                      <span className="shrink-0 text-xs text-slate-400">
+                      <span className="shrink-0 text-xs text-slate-400 dark:text-slate-500">
                         {formatRelative(c.started_at)}
                       </span>
                     )}

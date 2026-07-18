@@ -22,10 +22,10 @@ function DashboardSkeleton({ count }: { count: number }) {
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
       <div className="flex flex-col gap-4 lg:col-span-2">
-        <Skeleton className="h-64 w-full rounded-xl" />
+        <Skeleton className="h-64 w-full rounded-2xl" />
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           {Array.from({ length: count }).map((_, i) => (
-            <div key={i} className="rounded-xl border border-slate-200 bg-white p-5 shadow-elevated">
+            <div key={i} className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900">
               <Skeleton className="h-3 w-20" />
               <Skeleton className="mt-4 h-9 w-16" />
               <Skeleton className="mt-3 h-3 w-24" />
@@ -33,7 +33,7 @@ function DashboardSkeleton({ count }: { count: number }) {
           ))}
         </div>
       </div>
-      <Skeleton className="h-80 w-full rounded-xl" />
+      <Skeleton className="h-80 w-full rounded-2xl" />
     </div>
   );
 }

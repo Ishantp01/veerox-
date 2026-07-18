@@ -31,6 +31,7 @@ from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND, campaign_q
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.session import AsyncSessionLocal
+from apps.api.redis_client import record_error
 
 logger = structlog.get_logger(__name__)
 
@@ -182,6 +183,7 @@ async def voice_stream(ws: WebSocket) -> None:
             await asyncio.gather(pump_plivo_to_openai(), pump_openai_to_plivo())
     except Exception as exc:  # noqa: BLE001
         log.warning("voice_stream_error", error=str(exc))
+        await record_error()
     finally:
         if conversation_id is not None:
             await voice_adapter.close_voice_conversation(

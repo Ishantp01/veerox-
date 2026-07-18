@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -124,9 +124,9 @@ export function CampaignsView() {
                   accept=".csv,.xlsx"
                   required
                   onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-800 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-800 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:file:bg-slate-800 dark:file:text-slate-200"
                 />
-                <p className="mt-1.5 text-xs text-slate-400">Must include a &quot;phone&quot; column.</p>
+                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">Must include a &quot;phone&quot; column.</p>
               </div>
             </div>
             <div>
@@ -162,7 +162,7 @@ export function CampaignsView() {
         isEmpty={campaigns.length === 0}
         onRetry={() => refetch()}
         loadingFallback={
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
                 <SkeletonRows rows={3} cols={5} />
@@ -178,7 +178,7 @@ export function CampaignsView() {
           />
         }
       >
-        <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
           <Table>
             <thead>
               <TableRow isHeader>
@@ -199,7 +199,7 @@ export function CampaignsView() {
                     key={c.id}
                     role="link"
                     tabIndex={0}
-                    className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500"
+                    className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
                     onClick={() => router.push(`/calling/campaigns/${c.id}`)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
@@ -217,7 +217,7 @@ export function CampaignsView() {
                     <TableCell className="text-xs text-slate-600">
                       {done} / {total} called
                       {c.counts.calling > 0 && (
-                        <span className="ml-1.5 text-indigo-500">({c.counts.calling} in progress)</span>
+                        <span className="ml-1.5 text-primary-500">({c.counts.calling} in progress)</span>
                       )}
                     </TableCell>
                     <TableCell>
