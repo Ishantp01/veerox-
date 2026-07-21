@@ -4,8 +4,7 @@ import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/ui/button";
 import { LogIn, AlertCircle, Sparkles } from "lucide-react";
-
-const TOKEN_KEY = "veerox_admin_token";
+import { useAuth } from "@/lib/auth-context";
 
 /**
  * Check a candidate token against the backend before persisting it. Can't
@@ -22,6 +21,7 @@ async function validateToken(candidate: string): Promise<boolean> {
 
 export default function LoginPage() {
   const router = useRouter();
+  const { login } = useAuth();
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -42,7 +42,7 @@ export default function LoginPage() {
         setError("That token was rejected by the server. Double-check and try again.");
         return;
       }
-      localStorage.setItem(TOKEN_KEY, trimmed);
+      login(trimmed);
       router.push("/");
     } catch {
       setError("Couldn't reach the API to verify the token. Is the backend running?");

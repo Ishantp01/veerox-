@@ -13,10 +13,12 @@ import {
   Send,
   Settings,
   LogIn,
+  LogOut,
   Sparkles,
   X,
   type LucideIcon,
 } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
 
 interface NavItem {
   href: string;
@@ -77,6 +79,7 @@ export interface NavProps {
 export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
   const pathname = usePathname();
   const router = useRouter();
+  const { isAuthenticated, logout } = useAuth();
   const activeSection = activeSectionFor(pathname);
   const section = SECTIONS[activeSection];
 
@@ -181,18 +184,29 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
         </ul>
       </div>
 
-      {/* Login (outside the channel switcher) */}
-      <Link
-        href="/login"
-        className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150 ${
-          pathname === "/login"
-            ? "bg-white/[0.08] text-white"
-            : "text-slate-500 hover:bg-white/[0.04] hover:text-slate-200"
-        }`}
-      >
-        <LogIn size={16} className="shrink-0" />
-        Login
-      </Link>
+      {/* Login/Logout (outside the channel switcher) */}
+      {isAuthenticated ? (
+        <button
+          type="button"
+          onClick={logout}
+          className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-500 transition-colors duration-150 hover:bg-white/[0.04] hover:text-slate-200"
+        >
+          <LogOut size={16} className="shrink-0" />
+          Logout
+        </button>
+      ) : (
+        <Link
+          href="/login"
+          className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150 ${
+            pathname === "/login"
+              ? "bg-white/[0.08] text-white"
+              : "text-slate-500 hover:bg-white/[0.04] hover:text-slate-200"
+          }`}
+        >
+          <LogIn size={16} className="shrink-0" />
+          Login
+        </Link>
+      )}
 
       {/* Footer */}
       <div className="px-3 py-3 mt-2 border-t border-white/[0.06] flex items-center gap-2.5">
