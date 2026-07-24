@@ -37,13 +37,20 @@ export function useOutboundCall() {
 
 export interface OutboundWhatsAppInput {
   phone: string;
-  text: string;
+  /** Free-form body. Deliverable only inside the 24-hour customer-service window. */
+  text?: string;
+  /** Approved template name — required to message a user outside the window. */
+  template_name?: string;
+  template_lang?: string;
+  /** Ordered values for the template body {{1}}, {{2}} ... placeholders. */
+  template_params?: string[];
 }
 
 /**
- * Send an outbound WhatsApp message.
+ * Send an outbound WhatsApp message — either free-form text or an approved
+ * template (the only way to reach a user outside the 24-hour window).
  *
- * POST /admin/outbound/whatsapp { phone, text } → OutboundWhatsAppResponse
+ * POST /admin/outbound/whatsapp { phone, text | template_name/... } → OutboundWhatsAppResponse
  *
  * The backend persists the assistant turn into a (possibly new) WhatsApp
  * conversation but does not return its id, so we invalidate the conversation
@@ -54,10 +61,10 @@ export function useOutboundWhatsApp() {
   const queryClient = useQueryClient();
 
   return useMutation<OutboundWhatsAppResponse, Error, OutboundWhatsAppInput>({
-    mutationFn: ({ phone, text }: OutboundWhatsAppInput) =>
+    mutationFn: (input: OutboundWhatsAppInput) =>
       apiFetch<OutboundWhatsAppResponse>("/admin/outbound/whatsapp", {
         method: "POST",
-        body: JSON.stringify({ phone, text }),
+        body: JSON.stringify(input),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.conversations() });
