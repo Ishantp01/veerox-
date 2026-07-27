@@ -14,19 +14,19 @@ export const font = {
   sans: "Inter (next/font/google, var(--font-inter))",
 } as const;
 
-/** Muted indigo/violet brand scale — see tailwind.config.ts `theme.extend.colors.primary`. */
+/** Blue brand scale — see tailwind.config.ts `theme.extend.colors.primary`. */
 export const primaryScale = {
-  50: "#f5f6fe",
-  100: "#ebedfd",
-  200: "#d4d8fa",
-  300: "#b0b8f5",
-  400: "#838fed",
-  500: "#5e6ad2",
-  600: "#4c56c4",
-  700: "#3f47a3",
-  800: "#363c85",
-  900: "#2f346d",
-  950: "#1d1f42",
+  50: "#eff6ff",
+  100: "#dbeafe",
+  200: "#bfdbfe",
+  300: "#93c5fd",
+  400: "#60a5fa",
+  500: "#3b82f6",
+  600: "#2563eb",
+  700: "#1d4ed8",
+  800: "#1e40af",
+  900: "#1e3a8a",
+  950: "#172554",
 } as const;
 
 export const colors = {
@@ -78,7 +78,7 @@ export const statusStyles = {
   danger: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400",
 } as const;
 
-/** Channel → color (UI plan §8.2). Voice = indigo, WhatsApp = emerald. */
+/** Channel → color (UI plan §8.2). Voice = blue, WhatsApp = emerald. */
 export const channelStyles = {
   voice: "bg-primary-100 text-primary-700 dark:bg-primary-500/15 dark:text-primary-400",
   whatsapp: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400",

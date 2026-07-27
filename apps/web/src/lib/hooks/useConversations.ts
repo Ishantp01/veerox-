@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api";
 import { POLL, queryKeys } from "@/lib/query";
@@ -56,5 +56,22 @@ export function useConversationMessages(
     queryFn: () => apiFetch<Message[]>(`/admin/conversations/${id}/messages`),
     enabled: Boolean(id),
     refetchInterval: isLive ? POLL.liveConversation : false,
+  });
+}
+
+/**
+ * Generate (or regenerate) an AI summary of a conversation's transcript.
+ *
+ * POST /admin/conversations/{id}/summarize → Conversation
+ */
+export function useSummarizeConversation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<Conversation, Error, string>({
+    mutationFn: (id) =>
+      apiFetch<Conversation>(`/admin/conversations/${id}/summarize`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
   });
 }

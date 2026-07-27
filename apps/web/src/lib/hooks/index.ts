@@ -5,6 +5,7 @@ export { useStats } from "./useStats";
 export {
   useConversations,
   useConversationMessages,
+  useSummarizeConversation,
   type ConversationFilters,
   type ConversationMessagesOptions,
 } from "./useConversations";
@@ -33,3 +34,27 @@ export {
   type CreateCampaignInput,
 } from "./useCampaigns";
 export { useReportsTimeseries, useReportsCampaigns } from "./useReports";
+export {
+  useContacts,
+  useContact,
+  useCreateContact,
+  type ContactCreateInput,
+} from "./useContacts";
+export {
+  useAppointments,
+  useCreateAppointment,
+  useUpdateAppointment,
+  type AppointmentFilters,
+  type AppointmentCreateInput,
+  type AppointmentUpdateInput,
+} from "./useAppointments";
+export { usePipeline, useRevenueSummary } from "./useSales";
+export {
+  useFollowUpRules,
+  useCreateFollowUpRule,
+  useUpdateFollowUpRule,
+  useFollowUpTasks,
+  useCancelFollowUpTask,
+  type FollowUpRuleCreateInput,
+  type FollowUpTaskFilters,
+} from "./useFollowUps";

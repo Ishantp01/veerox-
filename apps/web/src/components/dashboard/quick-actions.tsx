@@ -21,7 +21,7 @@ interface Action {
 
 const VOICE_ACTIONS: Action[] = [
   { href: "/calling/dial", label: "Dial a number", description: "Place a one-off outbound call", icon: Phone },
-  { href: "/calling/campaigns", label: "New campaign", description: "Bulk-call and qualify a lead list", icon: Megaphone },
+  { href: "/automation/campaigns", label: "New campaign", description: "Bulk-call and qualify a lead list", icon: Megaphone },
   { href: "/calling/leads", label: "View leads", description: "See who the agent has captured", icon: UserCheck },
   { href: "/calling/escalations", label: "Escalations", description: "Conversations needing a human", icon: AlertTriangle },
 ];
@@ -34,7 +34,7 @@ const WHATSAPP_ACTIONS: Action[] = [
 
 const ALL_ACTIONS: Action[] = [
   { href: "/calling/dial", label: "Dial a number", description: "Place a one-off outbound call", icon: Phone },
-  { href: "/calling/campaigns", label: "New campaign", description: "Bulk-call and qualify a lead list", icon: Megaphone },
+  { href: "/automation/campaigns", label: "New campaign", description: "Bulk-call and qualify a lead list", icon: Megaphone },
   { href: "/whatsapp/send", label: "Send a WhatsApp message", description: "One-off outbound text", icon: MessageSquareText },
 ];
 

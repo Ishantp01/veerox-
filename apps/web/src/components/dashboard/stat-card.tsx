@@ -1,14 +1,19 @@
 import { type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type StatTint = "primary" | "sky" | "emerald" | "rose" | "amber";
+export type StatTint = "primary" | "sky" | "emerald" | "rose" | "amber" | "purple" | "red";
 
-const TINT_CLASSES: Record<StatTint, { chip: string; bar: string }> = {
-  primary: { chip: "from-primary-400 to-primary-600", bar: "from-primary-400 to-primary-600" },
-  sky: { chip: "from-sky-400 to-sky-600", bar: "from-sky-400 to-sky-600" },
-  emerald: { chip: "from-emerald-400 to-emerald-600", bar: "from-emerald-400 to-emerald-600" },
-  rose: { chip: "from-rose-400 to-rose-600", bar: "from-rose-400 to-rose-600" },
-  amber: { chip: "from-amber-400 to-amber-600", bar: "from-amber-400 to-amber-600" },
+// Flat, translucent icon tile (tinted background + tinted icon, no gradient
+// chip) — matches the reference dashboard's stat-icon treatment exactly
+// (e.g. `background: rgba(59,130,246,.15); color: #60A5FA`).
+const TINT_CLASSES: Record<StatTint, { iconBg: string; iconColor: string; bar: string }> = {
+  primary: { iconBg: "bg-primary-500/15", iconColor: "text-primary-400", bar: "from-primary-400 to-primary-600" },
+  sky: { iconBg: "bg-sky-500/15", iconColor: "text-sky-400", bar: "from-sky-400 to-sky-600" },
+  emerald: { iconBg: "bg-green-500/15", iconColor: "text-green-400", bar: "from-green-400 to-green-600" },
+  rose: { iconBg: "bg-rose-500/15", iconColor: "text-rose-400", bar: "from-rose-400 to-rose-600" },
+  amber: { iconBg: "bg-amber-500/15", iconColor: "text-amber-400", bar: "from-amber-400 to-amber-600" },
+  purple: { iconBg: "bg-purple-500/15", iconColor: "text-purple-400", bar: "from-purple-400 to-purple-600" },
+  red: { iconBg: "bg-red-500/15", iconColor: "text-red-400", bar: "from-red-400 to-red-600" },
 };
 
 export interface StatCardProps {
@@ -35,7 +40,7 @@ export function StatCard({
   tint = "primary",
   className,
 }: StatCardProps) {
-  const { chip, bar } = TINT_CLASSES[tint];
+  const { iconBg, iconColor, bar } = TINT_CLASSES[tint];
   return (
     <div
       className={cn(
@@ -47,7 +52,7 @@ export function StatCard({
       <div className="flex items-start justify-between gap-3">
         <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">{label}</p>
         {Icon && (
-          <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-white shadow-sm", chip)}>
+          <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-xl", iconBg, iconColor)}>
             <Icon size={16} aria-hidden />
           </div>
         )}

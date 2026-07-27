@@ -19,6 +19,8 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useOutboundWhatsApp } from "@/lib/hooks";
+import { ContactPicker } from "@/components/crm/contact-picker";
+import type { Contact } from "@/lib/types";
 
 const whatsappSchema = z
   .object({
@@ -67,6 +69,7 @@ export interface OutboundWhatsAppFormProps {
 export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppFormProps) {
   const { toast } = useToast();
   const [lastMessageId, setLastMessageId] = useState<string | null>(null);
+  const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const outboundWhatsApp = useOutboundWhatsApp();
 
   const {
@@ -154,6 +157,18 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
       </CardHeader>
       <CardContent>
         <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
+          <div>
+            <Label htmlFor="contact-picker">Contact</Label>
+            <ContactPicker
+              value={selectedContact}
+              onChange={(contact) => {
+                setSelectedContact(contact);
+                if (contact) setValue("phone", contact.phone, { shouldValidate: true });
+              }}
+              placeholder="Search an existing contact, or type a number below…"
+            />
+          </div>
+
           <div>
             <Label htmlFor="phone" required>
               Phone (E.164)

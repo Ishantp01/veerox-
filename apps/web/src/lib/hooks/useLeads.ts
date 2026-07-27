@@ -2,12 +2,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api";
 import { POLL, queryKeys } from "@/lib/query";
-import type { Lead, LeadDetail, LeadStatus } from "@/lib/types";
+import type { Lead, LeadDetail, LeadQualificationStatus, LeadStatus } from "@/lib/types";
 
 export interface LeadFilters {
   intent?: string;
   channel?: "voice" | "whatsapp";
   status?: LeadStatus;
+  qualification_status?: LeadQualificationStatus;
 }
 
 function buildLeadsPath(filters?: LeadFilters): string {
@@ -15,6 +16,7 @@ function buildLeadsPath(filters?: LeadFilters): string {
   if (filters?.intent) params.set("intent", filters.intent);
   if (filters?.channel) params.set("channel", filters.channel);
   if (filters?.status) params.set("status", filters.status);
+  if (filters?.qualification_status) params.set("qualification_status", filters.qualification_status);
   const qs = params.toString();
   return qs ? `/admin/leads?${qs}` : "/admin/leads";
 }
@@ -53,6 +55,9 @@ export interface LeadUpdateInput {
   status?: LeadStatus;
   follow_up_at?: string | null;
   follow_up_note?: string | null;
+  qualification_status?: LeadQualificationStatus;
+  qualification_score?: number | null;
+  qualification_notes?: string | null;
 }
 
 /**

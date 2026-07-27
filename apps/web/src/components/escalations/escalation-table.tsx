@@ -40,11 +40,11 @@ export function EscalationTable({ escalations, conversationBasePath }: Escalatio
                 {formatDateTime(e.created_at)}
               </TableCell>
               <TableCell>
-                <span className="font-mono text-xs text-slate-600">
+                <span className="font-mono text-xs text-slate-600 dark:text-slate-400">
                   {formatPhone(e.user_phone)}
                 </span>
               </TableCell>
-              <TableCell className="max-w-xs truncate text-slate-700">
+              <TableCell className="max-w-xs truncate text-slate-700 dark:text-slate-300">
                 {e.reason}
               </TableCell>
               <TableCell>

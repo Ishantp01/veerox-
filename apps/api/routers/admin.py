@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
+from apps.api.core.llm import chat_completion
 from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND, WHATSAPP_APPEND
 from apps.api.core.tools import (
     TOOL_DEFINITIONS,
@@ -49,6 +50,7 @@ from apps.api.schemas.campaign import (
 )
 from apps.api.schemas.conversation import ConversationOut, ConversationSummaryOut, MessageOut
 from apps.api.schemas.lead import (
+    LEAD_QUALIFICATION_STATUSES,
     LEAD_STATUSES,
     LeadBulkImportIn,
     LeadDetailOut,
@@ -358,7 +360,51 @@ async def get_conversation_messages(
     return [MessageOut.model_validate(m) for m in messages]
 
 
+_SUMMARY_SYSTEM_PROMPT = (
+    "Summarize this customer conversation in 2-3 sentences for a sales rep "
+    "reviewing it later. Cover what the customer wanted, anything promised or "
+    "decided, and any next step. Plain prose, no headers or bullet points."
+)
+
+
+@router.post("/conversations/{conversation_id}/summarize", response_model=ConversationOut)
+async def summarize_conversation(
+    conversation_id: UUID,
+    db: DbDep,
+    x_admin_token: str | None = Header(None),
+) -> Conversation:
+    """Generate (or regenerate) an AI summary of a conversation's transcript,
+    on demand — not automatic, since not every conversation needs one."""
+    _verify_admin(x_admin_token)
+
+    conversation = await db.get(Conversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    stmt = (
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.asc())
+    )
+    messages = (await db.execute(stmt)).scalars().all()
+    transcript = "\n".join(f"{m.role}: {m.content}" for m in messages if m.content)
+    if not transcript:
+        raise HTTPException(status_code=400, detail="Conversation has no messages to summarize")
+
+    result = await chat_completion(
+        messages=[
+            {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+            {"role": "user", "content": transcript},
+        ],
+    )
+    conversation.summary = (result.content or "").strip() or None
+    await db.commit()
+    await db.refresh(conversation)
+    return conversation
+
+
 _LEAD_STATUS_PATTERN = f"^({'|'.join(LEAD_STATUSES)})$"
+_LEAD_QUALIFICATION_STATUS_PATTERN = f"^({'|'.join(LEAD_QUALIFICATION_STATUSES)})$"
 
 
 @router.get("/leads")
@@ -368,6 +414,7 @@ async def list_leads(
     intent: str | None = Query(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
     status: str | None = Query(None, pattern=_LEAD_STATUS_PATTERN),
+    qualification_status: str | None = Query(None, pattern=_LEAD_QUALIFICATION_STATUS_PATTERN),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[LeadOut]:
@@ -380,6 +427,8 @@ async def list_leads(
         stmt = stmt.where(Lead.channel == channel)
     if status:
         stmt = stmt.where(Lead.status == status)
+    if qualification_status:
+        stmt = stmt.where(Lead.qualification_status == qualification_status)
 
     leads = (await db.execute(stmt)).scalars().all()
     return [LeadOut.model_validate(lead) for lead in leads]
@@ -445,6 +494,11 @@ async def update_lead(
     updates = payload.model_dump(exclude_unset=True)
     for field, value in updates.items():
         setattr(lead, field, value)
+
+    # Stamp qualified_at the moment a lead first enters "qualified", so the
+    # caller doesn't have to set it explicitly on every qualification update.
+    if updates.get("qualification_status") == "qualified" and lead.qualified_at is None:
+        lead.qualified_at = datetime.now(UTC)
 
     await db.commit()
     await db.refresh(lead)
@@ -765,6 +819,7 @@ async def create_campaign(
 async def list_campaigns(
     db: DbDep,
     x_admin_token: str | None = Header(None),
+    channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
 ) -> list[CampaignOut]:
     _verify_admin(x_admin_token)
     org_id = _default_org_id()
@@ -773,6 +828,8 @@ async def list_campaigns(
         .where(CallCampaign.org_id == org_id)
         .order_by(CallCampaign.created_at.desc())
     )
+    if channel:
+        stmt = stmt.where(CallCampaign.channel == channel)
     campaigns = (await db.execute(stmt)).scalars().all()
     return [_campaign_out(c, await _campaign_counts(db, c.id)) for c in campaigns]
 

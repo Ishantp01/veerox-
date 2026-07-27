@@ -85,7 +85,7 @@ export function StatsGrid({ variant }: StatsGridProps) {
                   label="Calls Today"
                   value={stats.data.calls_today}
                   icon={PhoneCall}
-                  tint="sky"
+                  tint="emerald"
                 />
               )}
               {variant === "whatsapp" && (
@@ -106,14 +106,14 @@ export function StatsGrid({ variant }: StatsGridProps) {
                       : stats.data.leads_today
                 }
                 icon={Sparkles}
-                tint="emerald"
+                tint="purple"
               />
               <StatCard
                 label="Spend Today"
                 value={formatUsd(stats.data.usd_spend_today)}
                 sublabel="LLM + audio cost"
                 icon={DollarSign}
-                tint="rose"
+                tint="amber"
               />
               <StatCard
                 label="Errors Today"
@@ -124,7 +124,7 @@ export function StatsGrid({ variant }: StatsGridProps) {
                     : "p50 latency —"
                 }
                 icon={AlertTriangle}
-                tint="amber"
+                tint="red"
               />
             </div>
             <RecentActivity variant={variant} />

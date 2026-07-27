@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from apps.api.db.base import Base
@@ -31,3 +31,7 @@ class Conversation(Base):
     # gives us in the recording callback (see channels/voice/webhook.py).
     recording_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     recording_duration_secs: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # AI-generated summary of the transcript — generated on demand via
+    # POST /admin/conversations/{id}/summarize (routers/admin.py), not
+    # automatically, since not every conversation needs one.
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)

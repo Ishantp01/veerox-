@@ -16,9 +16,21 @@ from apps.api.channels.whatsapp.webhook import router as whatsapp_router
 from apps.api.config import settings
 from apps.api.logging import setup_logging
 from apps.api.rate_limit import limiter
-from apps.api.routers import admin, conversations, diag, health, leads
+from apps.api.routers import (
+    admin,
+    appointments,
+    conversations,
+    crm,
+    diag,
+    follow_ups,
+    health,
+    leads,
+    sales,
+)
 from apps.api.sentry import init_sentry
 from apps.api.workers.campaign_dialer import run_campaign_dialer
+from apps.api.workers.follow_up_dispatcher import run_follow_up_dispatcher
+from apps.api.workers.whatsapp_dispatcher import run_whatsapp_dispatcher
 
 
 @asynccontextmanager
@@ -27,14 +39,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     init_sentry()
     await plivo_client.register_inbound_answer_url()
     dialer_task = asyncio.create_task(run_campaign_dialer())
+    whatsapp_dispatcher_task = asyncio.create_task(run_whatsapp_dispatcher())
+    follow_up_task = asyncio.create_task(run_follow_up_dispatcher())
+    background_tasks = (dialer_task, whatsapp_dispatcher_task, follow_up_task)
     try:
         yield
     finally:
-        dialer_task.cancel()
-        try:
-            await dialer_task
-        except asyncio.CancelledError:
-            pass
+        for task in background_tasks:
+            task.cancel()
+        for task in background_tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 def create_app() -> FastAPI:
@@ -63,6 +80,10 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(conversations.router)
     app.include_router(leads.router)
+    app.include_router(crm.router)
+    app.include_router(appointments.router)
+    app.include_router(follow_ups.router)
+    app.include_router(sales.router)
     app.include_router(admin.router)
     app.include_router(diag.router)
     app.include_router(whatsapp_router)

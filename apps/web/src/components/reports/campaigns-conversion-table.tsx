@@ -23,13 +23,15 @@ export function CampaignsConversionTable({ rows }: { rows: ReportsCampaignRow[] 
         </thead>
         <tbody>
           {rows.map((row) => {
-            const href = row.channel === "voice" ? `/calling/campaigns/${row.id}` : undefined;
+            const href = `/automation/campaigns/${row.id}`;
             const nameCell = (
               <span className="font-semibold text-slate-800 dark:text-slate-100">{row.name}</span>
             );
             return (
               <TableRow key={row.id}>
-                <TableCell>{href ? <Link href={href}>{nameCell}</Link> : nameCell}</TableCell>
+                <TableCell>
+                  <Link href={href}>{nameCell}</Link>
+                </TableCell>
                 <TableCell>
                   <Badge variant={row.channel === "voice" ? "voice" : "whatsapp"}>
                     {row.channel === "voice" ? "Voice" : "WhatsApp"}

@@ -12,6 +12,9 @@ export interface Conversation {
   // reported when the recording finished processing. Voice calls only.
   recording_url?: string | null;
   recording_duration_secs?: number | null;
+  // AI-generated summary, produced on demand via POST
+  // /admin/conversations/{id}/summarize — null until a rep requests one.
+  summary?: string | null;
 }
 
 export interface Message {
@@ -28,10 +31,15 @@ export interface Message {
 
 export type LeadStatus = "new" | "contacted" | "qualified" | "converted" | "lost";
 
+// Separate qualification pipeline from `status` — a lead can be
+// status="contacted" while a rep separately works it through this.
+export type LeadQualificationStatus = "unqualified" | "in_review" | "qualified" | "disqualified";
+
 export interface Lead {
   id: string;
   org_id: string;
   user_id: string;
+  contact_id: string | null;
   name: string | null;
   phone: string | null;
   intent: string | null;
@@ -43,6 +51,10 @@ export interface Lead {
   status: LeadStatus;
   follow_up_at: string | null;
   follow_up_note: string | null;
+  qualification_status: LeadQualificationStatus;
+  qualification_score: number | null;
+  qualification_notes: string | null;
+  qualified_at: string | null;
   created_at: string;
 }
 
@@ -50,6 +62,95 @@ export interface Lead {
 // server-side via the shared user_id (Lead has no direct FK to Conversation).
 export interface LeadDetail extends Lead {
   conversations: Conversation[];
+}
+
+// CRM contact — cross-channel parent entity Leads can optionally roll up
+// under via Lead.contact_id. Distinct from the per-channel messaging User.
+export interface Contact {
+  id: string;
+  org_id: string;
+  name: string | null;
+  phone: string;
+  email: string | null;
+  company: string | null;
+  tags: string[] | null;
+  owner_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// GET /crm/contacts/{id} — Contact plus every Lead rolled up under it.
+export interface ContactWithLeads extends Contact {
+  leads: Lead[];
+}
+
+export interface PipelineStage {
+  status: LeadStatus;
+  count: number;
+  value: number;
+}
+
+export interface Pipeline {
+  stages: PipelineStage[];
+  total_value: number;
+}
+
+export interface ChannelBreakdown {
+  channel: string;
+  count: number;
+  value: number;
+}
+
+export interface QualificationFunnelStage {
+  qualification_status: LeadQualificationStatus;
+  count: number;
+}
+
+export interface RevenueSummary {
+  total_pipeline_value: number;
+  won_value: number;
+  by_channel: ChannelBreakdown[];
+  qualification_funnel: QualificationFunnelStage[];
+}
+
+export type FollowUpTaskStatus = "pending" | "sending" | "sent" | "failed" | "skipped" | "cancelled";
+
+export interface FollowUpRule {
+  id: string;
+  org_id: string;
+  name: string;
+  trigger_type: "status_change";
+  trigger_config: { status?: string; delay_hours?: number };
+  channel: string;
+  message_template: string;
+  active: boolean;
+  created_at: string;
+}
+
+export interface FollowUpTask {
+  id: string;
+  org_id: string;
+  lead_id: string;
+  rule_id: string | null;
+  run_at: string;
+  status: FollowUpTaskStatus;
+  created_at: string;
+  sent_at: string | null;
+}
+
+export type AppointmentStatus = "scheduled" | "confirmed" | "completed" | "cancelled" | "no_show";
+
+export interface Appointment {
+  id: string;
+  org_id: string;
+  contact_id: string | null;
+  lead_id: string | null;
+  scheduled_at: string;
+  duration_minutes: number;
+  status: AppointmentStatus;
+  assigned_user_id: string | null;
+  notes: string | null;
+  created_at: string;
 }
 
 // One entry sitting in the Redis human_handoff_queue. Shape produced by
@@ -178,6 +279,7 @@ export interface Campaign {
   org_id: string;
   name: string;
   criteria: string;
+  channel: "voice" | "whatsapp";
   status: CampaignStatus;
   created_at: string;
   counts: CampaignCounts;

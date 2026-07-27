@@ -13,10 +13,11 @@ const TOKEN_KEY = "veerox_admin_token";
  *
  * GET /admin/campaigns → Campaign[]
  */
-export function useCampaigns() {
+export function useCampaigns(channel?: "voice" | "whatsapp") {
+  const qs = channel ? `?channel=${channel}` : "";
   return useQuery<Campaign[]>({
-    queryKey: queryKeys.campaigns(),
-    queryFn: () => apiFetch<Campaign[]>("/admin/campaigns"),
+    queryKey: queryKeys.campaigns(channel),
+    queryFn: () => apiFetch<Campaign[]>(`/admin/campaigns${qs}`),
     refetchInterval: POLL.campaigns,
   });
 }
@@ -39,6 +40,7 @@ export interface CreateCampaignInput {
   name: string;
   criteria: string;
   file: File;
+  channel?: "voice" | "whatsapp";
 }
 
 /**
@@ -57,6 +59,7 @@ async function createCampaign(input: CreateCampaignInput): Promise<CampaignCreat
   form.append("name", input.name);
   form.append("criteria", input.criteria);
   form.append("file", input.file);
+  if (input.channel) form.append("channel", input.channel);
 
   const res = await fetch(`${base}/admin/campaigns`, {
     method: "POST",
@@ -82,7 +85,7 @@ export function useCreateCampaign() {
   return useMutation<CampaignCreateResult, Error, CreateCampaignInput>({
     mutationFn: createCampaign,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.campaigns() });
+      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
     },
   });
 }
@@ -96,7 +99,7 @@ function useCampaignStatusMutation(action: "pause" | "resume") {
         method: "POST",
       }),
     onSuccess: (_, id) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.campaigns() });
+      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.campaign(id) });
     },
   });

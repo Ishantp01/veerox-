@@ -23,24 +23,29 @@ import {
   Textarea,
   useToast,
 } from "@/components/ui";
+import { ChannelBadge } from "@/components/conversations/channel-badge";
 import { formatDateTime } from "@/lib/format";
 import { useCampaigns, useCreateCampaign, usePauseCampaign, useResumeCampaign } from "@/lib/hooks";
 import { CampaignStatusBadge } from "./campaign-status-badge";
 
 /**
- * Bulk-upload a lead list, criteria included, and let the background dialer
- * (apps/api/workers/campaign_dialer.py) call each one — the AI's
- * qualify_lead tool call is what decides whether a contact reaches the CRM.
+ * Bulk-upload a lead list, criteria included, and let the background worker
+ * — the voice dialer (apps/api/workers/campaign_dialer.py) or the WhatsApp
+ * dispatcher (apps/api/workers/whatsapp_dispatcher.py), per campaign channel
+ * — reach each one. The AI's qualify_lead tool call is what decides whether
+ * a contact reaches the CRM, on either channel.
  */
 export function CampaignsView() {
   const router = useRouter();
   const { toast } = useToast();
-  const { data, isLoading, isError, error, refetch } = useCampaigns();
+  const [channelFilter, setChannelFilter] = useState<"voice" | "whatsapp" | "">("");
+  const { data, isLoading, isError, error, refetch } = useCampaigns(channelFilter || undefined);
   const campaigns = data ?? [];
 
   const [name, setName] = useState("");
   const [criteria, setCriteria] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [channel, setChannel] = useState<"voice" | "whatsapp">("voice");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const createCampaign = useCreateCampaign();
@@ -52,7 +57,7 @@ export function CampaignsView() {
     if (!file) return;
 
     createCampaign.mutate(
-      { name, criteria, file },
+      { name, criteria, file, channel },
       {
         onSuccess: (result) => {
           toast({
@@ -66,6 +71,7 @@ export function CampaignsView() {
           setName("");
           setCriteria("");
           setFile(null);
+          setChannel("voice");
           if (fileInputRef.current) fileInputRef.current.value = "";
         },
         onError: (err) => {
@@ -90,8 +96,20 @@ export function CampaignsView() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
-        title="Calling Campaigns"
-        description="Upload a lead list with qualification criteria — the AI agent calls each one and only qualified prospects reach the CRM."
+        title="Campaigns"
+        description="Upload a lead list with qualification criteria — the AI agent reaches each one by voice or WhatsApp, and only qualified prospects reach the CRM."
+        action={
+          <select
+            value={channelFilter}
+            onChange={(e) => setChannelFilter(e.target.value as "voice" | "whatsapp" | "")}
+            aria-label="Filter by channel"
+            className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+          >
+            <option value="">All channels</option>
+            <option value="voice">Voice</option>
+            <option value="whatsapp">WhatsApp</option>
+          </select>
+        }
       />
 
       <Card className="mb-8">
@@ -100,7 +118,7 @@ export function CampaignsView() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-3">
               <div>
                 <Label htmlFor="campaign-name" required>
                   Campaign name
@@ -112,6 +130,20 @@ export function CampaignsView() {
                   placeholder="July outreach"
                   required
                 />
+              </div>
+              <div>
+                <Label htmlFor="campaign-channel" required>
+                  Channel
+                </Label>
+                <select
+                  id="campaign-channel"
+                  value={channel}
+                  onChange={(e) => setChannel(e.target.value as "voice" | "whatsapp")}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                >
+                  <option value="voice">Voice (calling)</option>
+                  <option value="whatsapp">WhatsApp</option>
+                </select>
               </div>
               <div>
                 <Label htmlFor="campaign-file" required>
@@ -148,7 +180,7 @@ export function CampaignsView() {
             <div>
               <Button type="submit" variant="primary" loading={createCampaign.isPending}>
                 {!createCampaign.isPending && <Upload size={15} aria-hidden />}
-                Start Calling
+                {channel === "voice" ? "Start Calling" : "Start Sending"}
               </Button>
             </div>
           </form>
@@ -183,6 +215,7 @@ export function CampaignsView() {
             <thead>
               <TableRow isHeader>
                 <TableHeader>Name</TableHeader>
+                <TableHeader>Channel</TableHeader>
                 <TableHeader>Status</TableHeader>
                 <TableHeader>Progress</TableHeader>
                 <TableHeader>Qualified</TableHeader>
@@ -200,21 +233,24 @@ export function CampaignsView() {
                     role="link"
                     tabIndex={0}
                     className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
-                    onClick={() => router.push(`/calling/campaigns/${c.id}`)}
+                    onClick={() => router.push(`/automation/campaigns/${c.id}`)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        router.push(`/calling/campaigns/${c.id}`);
+                        router.push(`/automation/campaigns/${c.id}`);
                       }
                     }}
                   >
                     <TableCell>
-                      <span className="font-semibold text-slate-800">{c.name}</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-100">{c.name}</span>
+                    </TableCell>
+                    <TableCell>
+                      <ChannelBadge channel={c.channel} />
                     </TableCell>
                     <TableCell>
                       <CampaignStatusBadge status={c.status} />
                     </TableCell>
-                    <TableCell className="text-xs text-slate-600">
+                    <TableCell className="text-xs text-slate-600 dark:text-slate-400">
                       {done} / {total} called
                       {c.counts.calling > 0 && (
                         <span className="ml-1.5 text-primary-500">({c.counts.calling} in progress)</span>

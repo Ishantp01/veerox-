@@ -31,7 +31,7 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
       <Button
         variant="ghost"
         size="sm"
-        onClick={() => router.push("/calling/campaigns")}
+        onClick={() => router.push("/automation/campaigns")}
         className="mb-4"
       >
         <ArrowLeft size={14} aria-hidden /> Back to campaigns
@@ -76,10 +76,10 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
               {campaign?.targets.map((t) => (
                 <TableRow key={t.id}>
                   <TableCell>
-                    <span className="font-semibold text-slate-800">{t.name ?? "—"}</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-100">{t.name ?? "—"}</span>
                   </TableCell>
                   <TableCell>
-                    <span className="font-mono text-xs text-slate-600">{formatPhone(t.phone)}</span>
+                    <span className="font-mono text-xs text-slate-600 dark:text-slate-400">{formatPhone(t.phone)}</span>
                   </TableCell>
                   <TableCell>
                     <CampaignTargetStatusBadge status={t.status} />

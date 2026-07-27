@@ -17,6 +17,7 @@ class ConversationOut(BaseModel):
     ended_at: datetime | None
     recording_url: str | None = None
     recording_duration_secs: float | None = None
+    summary: str | None = None
 
 
 class ConversationSummaryOut(ConversationOut):

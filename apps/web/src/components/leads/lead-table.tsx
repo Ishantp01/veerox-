@@ -60,10 +60,10 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
                 }
               >
                 <TableCell>
-                  <span className="font-semibold text-slate-800">{lead.name ?? "—"}</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-100">{lead.name ?? "—"}</span>
                 </TableCell>
                 <TableCell>
-                  <span className="font-mono text-xs text-slate-600">
+                  <span className="font-mono text-xs text-slate-600 dark:text-slate-400">
                     {formatPhone(lead.phone)}
                   </span>
                 </TableCell>

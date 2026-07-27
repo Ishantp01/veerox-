@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { ChevronRight, Menu, ShieldCheck } from "lucide-react";
+import { useTheme } from "next-themes";
+import { ChevronRight, Menu, Moon, ShieldCheck, Sun } from "lucide-react";
 
 const SEGMENT_LABELS: Record<string, string> = {
   whatsapp: "WhatsApp",
@@ -45,6 +47,11 @@ export function Topbar({ onMenuClick }: TopbarProps) {
   const pathname = usePathname();
   const segments = pathname.split("/").filter(Boolean);
 
+  const { resolvedTheme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const isDark = mounted && resolvedTheme === "dark";
+
   return (
     <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-slate-200/80 bg-white/80 px-4 backdrop-blur-md sm:px-6 lg:px-8 dark:border-slate-800/80 dark:bg-slate-950/70">
       <div className="flex min-w-0 items-center gap-2">
@@ -75,11 +82,21 @@ export function Topbar({ onMenuClick }: TopbarProps) {
         </nav>
       </div>
 
-      <div className="flex shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white py-1 pl-1 pr-3 text-xs font-semibold text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 text-white">
-          <ShieldCheck size={13} aria-hidden />
-        </span>
-        <span className="hidden sm:inline">Admin session</span>
+      <div className="flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setTheme(isDark ? "light" : "dark")}
+          aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}
+          className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:text-slate-800 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
+        >
+          {isDark ? <Sun size={16} aria-hidden /> : <Moon size={16} aria-hidden />}
+        </button>
+        <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white py-1 pl-1 pr-3 text-xs font-semibold text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 text-white">
+            <ShieldCheck size={13} aria-hidden />
+          </span>
+          <span className="hidden sm:inline">Admin session</span>
+        </div>
       </div>
     </header>
   );

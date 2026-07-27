@@ -13,6 +13,16 @@ from apps.api.schemas.conversation import ConversationSummaryOut
 LEAD_STATUSES: tuple[str, ...] = ("new", "contacted", "qualified", "converted", "lost")
 LeadStatus = Literal["new", "contacted", "qualified", "converted", "lost"]
 
+# Separate qualification workflow (a lead can be status="contacted" while a
+# rep works it through this pipeline independently of that stage).
+LEAD_QUALIFICATION_STATUSES: tuple[str, ...] = (
+    "unqualified",
+    "in_review",
+    "qualified",
+    "disqualified",
+)
+LeadQualificationStatus = Literal["unqualified", "in_review", "qualified", "disqualified"]
+
 
 class LeadCreate(BaseModel):
     org_id: UUID
@@ -30,6 +40,7 @@ class LeadOut(BaseModel):
     id: UUID
     org_id: UUID
     user_id: UUID
+    contact_id: UUID | None
     name: str | None
     phone: str | None
     intent: str | None
@@ -38,6 +49,11 @@ class LeadOut(BaseModel):
     status: str
     follow_up_at: datetime | None
     follow_up_note: str | None
+    qualification_status: str
+    qualification_score: int | None
+    qualification_notes: str | None
+    qualified_at: datetime | None
+    deal_value: float | None
     created_at: datetime
 
 
@@ -57,6 +73,10 @@ class LeadUpdateIn(BaseModel):
     status: LeadStatus | None = None
     follow_up_at: datetime | None = None
     follow_up_note: str | None = None
+    qualification_status: LeadQualificationStatus | None = None
+    qualification_score: int | None = None
+    qualification_notes: str | None = None
+    deal_value: float | None = None
 
 
 class LeadImportRow(BaseModel):

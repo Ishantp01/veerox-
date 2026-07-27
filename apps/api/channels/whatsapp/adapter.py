@@ -23,6 +23,8 @@ from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.agent import agent_core
 from apps.api.core.transcribe import transcribe
+from apps.api.db.models.call_campaign import CallCampaign
+from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.user import User
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.redis_client import get_redis_pool, record_error
@@ -147,6 +149,31 @@ async def _claim_message_id(msg_id: str) -> bool:
     return bool(acquired)
 
 
+async def _find_open_campaign_target(db: AsyncSession, phone: str) -> UUID | None:
+    """Find this phone's still-open WhatsApp campaign outreach, if any.
+
+    "Open" means the dispatcher (workers/whatsapp_dispatcher.py) already sent
+    the opening message (status="completed") and the AI hasn't resolved it
+    yet (qualified IS NULL) — matches on phone only, not conversation_id, so
+    every turn of the reply thread keeps resolving campaign_target_id, not
+    just the first one (mirrors the intent of voice's per-call
+    campaign_target_id, adapted for WhatsApp's multi-turn webhook model).
+    """
+    stmt = (
+        select(CampaignTarget.id)
+        .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
+        .where(
+            CampaignTarget.phone == phone,
+            CallCampaign.channel == "whatsapp",
+            CampaignTarget.status == "completed",
+            CampaignTarget.qualified.is_(None),
+        )
+        .order_by(CampaignTarget.called_at.desc())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
 async def _get_or_create_user(db: AsyncSession, org_id: UUID, phone: str) -> User:
     """Resolve or create a User row keyed by ``(org_id, phone)``.
 
@@ -204,6 +231,7 @@ async def process_inbound(payload: dict[str, Any]) -> None:
         started = time.monotonic()
         async with AsyncSessionLocal() as db:
             user = await _get_or_create_user(db, org_id, msg.from_phone)
+            campaign_target_id = await _find_open_campaign_target(db, msg.from_phone)
             # Commit the user row before the (potentially long) LLM call so a
             # later failure doesn't lose the contact record.
             await db.commit()
@@ -217,6 +245,7 @@ async def process_inbound(payload: dict[str, Any]) -> None:
                 user_id=user.id,
                 channel="whatsapp",
                 input_text=text,
+                campaign_target_id=campaign_target_id,
             )
             agent_done = time.monotonic()
 

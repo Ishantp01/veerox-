@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useTheme } from "next-themes";
 import {
   Area,
   AreaChart,
@@ -13,6 +14,7 @@ import {
 
 import { Card, CardContent, CardHeader, CardTitle, Skeleton } from "@/components/ui";
 import { useReportsTimeseries } from "@/lib/hooks";
+import { CATEGORICAL } from "@/lib/chart-colors";
 import type { ReportsTimeseriesPoint } from "@/lib/types";
 
 const TREND_DAYS = 14;
@@ -20,15 +22,17 @@ const TREND_DAYS = 14;
 interface Series {
   key: keyof ReportsTimeseriesPoint;
   label: string;
-  color: string;
+  slot: number;
 }
 
+// Categorical slots 1 (blue) and 6 (green), fixed order — matches
+// ReportsTrendChart's assignment for the same two series.
 const SERIES_BY_VARIANT: Record<"all" | "whatsapp" | "voice", Series[]> = {
-  voice: [{ key: "calls", label: "Calls", color: "#4f46e5" }],
-  whatsapp: [{ key: "whatsapp_messages", label: "Messages", color: "#059669" }],
+  voice: [{ key: "calls", label: "Calls", slot: 0 }],
+  whatsapp: [{ key: "whatsapp_messages", label: "Messages", slot: 5 }],
   all: [
-    { key: "calls", label: "Calls", color: "#4f46e5" },
-    { key: "whatsapp_messages", label: "WhatsApp messages", color: "#059669" },
+    { key: "calls", label: "Calls", slot: 0 },
+    { key: "whatsapp_messages", label: "WhatsApp messages", slot: 5 },
   ],
 };
 
@@ -88,6 +92,11 @@ export function StatsTrendChart({ variant }: StatsTrendChartProps) {
   const { data, isLoading, isError } = useReportsTimeseries(TREND_DAYS);
   const series = SERIES_BY_VARIANT[variant];
 
+  const { resolvedTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const isDark = mounted && resolvedTheme === "dark";
+
   const hasData = useMemo(() => (data?.length ?? 0) > 0, [data]);
 
   return (
@@ -107,12 +116,15 @@ export function StatsTrendChart({ variant }: StatsTrendChartProps) {
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                 <defs>
-                  {series.map((s) => (
-                    <linearGradient key={s.key} id={`trend-${s.key}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={s.color} stopOpacity={0.35} />
-                      <stop offset="100%" stopColor={s.color} stopOpacity={0} />
-                    </linearGradient>
-                  ))}
+                  {series.map((s) => {
+                    const color = CATEGORICAL[s.slot][isDark ? "dark" : "light"];
+                    return (
+                      <linearGradient key={s.key} id={`trend-${s.key}`} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+                        <stop offset="100%" stopColor={color} stopOpacity={0} />
+                      </linearGradient>
+                    );
+                  })}
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-slate-100 dark:stroke-slate-800" />
                 <XAxis
@@ -137,19 +149,22 @@ export function StatsTrendChart({ variant }: StatsTrendChartProps) {
                   domain={[-0.5, (max: number) => Math.max(max, 4)]}
                 />
                 <Tooltip content={<ChartTooltip />} />
-                {series.map((s) => (
-                  <Area
-                    key={s.key}
-                    type="monotone"
-                    dataKey={s.key}
-                    name={s.label}
-                    stroke={s.color}
-                    strokeWidth={2.5}
-                    fill={`url(#trend-${s.key})`}
-                    dot={{ r: 3, strokeWidth: 0, fill: s.color }}
-                    activeDot={{ r: 5, strokeWidth: 2, stroke: "#fff" }}
-                  />
-                ))}
+                {series.map((s) => {
+                  const color = CATEGORICAL[s.slot][isDark ? "dark" : "light"];
+                  return (
+                    <Area
+                      key={s.key}
+                      type="monotone"
+                      dataKey={s.key}
+                      name={s.label}
+                      stroke={color}
+                      strokeWidth={2.5}
+                      fill={`url(#trend-${s.key})`}
+                      dot={{ r: 3, strokeWidth: 0, fill: color }}
+                      activeDot={{ r: 5, strokeWidth: 2, stroke: "#fff" }}
+                    />
+                  );
+                })}
               </AreaChart>
             </ResponsiveContainer>
           </div>

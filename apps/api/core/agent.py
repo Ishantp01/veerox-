@@ -28,6 +28,7 @@ from apps.api.core.prompts import (
     WHATSAPP_APPEND,
 )
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
+from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.conversation import Conversation
 from apps.api.redis_client import get_redis_pool
 
@@ -141,6 +142,7 @@ async def _dispatch_tool(
     tool_call: ToolCall,
     user_id: UUID,
     channel: Channel,
+    campaign_target_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Look up the handler, parse args, run it. Returns a JSON-serialisable dict.
 
@@ -162,8 +164,13 @@ async def _dispatch_tool(
     if not isinstance(args, dict):
         return {"status": "error", "reason": "arguments_not_object"}
 
-    # Inject caller context the LLM args can't carry — handlers absorb extras via **_.
-    result = await handler(db, user_id=user_id, channel=channel, **args)
+    # Inject caller context the LLM args can't carry — handlers absorb extras
+    # via **_. campaign_target_id mirrors voice/adapter.py's
+    # _dispatch_realtime_tool so qualify_lead can find the CampaignTarget row
+    # to update on either channel.
+    result = await handler(
+        db, user_id=user_id, channel=channel, campaign_target_id=campaign_target_id, **args
+    )
     if not isinstance(result, dict):
         # Defensive: every handler advertises dict[str, Any] but be paranoid here
         # because malformed results would poison the next LLM iteration.
@@ -184,6 +191,7 @@ class AgentCore:
         user_id: UUID,
         channel: Channel,
         input_text: str,
+        campaign_target_id: UUID | None = None,
     ) -> str:
         """Process one conversational turn and return the assistant reply.
 
@@ -193,6 +201,11 @@ class AgentCore:
             channel: Transport hint — nudges response style; does NOT alter
                 tools, memory, or routing.
             input_text: Transcribed (voice) or typed (whatsapp) user message.
+            campaign_target_id: Set when this turn belongs to an open
+                WhatsApp campaign outreach (see channels/whatsapp/adapter.py)
+                — lets qualify_lead find the CampaignTarget row to update,
+                mirroring how the voice realtime bridge threads the same id
+                through _dispatch_realtime_tool.
 
         Returns:
             The assistant's reply as a plain string. The caller is responsible
@@ -207,6 +220,16 @@ class AgentCore:
             return KILL_SWITCH_REPLY
 
         conversation = await _get_or_open_conversation(db, user_id, channel, org_id)
+
+        # First turn since the campaign message went out — record which
+        # conversation this target's reply landed in (idempotent: only ever
+        # set once). Later turns in the same conversation keep resolving
+        # campaign_target_id via the adapter's lookup until qualify_lead runs.
+        if campaign_target_id is not None:
+            target = await db.get(CampaignTarget, campaign_target_id)
+            if target is not None and target.conversation_id is None:
+                target.conversation_id = conversation.id
+                await db.commit()
 
         history = await load_last_n(db, user_id)
 
@@ -245,7 +268,9 @@ class AgentCore:
             messages.append(_assistant_message_with_tool_calls(result.tool_calls))
 
             for tool_call in result.tool_calls:
-                tool_result = await _dispatch_tool(db, tool_call, user_id, channel)
+                tool_result = await _dispatch_tool(
+                    db, tool_call, user_id, channel, campaign_target_id=campaign_target_id
+                )
                 messages.append(
                     {
                         "role": "tool",

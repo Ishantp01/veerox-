@@ -14,18 +14,16 @@ import {
 } from "recharts";
 
 import { formatShortDate } from "@/lib/format";
+import { CATEGORICAL, CHART_CHROME } from "@/lib/chart-colors";
 import type { ReportsTimeseriesPoint } from "@/lib/types";
 
-// Categorical slots 1/2/3 (fixed order) from the dataviz palette — blue,
-// green, magenta — stepped for each surface. Never reordered per-chart.
+// Categorical slots 1/6/5 (fixed order) from the shared dataviz palette —
+// blue, green, magenta — stepped for each surface. Never reordered per-chart.
 const COLORS = {
-  light: { calls: "#2a78d6", whatsapp: "#008300", qualified: "#e87ba4" },
-  dark: { calls: "#3987e5", whatsapp: "#008300", qualified: "#d55181" },
+  light: { calls: CATEGORICAL[0].light, whatsapp: CATEGORICAL[5].light, qualified: CATEGORICAL[4].light },
+  dark: { calls: CATEGORICAL[0].dark, whatsapp: CATEGORICAL[5].dark, qualified: CATEGORICAL[4].dark },
 };
-const CHROME = {
-  light: { grid: "#e1e0d9", axis: "#898781", surface: "#fcfcfb" },
-  dark: { grid: "#2c2c2a", axis: "#898781", surface: "#1a1a19" },
-};
+const CHROME = CHART_CHROME;
 
 interface SeriesDef {
   key: keyof Pick<ReportsTimeseriesPoint, "calls" | "whatsapp_messages" | "qualified_count">;

@@ -89,7 +89,7 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
                   <TableCell className="text-xs text-slate-500">
                     {formatDateTime(c.ended_at)}
                   </TableCell>
-                  <TableCell className="font-bold text-slate-800">
+                  <TableCell className="font-bold text-slate-800 dark:text-slate-100">
                     {c.message_count ?? "—"}
                   </TableCell>
                 </TableRow>

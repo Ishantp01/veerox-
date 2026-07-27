@@ -3,13 +3,17 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CalendarClock, MessageSquare, Save, Users } from "lucide-react";
+import { ArrowLeft, BadgeCheck, CalendarClock, MessageSquare, Save, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { ChannelBadge } from "@/components/conversations/channel-badge";
 import { IntentBadge } from "@/components/leads/intent-badge";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
+import {
+  LEAD_QUALIFICATION_LABELS,
+  LEAD_QUALIFICATION_OPTIONS,
+} from "@/components/leads/qualification-badge";
 import {
   Button,
   Card,
@@ -28,7 +32,7 @@ import {
 } from "@/components/ui";
 import { useLead, useUpdateLead } from "@/lib/hooks";
 import { formatDateTime, formatPhone } from "@/lib/format";
-import type { LeadStatus } from "@/lib/types";
+import type { LeadQualificationStatus, LeadStatus } from "@/lib/types";
 
 /** ISO datetime -> value an <input type="datetime-local"> accepts. */
 function toDatetimeLocal(iso: string | null): string {
@@ -64,12 +68,18 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
   const [status, setStatus] = useState<LeadStatus>("new");
   const [followUpAt, setFollowUpAt] = useState("");
   const [followUpNote, setFollowUpNote] = useState("");
+  const [qualificationStatus, setQualificationStatus] = useState<LeadQualificationStatus>("unqualified");
+  const [qualificationScore, setQualificationScore] = useState("");
+  const [qualificationNotes, setQualificationNotes] = useState("");
 
   useEffect(() => {
     if (!lead.data) return;
     setStatus(lead.data.status);
     setFollowUpAt(toDatetimeLocal(lead.data.follow_up_at));
     setFollowUpNote(lead.data.follow_up_note ?? "");
+    setQualificationStatus(lead.data.qualification_status);
+    setQualificationScore(lead.data.qualification_score?.toString() ?? "");
+    setQualificationNotes(lead.data.qualification_notes ?? "");
   }, [lead.data]);
 
   function handleSave() {
@@ -83,6 +93,25 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
       {
         onSuccess: () => {
           toast({ title: "Lead updated", variant: "success" });
+        },
+        onError: (err) => {
+          toast({ title: "Update failed", description: err.message, variant: "error" });
+        },
+      },
+    );
+  }
+
+  function handleSaveQualification() {
+    updateLead.mutate(
+      {
+        id,
+        qualification_status: qualificationStatus,
+        qualification_score: qualificationScore.trim() ? Number(qualificationScore) : null,
+        qualification_notes: qualificationNotes.trim() ? qualificationNotes.trim() : null,
+      },
+      {
+        onSuccess: () => {
+          toast({ title: "Qualification updated", variant: "success" });
         },
         onError: (err) => {
           toast({ title: "Update failed", description: err.message, variant: "error" });
@@ -208,6 +237,67 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
               <Card>
                 <CardHeader>
                   <div className="flex items-center gap-2">
+                    <BadgeCheck size={15} aria-hidden className="text-slate-400" />
+                    <CardTitle>Qualification</CardTitle>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-col gap-4">
+                    <div>
+                      <Label htmlFor="qualification-status">Stage</Label>
+                      <select
+                        id="qualification-status"
+                        value={qualificationStatus}
+                        onChange={(e) => setQualificationStatus(e.target.value as LeadQualificationStatus)}
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                      >
+                        {LEAD_QUALIFICATION_OPTIONS.map((s) => (
+                          <option key={s} value={s}>
+                            {LEAD_QUALIFICATION_LABELS[s]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <Label htmlFor="qualification-score">Score</Label>
+                      <input
+                        id="qualification-score"
+                        type="number"
+                        value={qualificationScore}
+                        onChange={(e) => setQualificationScore(e.target.value)}
+                        placeholder="e.g. 80"
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                      />
+                    </div>
+
+                    <div>
+                      <Label htmlFor="qualification-notes">Notes</Label>
+                      <Textarea
+                        id="qualification-notes"
+                        rows={3}
+                        placeholder="Why this lead is (or isn't) qualified…"
+                        value={qualificationNotes}
+                        onChange={(e) => setQualificationNotes(e.target.value)}
+                      />
+                    </div>
+
+                    <Button
+                      variant="primary"
+                      className="self-start"
+                      loading={updateLead.isPending}
+                      onClick={handleSaveQualification}
+                    >
+                      {!updateLead.isPending && <Save size={15} aria-hidden />}
+                      Save qualification
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
                     <MessageSquare size={15} aria-hidden className="text-slate-400" />
                     <CardTitle>Conversation History</CardTitle>
                   </div>
@@ -260,7 +350,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                                 <TableCell className="text-xs text-slate-500">
                                   {formatDateTime(c.ended_at)}
                                 </TableCell>
-                                <TableCell className="font-bold text-slate-800">
+                                <TableCell className="font-bold text-slate-800 dark:text-slate-100">
                                   {c.message_count ?? "—"}
                                 </TableCell>
                               </TableRow>

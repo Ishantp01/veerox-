@@ -46,10 +46,15 @@ export const queryKeys = {
   settings: () => ["settings"] as const,
   whatsappSettings: () => ["settings", "whatsapp"] as const,
   callingSettings: () => ["settings", "calling"] as const,
-  campaigns: () => ["campaigns"] as const,
+  campaigns: (channel?: string) => ["campaigns", channel ?? ""] as const,
   campaign: (id: string) => ["campaigns", "detail", id] as const,
   reportsTimeseries: (days: number) => ["reports", "timeseries", days] as const,
   reportsCampaigns: () => ["reports", "campaigns"] as const,
+  contacts: (q?: string) => ["contacts", q ?? ""] as const,
+  contact: (id: string) => ["contacts", "detail", id] as const,
+  appointments: (filters?: { status?: string }) => ["appointments", filters ?? {}] as const,
+  followUpRules: () => ["follow-up-rules"] as const,
+  followUpTasks: (filters?: { status?: string }) => ["follow-up-tasks", filters ?? {}] as const,
 };
 
 /**

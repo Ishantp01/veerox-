@@ -1,13 +1,13 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { ArrowLeft, MessageSquare } from "lucide-react";
+import { ArrowLeft, FileText, MessageSquare, Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
-import { EmptyState, Skeleton } from "@/components/ui";
+import { Button, EmptyState, Skeleton, useToast } from "@/components/ui";
 import { TranscriptBubble } from "@/components/conversations/transcript-bubble";
 import { LiveDot } from "@/components/conversations/live-dot";
-import { useConversations, useConversationMessages } from "@/lib/hooks";
+import { useConversations, useConversationMessages, useSummarizeConversation } from "@/lib/hooks";
 import { formatDuration, formatRelative } from "@/lib/format";
 
 function TranscriptSkeleton() {
@@ -43,12 +43,21 @@ export function ConversationDetail({ id, backHref, backLabel, channel }: Convers
   // The messages endpoint doesn't report whether the conversation has ended, so
   // we read ended_at from the (already cached + polled) conversation list. If
   // the row isn't found we default to live so we don't prematurely stop polling.
+  const { toast } = useToast();
   const conversations = useConversations({ channel });
   const conversation = conversations.data?.find((c) => c.id === id);
   const isLive = conversation ? conversation.ended_at === null : true;
 
   const messages = useConversationMessages(id, { isLive });
   const rows = messages.data ?? [];
+
+  const summarize = useSummarizeConversation();
+  function handleSummarize() {
+    summarize.mutate(id, {
+      onError: (err) =>
+        toast({ title: "Could not generate summary", description: err.message, variant: "error" }),
+    });
+  }
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -69,6 +78,33 @@ export function ConversationDetail({ id, backHref, backLabel, channel }: Convers
           ) : undefined
         }
       />
+
+      {!isLive && messages.data && rows.length > 0 && (
+        <div className="mb-6 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+              <FileText size={13} aria-hidden />
+              Call Summary
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              loading={summarize.isPending}
+              onClick={handleSummarize}
+            >
+              {!summarize.isPending && <Sparkles size={13} aria-hidden />}
+              {conversation?.summary ? "Regenerate" : "Generate Summary"}
+            </Button>
+          </div>
+          {conversation?.summary ? (
+            <p className="text-sm text-slate-700 dark:text-slate-300">{conversation.summary}</p>
+          ) : (
+            <p className="text-sm text-slate-400 dark:text-slate-500">
+              No summary yet — generate one from the transcript above.
+            </p>
+          )}
+        </div>
+      )}
 
       {conversation?.recording_url && (
         <div className="mb-6 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900">
