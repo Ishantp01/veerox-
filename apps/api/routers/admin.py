@@ -939,6 +939,59 @@ async def list_campaigns(
     return [_campaign_out(c, await _campaign_counts(db, c.id)) for c in campaigns]
 
 
+_SAMPLE_CAMPAIGN_ROWS = [
+    {"name": "Asha Verma", "phone": "+919876543210"},
+    {"name": "Rohit Singh", "phone": "+919812345678"},
+]
+
+
+@router.get("/campaigns/sample.csv")
+async def sample_campaign_csv(x_admin_token: str | None = Header(None)) -> StreamingResponse:
+    """Blank-data template for POST /campaigns' contact-list upload — just
+    name/phone, since the campaign's channel (voice or WhatsApp) is picked
+    once via the form's Channel select, not per row. Registered ahead of GET
+    /campaigns/{campaign_id} so its literal path isn't swallowed by that
+    route's UUID path param.
+    """
+    _verify_admin(x_admin_token)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["name", "phone"])
+    for row in _SAMPLE_CAMPAIGN_ROWS:
+        writer.writerow([row["name"], row["phone"]])
+    buf.seek(0)
+
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="campaign-contacts-sample.csv"'},
+    )
+
+
+@router.get("/campaigns/sample.xlsx")
+async def sample_campaign_xlsx(x_admin_token: str | None = Header(None)) -> StreamingResponse:
+    """Same template as GET /campaigns/sample.csv, as an .xlsx workbook."""
+    _verify_admin(x_admin_token)
+
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Contacts"
+    sheet.append(["name", "phone"])
+    for row in _SAMPLE_CAMPAIGN_ROWS:
+        sheet.append([row["name"], row["phone"]])
+
+    buf = io.BytesIO()
+    workbook.save(buf)
+    buf.seek(0)
+
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="campaign-contacts-sample.xlsx"'},
+    )
+
+
 @router.get("/campaigns/{campaign_id}", response_model=CampaignDetailOut)
 async def get_campaign(
     campaign_id: UUID,

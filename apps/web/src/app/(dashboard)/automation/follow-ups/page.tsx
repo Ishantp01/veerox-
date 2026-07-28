@@ -51,7 +51,13 @@ export default function FollowUpsPage() {
             error={rules.error}
             isEmpty={(rules.data ?? []).length === 0}
             onRetry={() => rules.refetch()}
-            loadingFallback={<div className="p-4"><SkeletonRows rows={2} cols={4} /></div>}
+            loadingFallback={
+              <table className="w-full border-collapse text-sm">
+                <tbody>
+                  <SkeletonRows rows={2} cols={4} />
+                </tbody>
+              </table>
+            }
             emptyFallback={
               <EmptyState
                 icon={Repeat}
@@ -113,7 +119,13 @@ export default function FollowUpsPage() {
             error={tasks.error}
             isEmpty={(tasks.data ?? []).length === 0}
             onRetry={() => tasks.refetch()}
-            loadingFallback={<div className="p-4"><SkeletonRows rows={4} cols={4} /></div>}
+            loadingFallback={
+              <table className="w-full border-collapse text-sm">
+                <tbody>
+                  <SkeletonRows rows={4} cols={4} />
+                </tbody>
+              </table>
+            }
             emptyFallback={
               <EmptyState
                 icon={Repeat}

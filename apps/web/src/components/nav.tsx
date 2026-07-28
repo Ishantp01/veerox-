@@ -21,7 +21,6 @@ import {
   Settings,
   LogIn,
   LogOut,
-  Sparkles,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -31,6 +30,11 @@ interface NavItem {
   href: string;
   label: string;
   Icon: LucideIcon;
+  /** Fixed icon tint (independent of active state) — mirrors the mockup's
+   * per-channel colored icons (WhatsApp green, AI purple, …) for the
+   * Communication group. Omitted elsewhere so those icons keep the
+   * default/active-driven color. */
+  iconClassName?: string;
 }
 
 interface NavGroup {
@@ -51,9 +55,9 @@ const GROUPS: NavGroup[] = [
   {
     label: "Communication",
     items: [
-      { href: "/calling", label: "AI Calling", Icon: Phone },
-      { href: "/whatsapp", label: "AI WhatsApp", Icon: MessageSquare },
-      { href: "/whatsapp/templates", label: "WhatsApp Templates", Icon: FileText },
+      { href: "/calling", label: "AI Calling", Icon: Phone, iconClassName: "text-purple-500" },
+      { href: "/whatsapp", label: "AI WhatsApp", Icon: MessageSquare, iconClassName: "text-green-500" },
+      { href: "/whatsapp/templates", label: "WhatsApp Templates", Icon: FileText, iconClassName: "text-blue-400" },
     ],
   },
   {
@@ -130,7 +134,7 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
         />
       )}
       <nav
-        className={`fixed inset-y-0 left-0 z-50 flex h-screen w-72 max-w-[85vw] flex-col overflow-y-auto border-r border-slate-200 bg-white px-3 py-6 shrink-0 transition-transform duration-200 ease-out lg:sticky lg:top-0 lg:z-0 lg:w-64 lg:max-w-none lg:translate-x-0 dark:border-white/[0.06] dark:bg-canvas-950 dark:bg-sidebar-fade ${
+        className={`fixed inset-y-0 left-0 z-50 flex h-screen w-72 max-w-[85vw] flex-col overflow-y-auto border-r border-slate-200 bg-white px-3 py-6 shrink-0 transition-transform duration-200 ease-out lg:sticky lg:top-0 lg:z-0 lg:w-64 lg:max-w-none lg:translate-x-0 dark:border-slate-700 dark:bg-slate-950 dark:bg-sidebar-fade ${
           mobileOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full"
         }`}
       >
@@ -138,11 +142,12 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
         <div className="mb-6 px-3 flex items-center justify-between gap-2.5">
           <div className="flex items-center gap-2.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-primary-400 to-primary-600 text-white shrink-0 shadow-glow">
-              <Sparkles size={16} strokeWidth={2.25} />
+              <span className="text-lg font-black leading-none">V</span>
             </div>
             <div>
-              <p className="text-sm font-semibold tracking-tight leading-none text-slate-900 dark:text-white">Veerox AI</p>
-              <p className="text-[10px] font-medium text-slate-400 mt-1.5 uppercase tracking-widest dark:text-slate-500">Admin Panel</p>
+              <p className="text-base font-extrabold tracking-tight leading-none text-slate-900 dark:text-white">VEEROX</p>
+              <p className="text-[10px] font-semibold text-slate-400 mt-1 uppercase tracking-[0.2em] dark:text-slate-500">Software</p>
+              <p className="text-[10px] text-slate-400 mt-0.5 dark:text-slate-500">Built for Success!</p>
             </div>
           </div>
           <button
@@ -163,7 +168,7 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
                 {group.label}
               </p>
               <ul className="flex flex-col gap-0.5">
-                {group.items.map(({ href, label, Icon }) => {
+                {group.items.map(({ href, label, Icon, iconClassName }) => {
                   const active = isActive(pathname, href);
                   return (
                     <li key={href}>
@@ -171,14 +176,14 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
                         href={href}
                         className={`relative flex items-center gap-3 rounded-lg border-l-[3px] px-3 py-2 text-sm font-medium transition-all duration-150 ${
                           active
-                            ? "border-primary-500 bg-primary-50 text-slate-900 dark:bg-[#000e1d] dark:text-white"
+                            ? "border-primary-500 bg-primary-50 text-slate-900 dark:border-primary-500 dark:bg-primary-600/10 dark:text-primary-400"
                             : "border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-500 dark:hover:bg-white/[0.04] dark:hover:text-slate-200"
                         }`}
                       >
                         <Icon
                           size={16}
                           strokeWidth={2}
-                          className={`shrink-0 ${active ? "text-primary-600 dark:text-primary-400" : ""}`}
+                          className={`shrink-0 ${iconClassName ?? (active ? "text-primary-600 dark:text-primary-400" : "")}`}
                         />
                         {label}
                       </Link>

@@ -12,6 +12,7 @@ import {
   DialogFooter,
   Input,
   Label,
+  Select,
   Textarea,
   useToast,
 } from "@/components/ui";
@@ -84,18 +85,18 @@ export function NewFollowUpRuleDialog() {
                 <Label htmlFor="rule-status" required>
                   When lead status is
                 </Label>
-                <select
+                <Select
                   id="rule-status"
                   value={status}
-                  onChange={(e) => setStatus(e.target.value as LeadStatus)}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  onChange={(v) => setStatus(v as LeadStatus)}
+                  className="w-full"
                 >
                   {LEAD_STATUS_OPTIONS.map((s) => (
                     <option key={s} value={s}>
                       {LEAD_STATUS_LABELS[s]}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
               <div>
                 <Label htmlFor="rule-delay" required>

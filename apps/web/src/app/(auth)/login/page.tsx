@@ -3,7 +3,7 @@
 import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/ui/button";
-import { LogIn, AlertCircle, Sparkles } from "lucide-react";
+import { LogIn, AlertCircle } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
 /**
@@ -57,10 +57,11 @@ export default function LoginPage() {
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 text-white mb-4 shadow-glow-lg">
-            <Sparkles size={22} strokeWidth={2.25} />
+            <span className="text-2xl font-black leading-none">V</span>
           </div>
-          <h1 className="text-xl font-semibold text-white tracking-tight">Veerox AI</h1>
-          <p className="text-sm text-slate-400 mt-1">Admin Dashboard</p>
+          <h1 className="text-2xl font-extrabold text-white tracking-tight">VEEROX</h1>
+          <p className="text-[11px] font-semibold text-slate-400 mt-1.5 uppercase tracking-[0.2em]">Software</p>
+          <p className="text-xs text-slate-500 mt-1">Built for Success!</p>
         </div>
 
         {/* Card */}

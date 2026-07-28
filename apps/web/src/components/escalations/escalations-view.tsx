@@ -6,7 +6,7 @@ import { CheckCircle2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { EscalationTable } from "@/components/escalations/escalation-table";
-import { EmptyState, SkeletonRows, Table } from "@/components/ui";
+import { EmptyState, Select, SkeletonRows, Table } from "@/components/ui";
 import { useEscalations } from "@/lib/hooks";
 import type { Escalation, HandoffQueueEntry, Lead } from "@/lib/types";
 
@@ -85,16 +85,15 @@ export function EscalationsView({
         description={description}
         action={
           channel === undefined ? (
-            <select
+            <Select
               value={channelFilter}
-              onChange={(e) => setChannelFilter(e.target.value as "voice" | "whatsapp" | "")}
+              onChange={(v) => setChannelFilter(v as "voice" | "whatsapp" | "")}
               aria-label="Filter escalations by channel"
-              className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             >
               <option value="">All channels</option>
               <option value="voice">Call escalations</option>
               <option value="whatsapp">WhatsApp escalations</option>
-            </select>
+            </Select>
           ) : undefined
         }
       />

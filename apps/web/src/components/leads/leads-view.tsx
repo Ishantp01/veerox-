@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { LeadTable } from "@/components/leads/lead-table";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
-import { Button, EmptyState, Input, SkeletonRows, Table, useToast } from "@/components/ui";
+import { Button, EmptyState, Input, Select, SkeletonRows, Table, useToast } from "@/components/ui";
 import { downloadCsv } from "@/lib/download-csv";
 import { useLeads } from "@/lib/hooks";
 import type { LeadStatus } from "@/lib/types";
@@ -177,22 +177,20 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
               />
             </div>
             {channel === undefined && (
-              <select
+              <Select
                 value={channelFilter}
-                onChange={(e) => setChannelFilter(e.target.value as "voice" | "whatsapp" | "")}
+                onChange={(v) => setChannelFilter(v as "voice" | "whatsapp" | "")}
                 aria-label="Filter leads by channel"
-                className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               >
                 <option value="">All channels</option>
                 <option value="voice">Call leads</option>
                 <option value="whatsapp">WhatsApp leads</option>
-              </select>
+              </Select>
             )}
-            <select
+            <Select
               value={status}
-              onChange={(e) => setStatus(e.target.value as LeadStatus | "")}
+              onChange={(v) => setStatus(v as LeadStatus | "")}
               aria-label="Filter leads by status"
-              className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             >
               <option value="">All statuses</option>
               {LEAD_STATUS_OPTIONS.map((s) => (
@@ -200,7 +198,7 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
                   {LEAD_STATUS_LABELS[s]}
                 </option>
               ))}
-            </select>
+            </Select>
             <input
               ref={fileInputRef}
               type="file"

@@ -11,7 +11,15 @@ import {
   LEAD_QUALIFICATION_LABELS,
   LEAD_QUALIFICATION_OPTIONS,
 } from "@/components/leads/qualification-badge";
-import { EmptyState, SkeletonRows, Table, TableCell, TableHeader, TableRow } from "@/components/ui";
+import {
+  EmptyState,
+  Select,
+  SkeletonRows,
+  Table,
+  TableCell,
+  TableHeader,
+  TableRow,
+} from "@/components/ui";
 import { useLeads, useUpdateLead } from "@/lib/hooks";
 import { formatDateTime, formatPhone } from "@/lib/format";
 import type { LeadQualificationStatus } from "@/lib/types";
@@ -39,11 +47,10 @@ export function QualificationView() {
         title="Lead Qualification"
         description="Work leads through the qualification pipeline, independent of their CRM status."
         action={
-          <select
+          <Select
             value={filter}
-            onChange={(e) => setFilter(e.target.value as LeadQualificationStatus | "")}
+            onChange={(v) => setFilter(v as LeadQualificationStatus | "")}
             aria-label="Filter by qualification stage"
-            className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
           >
             <option value="">All stages</option>
             {LEAD_QUALIFICATION_OPTIONS.map((s) => (
@@ -51,7 +58,7 @@ export function QualificationView() {
                 {LEAD_QUALIFICATION_LABELS[s]}
               </option>
             ))}
-          </select>
+          </Select>
         }
       />
 
@@ -109,12 +116,12 @@ export function QualificationView() {
                   </TableCell>
                   <TableCell>{lead.channel ? <ChannelBadge channel={lead.channel} /> : "—"}</TableCell>
                   <TableCell>
-                    <select
+                    <Select
                       value={lead.qualification_status}
-                      onChange={(e) =>
+                      onChange={(v) =>
                         updateLead.mutate({
                           id: lead.id,
-                          qualification_status: e.target.value as LeadQualificationStatus,
+                          qualification_status: v as LeadQualificationStatus,
                         })
                       }
                       className={SELECT_CLS}
@@ -125,7 +132,7 @@ export function QualificationView() {
                           {LEAD_QUALIFICATION_LABELS[s]}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </TableCell>
                   <TableCell className="text-xs text-slate-500">
                     {lead.qualification_score ?? "—"}

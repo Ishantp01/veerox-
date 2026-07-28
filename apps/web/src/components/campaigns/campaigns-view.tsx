@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Megaphone, PauseCircle, PlayCircle, Upload } from "lucide-react";
+import { FileSpreadsheet, Megaphone, PauseCircle, PlayCircle, Upload } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -15,6 +15,7 @@ import {
   EmptyState,
   Input,
   Label,
+  Select,
   SkeletonRows,
   Table,
   TableCell,
@@ -24,9 +25,14 @@ import {
   useToast,
 } from "@/components/ui";
 import { ChannelBadge } from "@/components/conversations/channel-badge";
+import { downloadCsv } from "@/lib/download-csv";
 import { formatDateTime } from "@/lib/format";
 import { useCampaigns, useCreateCampaign, usePauseCampaign, useResumeCampaign } from "@/lib/hooks";
 import { CampaignStatusBadge } from "./campaign-status-badge";
+
+async function downloadSampleContactFile(format: "csv" | "xlsx"): Promise<void> {
+  await downloadCsv(`/admin/campaigns/sample.${format}`, `campaign-contacts-sample.${format}`);
+}
 
 /**
  * Bulk-upload a lead list, criteria included, and let the background worker
@@ -99,16 +105,15 @@ export function CampaignsView() {
         title="Campaigns"
         description="Upload a lead list with qualification criteria — the AI agent reaches each one by voice or WhatsApp, and only qualified prospects reach the CRM."
         action={
-          <select
+          <Select
             value={channelFilter}
-            onChange={(e) => setChannelFilter(e.target.value as "voice" | "whatsapp" | "")}
+            onChange={(v) => setChannelFilter(v as "voice" | "whatsapp" | "")}
             aria-label="Filter by channel"
-            className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
           >
             <option value="">All channels</option>
             <option value="voice">Voice</option>
             <option value="whatsapp">WhatsApp</option>
-          </select>
+          </Select>
         }
       />
 
@@ -135,15 +140,15 @@ export function CampaignsView() {
                 <Label htmlFor="campaign-channel" required>
                   Channel
                 </Label>
-                <select
+                <Select
                   id="campaign-channel"
                   value={channel}
-                  onChange={(e) => setChannel(e.target.value as "voice" | "whatsapp")}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  onChange={(v) => setChannel(v as "voice" | "whatsapp")}
+                  className="w-full"
                 >
                   <option value="voice">Voice (calling)</option>
                   <option value="whatsapp">WhatsApp</option>
-                </select>
+                </Select>
               </div>
               <div>
                 <Label htmlFor="campaign-file" required>
@@ -158,7 +163,32 @@ export function CampaignsView() {
                   onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                   className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-800 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:file:bg-slate-800 dark:file:text-slate-200"
                 />
-                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">Must include a &quot;phone&quot; column.</p>
+                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                  Needs a &quot;phone&quot; column (E.164, e.g. +919876543210) and an optional
+                  &quot;name&quot; column — same file works for either channel above.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => downloadSampleContactFile("csv")}
+                    title="Download a sample CSV showing the expected columns"
+                  >
+                    <FileSpreadsheet size={13} aria-hidden />
+                    Sample CSV
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => downloadSampleContactFile("xlsx")}
+                    title="Download a sample Excel file showing the expected columns"
+                  >
+                    <FileSpreadsheet size={13} aria-hidden />
+                    Sample XLSX
+                  </Button>
+                </div>
               </div>
             </div>
             <div>

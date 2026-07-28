@@ -16,6 +16,9 @@ export { Table, TableHeader, TableRow, TableCell } from "./table";
 export { Input, Textarea, Label } from "./input";
 export type { InputProps, TextareaProps, LabelProps } from "./input";
 
+export { Select } from "./select";
+export type { SelectProps } from "./select";
+
 export { Badge, badgeVariants } from "./badge";
 export type { BadgeProps, BadgeVariant } from "./badge";
 

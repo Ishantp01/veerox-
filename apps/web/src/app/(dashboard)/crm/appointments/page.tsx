@@ -9,7 +9,7 @@ import {
   APPOINTMENT_STATUS_OPTIONS,
 } from "@/components/crm/appointment-status-badge";
 import { NewAppointmentDialog } from "@/components/crm/new-appointment-dialog";
-import { EmptyState, SkeletonRows, Table, TableCell, TableHeader, TableRow } from "@/components/ui";
+import { EmptyState, Select, SkeletonRows, Table, TableCell, TableHeader, TableRow } from "@/components/ui";
 import { useAppointments, useUpdateAppointment } from "@/lib/hooks";
 import { formatDateTime } from "@/lib/format";
 import type { AppointmentStatus } from "@/lib/types";
@@ -32,11 +32,10 @@ export default function AppointmentsPage() {
         description="Bookings scheduled from calls, WhatsApp, or manually — soonest first."
         action={
           <div className="flex flex-wrap items-center gap-3">
-            <select
+            <Select
               value={filter}
-              onChange={(e) => setFilter(e.target.value as AppointmentStatus | "")}
+              onChange={(v) => setFilter(v as AppointmentStatus | "")}
               aria-label="Filter by status"
-              className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             >
               <option value="">All statuses</option>
               {APPOINTMENT_STATUS_OPTIONS.map((s) => (
@@ -44,7 +43,7 @@ export default function AppointmentsPage() {
                   {APPOINTMENT_STATUS_LABELS[s]}
                 </option>
               ))}
-            </select>
+            </Select>
             <NewAppointmentDialog />
           </div>
         }
@@ -94,12 +93,12 @@ export default function AppointmentsPage() {
                     {appt.notes ?? "—"}
                   </TableCell>
                   <TableCell>
-                    <select
+                    <Select
                       value={appt.status}
-                      onChange={(e) =>
+                      onChange={(v) =>
                         updateAppointment.mutate({
                           id: appt.id,
-                          status: e.target.value as AppointmentStatus,
+                          status: v as AppointmentStatus,
                         })
                       }
                       className={SELECT_CLS}
@@ -110,7 +109,7 @@ export default function AppointmentsPage() {
                           {APPOINTMENT_STATUS_LABELS[s]}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </TableCell>
                 </TableRow>
               ))}

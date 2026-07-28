@@ -38,7 +38,13 @@ export default function TemplatesPage() {
             error={templates.error}
             isEmpty={(templates.data ?? []).length === 0}
             onRetry={() => templates.refetch()}
-            loadingFallback={<div className="p-4"><SkeletonRows rows={3} cols={5} /></div>}
+            loadingFallback={
+              <table className="w-full border-collapse text-sm">
+                <tbody>
+                  <SkeletonRows rows={3} cols={6} />
+                </tbody>
+              </table>
+            }
             emptyFallback={
               <EmptyState
                 icon={FileText}

@@ -13,6 +13,8 @@ import { StatCard } from "@/components/dashboard/stat-card";
 import { StatsTrendChart } from "@/components/dashboard/stats-trend-chart";
 import { QuickActions } from "@/components/dashboard/quick-actions";
 import { RecentActivity } from "@/components/dashboard/recent-activity";
+import { SystemStatus } from "@/components/dashboard/system-status";
+import { TopCampaigns } from "@/components/dashboard/top-campaigns";
 import { Skeleton } from "@/components/ui";
 import { useStats } from "@/lib/hooks";
 import { formatUsd } from "@/lib/format";
@@ -129,7 +131,15 @@ export function StatsGrid({ variant }: StatsGridProps) {
             </div>
             <RecentActivity variant={variant} />
           </div>
-          <QuickActions variant={variant} />
+          <div className="flex flex-col gap-6">
+            <QuickActions variant={variant} />
+            {variant === "all" && (
+              <>
+                <SystemStatus />
+                <TopCampaigns />
+              </>
+            )}
+          </div>
         </div>
       )}
     </QueryBoundary>

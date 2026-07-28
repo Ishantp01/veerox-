@@ -1,12 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, MessageSquare } from "lucide-react";
+import { ArrowRight, MessageCircle, MessageSquare, Phone } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, EmptyState, Skeleton } from "@/components/ui";
-import { ChannelBadge } from "@/components/conversations/channel-badge";
 import { LiveDot } from "@/components/conversations/live-dot";
 import { useConversations } from "@/lib/hooks";
 import { formatRelative } from "@/lib/format";
+
+const CHANNEL_TINT: Record<"voice" | "whatsapp", string> = {
+  voice: "bg-blue-500/20 text-blue-500",
+  whatsapp: "bg-green-500/20 text-green-500",
+};
 
 export interface RecentActivityProps {
   variant: "all" | "whatsapp" | "voice";
@@ -55,13 +59,16 @@ export function RecentActivity({ variant }: RecentActivityProps) {
             {rows.map((c) => {
               const href = `${DETAIL_BASE[c.channel]}/${c.id}`;
               const isLive = c.ended_at === null;
+              const Icon = c.channel === "voice" ? Phone : MessageCircle;
               return (
                 <li key={c.id}>
                   <Link
                     href={href}
                     className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-primary-50/60 dark:hover:bg-primary-500/10"
                   >
-                    <ChannelBadge channel={c.channel} />
+                    <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${CHANNEL_TINT[c.channel]}`}>
+                      <Icon size={13} aria-hidden />
+                    </div>
                     <span className="min-w-0 flex-1 truncate text-sm text-slate-600 dark:text-slate-300">
                       {c.message_count ?? 0} message{c.message_count === 1 ? "" : "s"}
                     </span>

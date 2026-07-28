@@ -14,6 +14,7 @@ import {
   CardTitle,
   Input,
   Label,
+  Select,
   Textarea,
   useToast,
 } from "@/components/ui";
@@ -285,11 +286,11 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
                         Enter manually
                       </button>
                     </div>
-                    <select
+                    <Select
                       id="templateSelect"
                       value={selectedTemplateId}
-                      onChange={(e) => handleTemplateSelect(e.target.value)}
-                      className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                      onChange={(v) => handleTemplateSelect(v)}
+                      className="w-full"
                     >
                       <option value="">Select a template…</option>
                       {(templates.data ?? []).map((t) => (
@@ -297,7 +298,7 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
                           {t.name} ({t.language})
                         </option>
                       ))}
-                    </select>
+                    </Select>
                     {errors.templateName && (
                       <p className="mt-1.5 text-xs text-red-600">{errors.templateName.message}</p>
                     )}

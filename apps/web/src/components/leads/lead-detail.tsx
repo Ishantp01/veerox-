@@ -22,6 +22,7 @@ import {
   CardTitle,
   EmptyState,
   Label,
+  Select,
   Skeleton,
   Table,
   TableCell,
@@ -185,18 +186,18 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                   <div className="flex flex-col gap-4">
                     <div>
                       <Label htmlFor="lead-status">Status</Label>
-                      <select
+                      <Select
                         id="lead-status"
                         value={status}
-                        onChange={(e) => setStatus(e.target.value as LeadStatus)}
-                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                        onChange={(v) => setStatus(v as LeadStatus)}
+                        className="w-full"
                       >
                         {LEAD_STATUS_OPTIONS.map((s) => (
                           <option key={s} value={s}>
                             {LEAD_STATUS_LABELS[s]}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                     </div>
 
                     <div>
@@ -245,18 +246,18 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                   <div className="flex flex-col gap-4">
                     <div>
                       <Label htmlFor="qualification-status">Stage</Label>
-                      <select
+                      <Select
                         id="qualification-status"
                         value={qualificationStatus}
-                        onChange={(e) => setQualificationStatus(e.target.value as LeadQualificationStatus)}
-                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                        onChange={(v) => setQualificationStatus(v as LeadQualificationStatus)}
+                        className="w-full"
                       >
                         {LEAD_QUALIFICATION_OPTIONS.map((s) => (
                           <option key={s} value={s}>
                             {LEAD_QUALIFICATION_LABELS[s]}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                     </div>
 
                     <div>

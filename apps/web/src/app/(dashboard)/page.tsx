@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { MessageSquare, Phone, BarChart3, ArrowRight } from "lucide-react";
-import { PageHeader } from "@/components/layout/page-header";
+import { useEffect, useState } from "react";
+import { MessageSquare, Phone, BarChart3, ArrowRight, CalendarDays } from "lucide-react";
 import { KillSwitchBanner } from "@/components/dashboard/kill-switch-banner";
 import { StatsGrid } from "@/components/dashboard/stats-grid";
 import { useToast } from "@/components/ui";
@@ -32,10 +32,25 @@ const SECTIONS = [
   },
 ] as const;
 
+function useGreeting(): string {
+  const [greeting, setGreeting] = useState("Welcome back");
+  useEffect(() => {
+    const hour = new Date().getHours();
+    setGreeting(hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening");
+  }, []);
+  return greeting;
+}
+
 export default function LandingPage() {
   const killSwitch = useKillSwitch();
   const setKillSwitch = useSetKillSwitch();
   const { toast } = useToast();
+  const greeting = useGreeting();
+  const today = new Date().toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 
   const enabled = killSwitch.data?.enabled ?? false;
 
@@ -60,10 +75,20 @@ export default function LandingPage() {
 
   return (
     <div className="mx-auto max-w-7xl">
-      <PageHeader
-        title="Dashboard"
-        description="Real-time overview across both agent channels — the kill switch below pauses both at once."
-      />
+      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 className="flex items-center gap-2 text-xl font-bold text-slate-900 dark:text-white">
+            {greeting}! <span className="text-2xl">👋</span>
+          </h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Real-time overview across both agent channels — the kill switch below pauses both at once.
+          </p>
+        </div>
+        <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+          <span>{today}</span>
+          <CalendarDays size={14} aria-hidden />
+        </div>
+      </div>
 
       {/* Kill-switch control reflects server state once loaded. It's global
           by design: there's a single agent pause flag, not one per channel. */}
