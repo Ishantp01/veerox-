@@ -123,8 +123,8 @@ export function NewTemplateDialog() {
               </div>
               {paramLabels.length === 0 ? (
                 <p className="text-xs text-slate-400 dark:text-slate-500">
-                  No variables — add one for each {"{{1}}, {{2}}, ..."} placeholder in the
-                  template body, in order, with a short label (e.g. "Customer name").
+                  No variables — add one for each {`{{1}}, {{2}}, ...`} placeholder in the
+                  template body, in order, with a short label (e.g. &quot;Customer name&quot;).
                 </p>
               ) : (
                 <div className="flex flex-col gap-2">
