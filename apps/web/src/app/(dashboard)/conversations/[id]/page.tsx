@@ -1,9 +1,11 @@
-import { redirect } from "next/navigation";
+"use client";
 
-// A deep link to a specific conversation can't know which channel it
-// belonged to without a server-side lookup — land on the chooser rather
-// than guess wrong. See /whatsapp/conversations/[id] and
-// /calling/conversations/[id] for the channel-scoped equivalents.
-export default function ConversationRedirectPage() {
-  redirect("/");
+import { useParams } from "next/navigation";
+import { ConversationDetail } from "@/components/conversations/conversation-detail";
+
+export default function ConversationTranscriptPage() {
+  const params = useParams();
+  const id = typeof params.id === "string" ? params.id : (params.id?.[0] ?? "");
+
+  return <ConversationDetail id={id} backHref="/conversations" backLabel="Conversations" />;
 }

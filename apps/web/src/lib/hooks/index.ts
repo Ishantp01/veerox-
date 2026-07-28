@@ -58,3 +58,12 @@ export {
   type FollowUpRuleCreateInput,
   type FollowUpTaskFilters,
 } from "./useFollowUps";
+export {
+  useTemplates,
+  useCreateTemplate,
+  useUpdateTemplate,
+  useDeleteTemplate,
+  type TemplateFilters,
+  type TemplateCreateInput,
+  type TemplateUpdateInput,
+} from "./useTemplates";

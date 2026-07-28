@@ -434,6 +434,59 @@ async def list_leads(
     return [LeadOut.model_validate(lead) for lead in leads]
 
 
+_SAMPLE_IMPORT_ROWS = [
+    {"name": "Asha Verma", "phone": "+919876543210", "channel": "voice"},
+    {"name": "Rohit Singh", "phone": "+919812345678", "channel": "whatsapp"},
+]
+
+
+@router.get("/leads/sample.csv")
+async def sample_leads_csv(x_admin_token: str | None = Header(None)) -> StreamingResponse:
+    """Blank-data template for POST /leads/import — same columns that
+    endpoint reads (name, phone, channel), so a unified-page upload can mix
+    call and WhatsApp rows in one file. Registered ahead of GET
+    /leads/{lead_id} so its literal path isn't swallowed by that route's
+    UUID path param.
+    """
+    _verify_admin(x_admin_token)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["name", "phone", "channel"])
+    for row in _SAMPLE_IMPORT_ROWS:
+        writer.writerow([row["name"], row["phone"], row["channel"]])
+    buf.seek(0)
+
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="leads-sample.csv"'},
+    )
+
+
+@router.get("/leads/sample.xlsx")
+async def sample_leads_xlsx(x_admin_token: str | None = Header(None)) -> StreamingResponse:
+    """Same template as GET /leads/sample.csv, as an .xlsx workbook."""
+    _verify_admin(x_admin_token)
+
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Leads"
+    sheet.append(["name", "phone", "channel"])
+    for row in _SAMPLE_IMPORT_ROWS:
+        sheet.append([row["name"], row["phone"], row["channel"]])
+
+    buf = io.BytesIO()
+    workbook.save(buf)
+    buf.seek(0)
+
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="leads-sample.xlsx"'},
+    )
+
+
 @router.get("/leads/{lead_id}", response_model=LeadDetailOut)
 async def get_lead(
     lead_id: UUID,
@@ -601,7 +654,7 @@ async def import_leads_file(
     db: DbDep,
     file: UploadFile = File(...),
     x_admin_token: str | None = Header(None),
-    channel: str = Query("voice", pattern="^(voice|whatsapp)$"),
+    channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
     campaign_name: str | None = Form(None),
     criteria: str | None = Form(None),
 ) -> CampaignCreateResult:
@@ -615,6 +668,13 @@ async def import_leads_file(
     /admin/campaigns`` exactly; the only difference is this endpoint fills in
     a default campaign name/criteria when the caller doesn't supply one. For
     programmatic (non-file) bulk import, see ``POST /admin/leads/bulk``.
+
+    ``channel`` is optional: per-channel pages (e.g. /calling/leads,
+    /whatsapp/leads) pass it explicitly, forcing every row into that one
+    channel. The unified CRM leads page omits it, since a single upload may
+    mix call and WhatsApp rows — in that case each row's own ``channel``
+    column picks its destination and the file is split into one campaign per
+    channel found.
     """
     _verify_admin(x_admin_token)
 
@@ -622,20 +682,65 @@ async def import_leads_file(
     raw = await file.read()
 
     if filename.endswith(".csv"):
-        rows = _iter_csv_rows(raw)
+        rows = list(_iter_csv_rows(raw))
     elif filename.endswith(".xlsx"):
-        rows = _iter_xlsx_rows(raw)
+        rows = list(_iter_xlsx_rows(raw))
     else:
         raise HTTPException(status_code=400, detail="Only .csv or .xlsx files are supported")
 
     org_id = _default_org_id()
-    return await _create_campaign_from_rows(
-        db,
-        org_id=org_id,
-        name=campaign_name or _default_campaign_name(),
-        criteria=criteria or _DEFAULT_IMPORT_CRITERIA,
-        channel=channel,
-        rows=rows,
+    name = campaign_name or _default_campaign_name()
+    crit = criteria or _DEFAULT_IMPORT_CRITERIA
+
+    if channel:
+        return await _create_campaign_from_rows(
+            db, org_id=org_id, name=name, criteria=crit, channel=channel, rows=rows
+        )
+
+    # No forced channel: split rows by their own "channel" column so one
+    # upload can carry both call and WhatsApp leads at once.
+    grouped: dict[str, list[tuple[int, dict[str, str]]]] = {"voice": [], "whatsapp": []}
+    errors: list[dict[str, str | int]] = []
+    for row_num, row in rows:
+        row_channel = (row.get("channel") or "").strip().lower()
+        if row_channel not in grouped:
+            errors.append(
+                {
+                    "row": row_num,
+                    "reason": f"channel must be 'voice' or 'whatsapp', got '{row_channel or ''}'",
+                }
+            )
+            continue
+        grouped[row_channel].append((row_num, row))
+
+    result: CampaignCreateResult | None = None
+    imported = 0
+    skipped = len(errors)
+    for group_channel, group_rows in grouped.items():
+        if not group_rows:
+            continue
+        group_result = await _create_campaign_from_rows(
+            db,
+            org_id=org_id,
+            name=f"{name} ({group_channel})",
+            criteria=crit,
+            channel=group_channel,
+            rows=group_rows,
+        )
+        imported += group_result.imported
+        skipped += group_result.skipped
+        errors.extend(group_result.errors)
+        if result is None:
+            result = group_result
+
+    if result is None:
+        raise HTTPException(
+            status_code=400,
+            detail="File must include a 'channel' column (voice or whatsapp) for each row",
+        )
+
+    return CampaignCreateResult(
+        campaign=result.campaign, imported=imported, skipped=skipped, errors=errors
     )
 
 

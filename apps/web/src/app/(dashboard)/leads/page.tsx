@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-// Leads are now split by channel under /whatsapp/leads and /calling/leads.
+// Leads now live on the unified CRM leads page.
 export default function LeadsRedirectPage() {
-  redirect("/");
+  redirect("/crm/leads");
 }

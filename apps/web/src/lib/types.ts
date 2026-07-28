@@ -127,6 +127,18 @@ export interface FollowUpRule {
   created_at: string;
 }
 
+export interface Template {
+  id: string;
+  org_id: string;
+  name: string;
+  language: string;
+  category: string | null;
+  param_labels: string[];
+  body_preview: string | null;
+  active: boolean;
+  created_at: string;
+}
+
 export interface FollowUpTask {
   id: string;
   org_id: string;

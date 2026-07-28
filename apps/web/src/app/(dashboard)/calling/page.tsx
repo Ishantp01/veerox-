@@ -1,16 +1,162 @@
 "use client";
 
-import { PageHeader } from "@/components/layout/page-header";
-import { StatsGrid } from "@/components/dashboard/stats-grid";
+import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { CheckCircle2, Info, Phone } from "lucide-react";
 
-export default function CallingDashboardPage() {
+import { PageHeader } from "@/components/layout/page-header";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Input,
+  Label,
+  useToast,
+} from "@/components/ui";
+import { CallAnalyticsPanel } from "@/components/calling/call-analytics-panel";
+import { useOutboundCall } from "@/lib/hooks";
+
+const dialSchema = z.object({
+  // E.164-ish: a leading "+" followed by 8–15 digits.
+  to_phone: z
+    .string()
+    .trim()
+    .regex(/^\+\d{8,15}$/, "Enter a valid E.164 number, e.g. +919876543210"),
+});
+
+type DialForm = z.infer<typeof dialSchema>;
+
+export default function CallingDialPage() {
+  const { toast } = useToast();
+  const [callSid, setCallSid] = useState<string | null>(null);
+  const outboundCall = useOutboundCall();
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<DialForm>({
+    resolver: zodResolver(dialSchema),
+    defaultValues: { to_phone: "" },
+  });
+
+  const onSubmit = handleSubmit((values) => {
+    setCallSid(null);
+    outboundCall.mutate(
+      { to_phone: values.to_phone },
+      {
+        onSuccess: (res) => {
+          setCallSid(res.call_sid);
+          toast({
+            title: "Call initiated",
+            description: `SID ${res.call_sid}`,
+            variant: "success",
+          });
+        },
+        onError: (err) => {
+          toast({
+            title: "Call failed",
+            description: err.message,
+            variant: "error",
+          });
+        },
+      },
+    );
+  });
+
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="AI Calling Agent"
-        description="Real-time overview of your voice calling channel"
+        description="Place an outbound call — the AI agent answers when the recipient picks up."
       />
-      <StatsGrid variant="voice" />
+
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary-400 to-primary-600 text-white shadow-glow">
+                <Phone size={16} aria-hidden />
+              </div>
+              <div>
+                <CardTitle>Outbound Call</CardTitle>
+                <p className="text-xs text-slate-400 dark:text-slate-500">via Plivo + AI agent</p>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
+              <div>
+                <Label htmlFor="to_phone" required>
+                  Phone number (E.164)
+                </Label>
+                <Input
+                  id="to_phone"
+                  type="tel"
+                  inputMode="tel"
+                  placeholder="+919876543210"
+                  autoComplete="tel"
+                  className="font-mono"
+                  aria-invalid={errors.to_phone ? true : undefined}
+                  aria-describedby={
+                    errors.to_phone ? "to_phone-error" : "to_phone-hint"
+                  }
+                  {...register("to_phone")}
+                />
+                {errors.to_phone ? (
+                  <p id="to_phone-error" className="mt-1.5 text-xs text-red-600">
+                    {errors.to_phone.message}
+                  </p>
+                ) : (
+                  <p id="to_phone-hint" className="mt-1.5 text-xs text-slate-400">
+                    Include the country code, e.g. +91 for India.
+                  </p>
+                )}
+              </div>
+
+              {callSid && (
+                <div
+                  role="status"
+                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-400"
+                >
+                  <p className="mb-1 flex items-center gap-1.5 font-bold">
+                    <CheckCircle2 size={14} aria-hidden /> Call initiated
+                  </p>
+                  <p className="break-all font-mono text-xs text-emerald-600">
+                    SID: {callSid}
+                  </p>
+                </div>
+              )}
+
+              <Button
+                type="submit"
+                variant="primary"
+                loading={outboundCall.isPending}
+                className="w-full"
+              >
+                {!outboundCall.isPending && <Phone size={15} aria-hidden />}
+                {outboundCall.isPending ? "Dialing…" : "Dial Now"}
+              </Button>
+            </form>
+          </CardContent>
+
+          <div className="mx-6 mb-6 rounded-2xl border border-primary-100 bg-gradient-to-br from-primary-50 to-white px-4 py-3 dark:border-primary-500/15 dark:from-primary-500/10 dark:to-transparent">
+            <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-primary-600 dark:text-primary-400">
+              <Info size={12} aria-hidden /> How it works
+            </p>
+            <p className="text-xs text-primary-500 dark:text-primary-400/80">
+              Plivo calls the recipient → AI agent joins → conversation is logged
+              automatically.
+            </p>
+          </div>
+        </Card>
+
+        <CallAnalyticsPanel />
+      </div>
     </div>
   );
 }

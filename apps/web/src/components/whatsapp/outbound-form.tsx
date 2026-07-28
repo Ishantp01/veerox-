@@ -18,7 +18,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { useOutboundWhatsApp } from "@/lib/hooks";
+import { useOutboundWhatsApp, useTemplates } from "@/lib/hooks";
 import { ContactPicker } from "@/components/crm/contact-picker";
 import type { Contact } from "@/lib/types";
 
@@ -70,7 +70,11 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
   const { toast } = useToast();
   const [lastMessageId, setLastMessageId] = useState<string | null>(null);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [paramLabels, setParamLabels] = useState<string[]>([]);
+  const [manualEntry, setManualEntry] = useState(false);
   const outboundWhatsApp = useOutboundWhatsApp();
+  const templates = useTemplates({ active: true });
 
   const {
     register,
@@ -93,8 +97,27 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
     },
   });
 
-  const { fields, append, remove } = useFieldArray({ control, name: "templateParams" });
+  const { fields, append, remove, replace } = useFieldArray({ control, name: "templateParams" });
   const mode = watch("mode");
+
+  function handleTemplateSelect(templateId: string) {
+    setSelectedTemplateId(templateId);
+    const template = (templates.data ?? []).find((t) => t.id === templateId);
+    if (!template) return;
+    setValue("templateName", template.name, { shouldValidate: true });
+    setValue("templateLang", template.language);
+    setParamLabels(template.param_labels);
+    replace(template.param_labels.map(() => ({ value: "" })));
+  }
+
+  function handleManualEntryToggle(next: boolean) {
+    setManualEntry(next);
+    setSelectedTemplateId("");
+    setParamLabels([]);
+    setValue("templateName", "");
+    setValue("templateLang", "en_US");
+    replace([]);
+  }
 
   const onSubmit = handleSubmit((values) => {
     setLastMessageId(null);
@@ -112,14 +135,15 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
       {
         onSuccess: (res) => {
           setLastMessageId(res.wa_message_id);
-          // Clear the message fields but keep the phone + mode for follow-ups.
+          // Clear the message fields but keep the phone + mode (and selected
+          // template) for follow-ups.
           reset({
             phone: getValues("phone"),
             mode: values.mode,
             text: "",
             templateName: values.mode === "template" ? values.templateName : "",
             templateLang: values.templateLang || "en_US",
-            templateParams: [],
+            templateParams: paramLabels.map(() => ({ value: "" })),
           });
           toast({
             title: "Message sent",
@@ -244,51 +268,104 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
             </div>
           ) : (
             <>
-              <div>
-                <Label htmlFor="templateName" required>
-                  Template name
-                </Label>
-                <Input
-                  id="templateName"
-                  placeholder="e.g. order_confirmation"
-                  className="font-mono"
-                  aria-invalid={errors.templateName ? true : undefined}
-                  aria-describedby={errors.templateName ? "templateName-error" : undefined}
-                  {...register("templateName")}
-                />
-                {errors.templateName && (
-                  <p id="templateName-error" className="mt-1.5 text-xs text-red-600">
-                    {errors.templateName.message}
-                  </p>
-                )}
-              </div>
+              {(() => {
+                const hasTemplates = (templates.data ?? []).length > 0;
+                const useDropdown = hasTemplates && !manualEntry;
+                return useDropdown ? (
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <Label htmlFor="templateSelect" required className="mb-0">
+                        Template
+                      </Label>
+                      <button
+                        type="button"
+                        className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
+                        onClick={() => handleManualEntryToggle(true)}
+                      >
+                        Enter manually
+                      </button>
+                    </div>
+                    <select
+                      id="templateSelect"
+                      value={selectedTemplateId}
+                      onChange={(e) => handleTemplateSelect(e.target.value)}
+                      className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    >
+                      <option value="">Select a template…</option>
+                      {(templates.data ?? []).map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name} ({t.language})
+                        </option>
+                      ))}
+                    </select>
+                    {errors.templateName && (
+                      <p className="mt-1.5 text-xs text-red-600">{errors.templateName.message}</p>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <div className="mb-1.5 flex items-center justify-between">
+                        <Label htmlFor="templateName" required className="mb-0">
+                          Template name
+                        </Label>
+                        {hasTemplates && (
+                          <button
+                            type="button"
+                            className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
+                            onClick={() => handleManualEntryToggle(false)}
+                          >
+                            Choose from saved templates
+                          </button>
+                        )}
+                      </div>
+                      <Input
+                        id="templateName"
+                        placeholder="e.g. order_confirmation"
+                        className="font-mono"
+                        aria-invalid={errors.templateName ? true : undefined}
+                        aria-describedby={errors.templateName ? "templateName-error" : undefined}
+                        {...register("templateName")}
+                      />
+                      {errors.templateName && (
+                        <p id="templateName-error" className="mt-1.5 text-xs text-red-600">
+                          {errors.templateName.message}
+                        </p>
+                      )}
+                    </div>
 
-              <div>
-                <Label htmlFor="templateLang">Language code</Label>
-                <Input
-                  id="templateLang"
-                  placeholder="en_US"
-                  className="font-mono"
-                  {...register("templateLang")}
-                />
-              </div>
+                    <div>
+                      <Label htmlFor="templateLang">Language code</Label>
+                      <Input
+                        id="templateLang"
+                        placeholder="en_US"
+                        className="font-mono"
+                        {...register("templateLang")}
+                      />
+                    </div>
+                  </>
+                );
+              })()}
 
               <div>
                 <div className="mb-1.5 flex items-center justify-between">
                   <Label className="mb-0">Body parameters</Label>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => append({ value: "" })}
-                  >
-                    <Plus size={13} aria-hidden /> Add {`{{${fields.length + 1}}}`}
-                  </Button>
+                  {manualEntry || (templates.data ?? []).length === 0 ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => append({ value: "" })}
+                    >
+                      <Plus size={13} aria-hidden /> Add {`{{${fields.length + 1}}}`}
+                    </Button>
+                  ) : null}
                 </div>
                 {fields.length === 0 ? (
                   <p className="text-xs text-slate-400 dark:text-slate-500">
-                    No variables — add one for each {"{{1}}, {{2}}, ..."} placeholder in
-                    the template body, in order.
+                    {selectedTemplateId
+                      ? "This template has no body variables."
+                      : "No variables — add one for each {{1}}, {{2}}, ... placeholder in the template body, in order."}
                   </p>
                 ) : (
                   <div className="flex flex-col gap-2">
@@ -298,18 +375,20 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
                           {`{{${index + 1}}}`}
                         </span>
                         <Input
-                          placeholder={`Value for {{${index + 1}}}`}
+                          placeholder={paramLabels[index] || `Value for {{${index + 1}}}`}
                           {...register(`templateParams.${index}.value` as const)}
                         />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          aria-label={`Remove parameter ${index + 1}`}
-                          onClick={() => remove(index)}
-                        >
-                          <Trash2 size={14} aria-hidden />
-                        </Button>
+                        {(manualEntry || (templates.data ?? []).length === 0) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            aria-label={`Remove parameter ${index + 1}`}
+                            onClick={() => remove(index)}
+                          >
+                            <Trash2 size={14} aria-hidden />
+                          </Button>
+                        )}
                       </div>
                     ))}
                   </div>

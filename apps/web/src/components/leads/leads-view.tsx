@@ -1,7 +1,8 @@
 ﻿"use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Download, Search, Upload, Users } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { Download, FileSpreadsheet, Search, Upload, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -25,6 +26,10 @@ async function downloadLeadsCsv(channel?: "voice" | "whatsapp"): Promise<void> {
   const qs = channel ? `?channel=${encodeURIComponent(channel)}` : "";
   const stamp = new Date().toISOString().slice(0, 10);
   await downloadCsv(`/admin/leads.csv${qs}`, `leads-${stamp}.csv`);
+}
+
+async function downloadSampleImportFile(format: "csv" | "xlsx"): Promise<void> {
+  await downloadCsv(`/admin/leads/sample.${format}`, `leads-sample.${format}`);
 }
 
 /**
@@ -74,13 +79,22 @@ export interface LeadsViewProps {
  * and the per-channel /whatsapp/leads and /calling/leads pages.
  */
 export function LeadsView({ title, description, channel, detailBasePath }: LeadsViewProps) {
+  const searchParams = useSearchParams();
+  const initialChannelParam = searchParams.get("channel");
   const [intentInput, setIntentInput] = useState("");
   const [intent, setIntent] = useState("");
   const [status, setStatus] = useState<LeadStatus | "">("");
+  const [channelFilter, setChannelFilter] = useState<"voice" | "whatsapp" | "">(
+    initialChannelParam === "voice" || initialChannelParam === "whatsapp" ? initialChannelParam : ""
+  );
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
+
+  // Only the unified (cross-channel) view lets the user pick a channel —
+  // per-channel pages already have `channel` fixed by their caller.
+  const effectiveChannel = channel ?? (channelFilter || undefined);
 
   // Intent is a freeform sentence captured by the LLM (e.g. "Book an
   // appointment on July 8th"), not a fixed category — so this is a debounced
@@ -91,14 +105,14 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
     return () => clearTimeout(t);
   }, [intentInput]);
 
-  const filters = { channel, ...(intent ? { intent } : {}), ...(status ? { status } : {}) };
+  const filters = { channel: effectiveChannel, ...(intent ? { intent } : {}), ...(status ? { status } : {}) };
   const { data, isLoading, isError, error, refetch } = useLeads(filters);
   const leads = data ?? [];
 
   async function handleExport() {
     setExporting(true);
     try {
-      await downloadLeadsCsv(channel);
+      await downloadLeadsCsv(effectiveChannel);
       toast({ title: "Export started", description: "Your CSV download is ready.", variant: "success" });
     } catch (err: unknown) {
       toast({
@@ -118,7 +132,7 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
 
     setImporting(true);
     try {
-      const result = await importLeadsFile(file, channel);
+      const result = await importLeadsFile(file, effectiveChannel);
       toast({
         title: "Import complete",
         description:
@@ -162,6 +176,18 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
                 className="w-40 pl-8 sm:w-48"
               />
             </div>
+            {channel === undefined && (
+              <select
+                value={channelFilter}
+                onChange={(e) => setChannelFilter(e.target.value as "voice" | "whatsapp" | "")}
+                aria-label="Filter leads by channel"
+                className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              >
+                <option value="">All channels</option>
+                <option value="voice">Call leads</option>
+                <option value="whatsapp">WhatsApp leads</option>
+              </select>
+            )}
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value as LeadStatus | "")}
@@ -182,6 +208,24 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
               className="hidden"
               onChange={handleImportFile}
             />
+            <Button
+              variant="ghost"
+              size="md"
+              onClick={() => downloadSampleImportFile("csv")}
+              title="Download a sample CSV showing the expected import columns"
+            >
+              <FileSpreadsheet size={15} aria-hidden />
+              Sample CSV
+            </Button>
+            <Button
+              variant="ghost"
+              size="md"
+              onClick={() => downloadSampleImportFile("xlsx")}
+              title="Download a sample Excel file showing the expected import columns"
+            >
+              <FileSpreadsheet size={15} aria-hidden />
+              Sample XLSX
+            </Button>
             <Button
               variant="outline"
               size="md"

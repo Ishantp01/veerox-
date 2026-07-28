@@ -1,14 +1,8 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { LeadsView } from "@/components/leads/leads-view";
-
+// WhatsApp leads are now shown by the unified CRM leads page, pre-filtered
+// to this channel — avoids running two separate LeadsView instances for the
+// same underlying data.
 export default function WhatsAppLeadsPage() {
-  return (
-    <LeadsView
-      title="Leads"
-      description="Captured leads from WhatsApp conversations"
-      channel="whatsapp"
-      detailBasePath="/whatsapp/leads"
-    />
-  );
+  redirect("/crm/leads?channel=whatsapp");
 }

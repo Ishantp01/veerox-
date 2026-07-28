@@ -20,22 +20,22 @@ interface Action {
 }
 
 const VOICE_ACTIONS: Action[] = [
-  { href: "/calling/dial", label: "Dial a number", description: "Place a one-off outbound call", icon: Phone },
+  { href: "/calling", label: "Dial a number", description: "Place a one-off outbound call", icon: Phone },
   { href: "/automation/campaigns", label: "New campaign", description: "Bulk-call and qualify a lead list", icon: Megaphone },
-  { href: "/calling/leads", label: "View leads", description: "See who the agent has captured", icon: UserCheck },
-  { href: "/calling/escalations", label: "Escalations", description: "Conversations needing a human", icon: AlertTriangle },
+  { href: "/crm/leads?channel=voice", label: "View leads", description: "See who the agent has captured", icon: UserCheck },
+  { href: "/escalations", label: "Escalations", description: "Conversations needing a human", icon: AlertTriangle },
 ];
 
 const WHATSAPP_ACTIONS: Action[] = [
-  { href: "/whatsapp/send", label: "Send a message", description: "One-off outbound WhatsApp text", icon: MessageSquareText },
-  { href: "/whatsapp/leads", label: "View leads", description: "See who the agent has captured", icon: UserCheck },
-  { href: "/whatsapp/escalations", label: "Escalations", description: "Conversations needing a human", icon: AlertTriangle },
+  { href: "/whatsapp", label: "Send a message", description: "One-off outbound WhatsApp text", icon: MessageSquareText },
+  { href: "/crm/leads?channel=whatsapp", label: "View leads", description: "See who the agent has captured", icon: UserCheck },
+  { href: "/escalations", label: "Escalations", description: "Conversations needing a human", icon: AlertTriangle },
 ];
 
 const ALL_ACTIONS: Action[] = [
-  { href: "/calling/dial", label: "Dial a number", description: "Place a one-off outbound call", icon: Phone },
+  { href: "/calling", label: "Dial a number", description: "Place a one-off outbound call", icon: Phone },
   { href: "/automation/campaigns", label: "New campaign", description: "Bulk-call and qualify a lead list", icon: Megaphone },
-  { href: "/whatsapp/send", label: "Send a WhatsApp message", description: "One-off outbound text", icon: MessageSquareText },
+  { href: "/whatsapp", label: "Send a WhatsApp message", description: "One-off outbound text", icon: MessageSquareText },
 ];
 
 const ACTIONS_BY_VARIANT: Record<"all" | "whatsapp" | "voice", Action[]> = {

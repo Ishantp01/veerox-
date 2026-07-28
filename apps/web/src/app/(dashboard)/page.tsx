@@ -12,14 +12,14 @@ const SECTIONS = [
   {
     href: "/whatsapp",
     label: "WhatsApp AI Agent",
-    description: "Conversations, leads, escalations, and settings for the WhatsApp channel.",
+    description: "Send an outbound WhatsApp message and see channel analytics.",
     Icon: MessageSquare,
     chip: "from-emerald-400 to-emerald-600",
   },
   {
     href: "/calling",
     label: "AI Calling Agent",
-    description: "Conversations, leads, escalations, and settings for the voice channel.",
+    description: "Place an outbound call and see channel analytics.",
     Icon: Phone,
     chip: "from-primary-400 to-primary-600",
   },

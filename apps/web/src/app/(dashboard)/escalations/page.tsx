@@ -1,7 +1,13 @@
-import { redirect } from "next/navigation";
+"use client";
 
-// Escalations are now split by channel under /whatsapp/escalations and
-// /calling/escalations.
-export default function EscalationsRedirectPage() {
-  redirect("/");
+import { EscalationsView } from "@/components/escalations/escalations-view";
+
+export default function EscalationsPage() {
+  return (
+    <EscalationsView
+      title="Escalations"
+      description="Live transfer_to_human events across calls and WhatsApp — queue rows are pending pickup, lead rows are history."
+      conversationBasePath="/conversations"
+    />
+  );
 }

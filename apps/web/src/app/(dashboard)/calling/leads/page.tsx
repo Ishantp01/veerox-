@@ -1,14 +1,8 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { LeadsView } from "@/components/leads/leads-view";
-
+// Voice leads are now shown by the unified CRM leads page, pre-filtered to
+// this channel — avoids running two separate LeadsView instances for the
+// same underlying data.
 export default function CallingLeadsPage() {
-  return (
-    <LeadsView
-      title="Leads"
-      description="Captured leads from voice calls"
-      channel="voice"
-      detailBasePath="/calling/leads"
-    />
-  );
+  redirect("/crm/leads?channel=voice");
 }

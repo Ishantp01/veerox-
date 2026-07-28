@@ -6,11 +6,14 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   MessageSquare,
+  MessagesSquare,
+  FileText,
   Phone,
   Users,
   UserCheck,
   BadgeCheck,
   CalendarClock,
+  AlertTriangle,
   BarChart3,
   TrendingUp,
   Megaphone,
@@ -50,6 +53,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: "/calling", label: "AI Calling", Icon: Phone },
       { href: "/whatsapp", label: "AI WhatsApp", Icon: MessageSquare },
+      { href: "/whatsapp/templates", label: "WhatsApp Templates", Icon: FileText },
     ],
   },
   {
@@ -59,6 +63,8 @@ const GROUPS: NavGroup[] = [
       { href: "/crm/leads", label: "Leads", Icon: UserCheck },
       { href: "/crm/qualification", label: "Lead Qualification", Icon: BadgeCheck },
       { href: "/crm/appointments", label: "Appointments", Icon: CalendarClock },
+      { href: "/conversations", label: "Conversations", Icon: MessagesSquare },
+      { href: "/escalations", label: "Escalations", Icon: AlertTriangle },
     ],
   },
   {
@@ -81,11 +87,16 @@ const GROUPS: NavGroup[] = [
   },
 ];
 
+const ALL_HREFS = GROUPS.flatMap((group) => group.items.map((item) => item.href));
+
 // Exact match on a group root ("/", "/calling", "/whatsapp", ...) — otherwise
-// every sub-route would also match its section's own root by prefix. Prefix
-// match everywhere else so e.g. "/crm/leads/123" keeps "Leads" highlighted.
+// every sub-route would also match its section's own root by prefix. A root
+// is anything another nav item's href is nested under (e.g. "/whatsapp" vs.
+// "/whatsapp/templates"). Prefix match everywhere else so e.g.
+// "/crm/leads/123" keeps "Leads" highlighted.
 function isActive(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/";
+  const isRoot = href === "/" || ALL_HREFS.some((other) => other !== href && other.startsWith(`${href}/`));
+  if (isRoot) return pathname === href;
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 

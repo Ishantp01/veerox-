@@ -1,5 +1,6 @@
 ﻿"use client";
 
+import { useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
@@ -62,7 +63,12 @@ export function EscalationsView({
   channel,
   conversationBasePath,
 }: EscalationsViewProps) {
-  const { data, isLoading, isError, error, refetch } = useEscalations({ channel });
+  // Only the unified (cross-channel) view lets the user pick a channel —
+  // per-channel pages already have `channel` fixed by their caller.
+  const [channelFilter, setChannelFilter] = useState<"voice" | "whatsapp" | "">("");
+  const effectiveChannel = channel ?? (channelFilter || undefined);
+
+  const { data, isLoading, isError, error, refetch } = useEscalations({ channel: effectiveChannel });
 
   // Flatten: queue entries first (live, pending pickup), then persisted leads
   // (history). A queue entry becomes a lead only after it's handled, which
@@ -74,7 +80,24 @@ export function EscalationsView({
 
   return (
     <div className="mx-auto max-w-7xl">
-      <PageHeader title={title} description={description} />
+      <PageHeader
+        title={title}
+        description={description}
+        action={
+          channel === undefined ? (
+            <select
+              value={channelFilter}
+              onChange={(e) => setChannelFilter(e.target.value as "voice" | "whatsapp" | "")}
+              aria-label="Filter escalations by channel"
+              className="rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            >
+              <option value="">All channels</option>
+              <option value="voice">Call escalations</option>
+              <option value="whatsapp">WhatsApp escalations</option>
+            </select>
+          ) : undefined
+        }
+      />
 
       <QueryBoundary
         isLoading={isLoading}

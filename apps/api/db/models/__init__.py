@@ -7,6 +7,7 @@ from apps.api.db.models.follow_up import FollowUpRule, FollowUpTask
 from apps.api.db.models.lead import Lead
 from apps.api.db.models.message import Message
 from apps.api.db.models.org import Org
+from apps.api.db.models.template import WhatsAppTemplate
 from apps.api.db.models.user import User
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "Message",
     "Org",
     "User",
+    "WhatsAppTemplate",
 ]

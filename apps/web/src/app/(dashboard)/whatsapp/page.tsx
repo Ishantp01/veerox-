@@ -1,16 +1,20 @@
 "use client";
 
 import { PageHeader } from "@/components/layout/page-header";
-import { StatsGrid } from "@/components/dashboard/stats-grid";
+import { OutboundWhatsAppForm } from "@/components/whatsapp/outbound-form";
+import { WhatsAppSendAnalyticsPanel } from "@/components/whatsapp/send-analytics-panel";
 
-export default function WhatsAppDashboardPage() {
+export default function WhatsAppSendPage() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="WhatsApp AI Agent"
-        description="Real-time overview of your WhatsApp channel"
+        description="Send an outbound WhatsApp message — the recipient's reply resumes the AI agent conversation."
       />
-      <StatsGrid variant="whatsapp" />
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        <OutboundWhatsAppForm />
+        <WhatsAppSendAnalyticsPanel />
+      </div>
     </div>
   );
 }
