@@ -699,10 +699,11 @@ async def import_leads_file(
 
     # No forced channel: split rows by their own "channel" column so one
     # upload can carry both call and WhatsApp leads at once.
+    # If a row has no channel column, default to "voice" for backwards compatibility.
     grouped: dict[str, list[tuple[int, dict[str, str]]]] = {"voice": [], "whatsapp": []}
     errors: list[dict[str, str | int]] = []
     for row_num, row in rows:
-        row_channel = (row.get("channel") or "").strip().lower()
+        row_channel = (row.get("channel") or "voice").strip().lower()
         if row_channel not in grouped:
             errors.append(
                 {

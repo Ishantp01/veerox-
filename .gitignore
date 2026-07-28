@@ -69,3 +69,7 @@ desktop.ini
 *.bak
 *.tmp
 *.orig
+
+# Documentation / Reports (auto-generated)
+kirofix.md
+COMPREHENSIVE_AUDIT_REPORT.md
