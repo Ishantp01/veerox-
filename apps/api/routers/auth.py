@@ -168,9 +168,11 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep) -> SessionOut:
     token = await create_session(
         redis, account_user_id=account_user.id, org_id=membership.org_id, role=membership.role
     )
+    org = await db.get(Org, membership.org_id)
     return SessionOut(
         token=token,
         org_id=membership.org_id,
+        org_name=org.name if org else "",
         role=membership.role,
         account_user_id=account_user.id,
         email=account_user.email,
@@ -195,8 +197,10 @@ async def me(current_user: CurrentUserDep, db: DbDep) -> MeOut:
     membership = result.scalars().first()
     if membership is None:
         raise HTTPException(status_code=403, detail="Account has no org membership")
+    org = await db.get(Org, membership.org_id)
     return MeOut(
         org_id=membership.org_id,
+        org_name=org.name if org else "",
         role=membership.role,
         account_user_id=current_user.id,
         email=current_user.email,

@@ -12,6 +12,7 @@ class LoginIn(BaseModel):
 class SessionOut(BaseModel):
     token: str
     org_id: UUID
+    org_name: str
     role: str
     account_user_id: UUID
     email: str
@@ -21,6 +22,7 @@ class SessionOut(BaseModel):
 
 class MeOut(BaseModel):
     org_id: UUID
+    org_name: str
     role: str
     account_user_id: UUID
     email: str

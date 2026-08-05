@@ -87,6 +87,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(AUTH_MODE_KEY, "session");
     setUser({
       org_id: session.org_id,
+      org_name: session.org_name,
       role: session.role,
       account_user_id: session.account_user_id,
       email: session.email,

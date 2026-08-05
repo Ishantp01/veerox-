@@ -52,10 +52,33 @@ class CurrentOrg:
     role: str
 
 
-async def get_current_user(
-    db: DbDep,
+async def _resolve_session_payload(
     redis: RedisDep,
     x_session_token: str | None = Header(None),
+) -> dict[str, str] | None:
+    """The decoded session payload, fetched from Redis at most once per
+    request.
+
+    Several dependencies below (`get_current_user`, `get_current_org`,
+    `verify_admin_or_session`, `resolve_request_org_id`,
+    `resolve_analytics_scope_org_id`) all need the same session token
+    resolved, and routes commonly stack more than one of them. FastAPI
+    caches a `Depends()` result per callable per request, so routing them
+    all through this one function collapses what would otherwise be N
+    separate Redis round trips (measured ~250ms+ each against Upstash from
+    local dev) into a single one.
+    """
+    if not x_session_token:
+        return None
+    return await get_session_payload(redis, x_session_token)
+
+
+SessionPayloadDep = Annotated[dict[str, str] | None, Depends(_resolve_session_payload)]
+
+
+async def get_current_user(
+    db: DbDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> AccountUser:
     if x_admin_token is not None and x_admin_token == settings.admin_token:
@@ -64,11 +87,8 @@ async def get_current_user(
         if account_user is not None and account_user.is_active:
             return account_user
 
-    if not x_session_token:
-        raise HTTPException(status_code=401, detail="Missing session token")
-    payload = await get_session_payload(redis, x_session_token)
     if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
+        raise HTTPException(status_code=401, detail="Missing session token")
     result = await db.execute(
         select(AccountUser).where(AccountUser.id == UUID(payload["account_user_id"]))
     )
@@ -79,18 +99,14 @@ async def get_current_user(
 
 
 async def get_current_org(
-    redis: RedisDep,
-    x_session_token: str | None = Header(None),
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> CurrentOrg:
     if x_admin_token is not None and x_admin_token == settings.admin_token:
         return CurrentOrg(org_id=DEFAULT_ORG_ID, role="admin")
 
-    if not x_session_token:
-        raise HTTPException(status_code=401, detail="Missing session token")
-    payload = await get_session_payload(redis, x_session_token)
     if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
+        raise HTTPException(status_code=401, detail="Missing session token")
     return CurrentOrg(org_id=UUID(payload["org_id"]), role=payload["role"])
 
 
@@ -186,11 +202,39 @@ async def enforce_plan_limit(
         )
 
 
-async def verify_admin_or_session(
+async def _resolve_session_membership_org_id(
     db: DbDep,
-    redis: RedisDep,
+    payload: SessionPayloadDep,
+) -> UUID | None:
+    """The org a valid session's membership resolves to, or None.
+
+    Shared by `verify_admin_or_session` and `resolve_request_org_id`, which
+    both need to know "does this session belong to a real org membership,
+    and if so which org" — routes commonly depend on both, so without this
+    they'd each fire their own identical `OrgMembership` query. FastAPI's
+    per-request Depends() cache collapses that back to one query.
+    """
+    if payload is None:
+        return None
+    from apps.api.db.models.org_membership import OrgMembership
+
+    result = await db.execute(
+        select(OrgMembership).where(
+            OrgMembership.account_user_id == UUID(payload["account_user_id"]),
+            OrgMembership.org_id == UUID(payload["org_id"]),
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        return None
+    return UUID(payload["org_id"])
+
+
+SessionMembershipOrgIdDep = Annotated[UUID | None, Depends(_resolve_session_membership_org_id)]
+
+
+async def verify_admin_or_session(
+    membership_org_id: SessionMembershipOrgIdDep,
     x_admin_token: str | None = Header(None),
-    x_session_token: str | None = Header(None),
 ) -> None:
     """Router-level auth guard: accepts either the legacy shared
     `X-Admin-Token` (unchanged behavior — always checked) or, when
@@ -203,28 +247,15 @@ async def verify_admin_or_session(
     if x_admin_token is not None and x_admin_token == settings.admin_token:
         return
 
-    if settings.require_session_auth and x_session_token:
-        from apps.api.db.models.org_membership import OrgMembership
-
-        payload = await get_session_payload(redis, x_session_token)
-        if payload is not None:
-            result = await db.execute(
-                select(OrgMembership).where(
-                    OrgMembership.account_user_id == UUID(payload["account_user_id"]),
-                    OrgMembership.org_id == UUID(payload["org_id"]),
-                )
-            )
-            if result.scalar_one_or_none() is not None:
-                return
+    if settings.require_session_auth and membership_org_id is not None:
+        return
 
     raise HTTPException(status_code=403, detail="Forbidden")
 
 
 async def resolve_request_org_id(
-    db: DbDep,
-    redis: RedisDep,
+    membership_org_id: SessionMembershipOrgIdDep,
     x_admin_token: str | None = Header(None),
-    x_session_token: str | None = Header(None),
 ) -> UUID:
     """Per-request org resolution for admin.py's calling/WhatsApp/campaign/
     stats endpoints (guarded by `verify_admin_or_session`, which has already
@@ -239,21 +270,9 @@ async def resolve_request_org_id(
     — preserving the pre-multi-tenancy behavior of unlimited admin-token
     access rather than attributing that traffic to some arbitrary org.
     """
-    if x_session_token:
-        payload = await get_session_payload(redis, x_session_token)
-        if payload is not None:
-            from apps.api.db.models.org_membership import OrgMembership
-
-            result = await db.execute(
-                select(OrgMembership).where(
-                    OrgMembership.account_user_id == UUID(payload["account_user_id"]),
-                    OrgMembership.org_id == UUID(payload["org_id"]),
-                )
-            )
-            if result.scalar_one_or_none() is not None:
-                return UUID(payload["org_id"])
-
     _ = x_admin_token  # validity already enforced by verify_admin_or_session
+    if membership_org_id is not None:
+        return membership_org_id
     return UUID(settings.default_org_id)
 
 
@@ -262,9 +281,8 @@ RequestOrgDep = Annotated[UUID, Depends(resolve_request_org_id)]
 
 async def resolve_analytics_scope_org_id(
     db: DbDep,
-    redis: RedisDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
-    x_session_token: str | None = Header(None),
 ) -> UUID | None:
     """Which org's data an analytics/usage read may see.
 
@@ -283,16 +301,14 @@ async def resolve_analytics_scope_org_id(
     if x_admin_token is not None and x_admin_token == settings.admin_token:
         return None
 
-    if x_session_token:
-        payload = await get_session_payload(redis, x_session_token)
-        if payload is not None:
-            result = await db.execute(
-                select(AccountUser).where(AccountUser.id == UUID(payload["account_user_id"]))
-            )
-            account_user = result.scalar_one_or_none()
-            if account_user is not None and account_user.is_active and account_user.is_superuser:
-                return None
-            return UUID(payload["org_id"])
+    if payload is not None:
+        result = await db.execute(
+            select(AccountUser).where(AccountUser.id == UUID(payload["account_user_id"]))
+        )
+        account_user = result.scalar_one_or_none()
+        if account_user is not None and account_user.is_active and account_user.is_superuser:
+            return None
+        return UUID(payload["org_id"])
 
     # No usable credential reached here only because verify_admin_or_session
     # already let the request through on the legacy admin token path; fall
@@ -306,9 +322,8 @@ AnalyticsScopeDep = Annotated[UUID | None, Depends(resolve_analytics_scope_org_i
 
 async def verify_platform_admin(
     db: DbDep,
-    redis: RedisDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
-    x_session_token: str | None = Header(None),
 ) -> None:
     """Stricter than `verify_admin_or_session`: for platform-wide resources
     (the plan catalog) rather than a single org's own data. `X-Admin-Token`
@@ -320,14 +335,12 @@ async def verify_platform_admin(
     if x_admin_token is not None and x_admin_token == settings.admin_token:
         return
 
-    if x_session_token:
-        payload = await get_session_payload(redis, x_session_token)
-        if payload is not None:
-            result = await db.execute(
-                select(AccountUser).where(AccountUser.id == UUID(payload["account_user_id"]))
-            )
-            account_user = result.scalar_one_or_none()
-            if account_user is not None and account_user.is_active and account_user.is_superuser:
-                return
+    if payload is not None:
+        result = await db.execute(
+            select(AccountUser).where(AccountUser.id == UUID(payload["account_user_id"]))
+        )
+        account_user = result.scalar_one_or_none()
+        if account_user is not None and account_user.is_active and account_user.is_superuser:
+            return
 
     raise HTTPException(status_code=403, detail="Forbidden")

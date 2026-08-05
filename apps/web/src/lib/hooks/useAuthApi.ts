@@ -3,6 +3,7 @@ import { apiFetch } from "@/lib/api";
 export interface SessionInfo {
   token: string;
   org_id: string;
+  org_name: string;
   role: "admin" | "member";
   account_user_id: string;
   email: string;
@@ -12,6 +13,7 @@ export interface SessionInfo {
 
 export interface MeInfo {
   org_id: string;
+  org_name: string;
   role: "admin" | "member";
   account_user_id: string;
   email: string;

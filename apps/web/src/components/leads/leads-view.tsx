@@ -7,12 +7,13 @@ import { Download, FileSpreadsheet, Search, Upload, Users } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { LeadTable } from "@/components/leads/lead-table";
+import { LEAD_QUALIFICATION_LABELS } from "@/components/leads/qualification-badge";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
 import { Button, EmptyState, Input, Select, SkeletonRows, Table, useToast } from "@/components/ui";
 import { SESSION_TOKEN_KEY } from "@/lib/api";
 import { downloadCsv } from "@/lib/download-csv";
 import { useLeads } from "@/lib/hooks";
-import type { LeadStatus } from "@/lib/types";
+import type { LeadQualificationStatus, LeadStatus } from "@/lib/types";
 
 interface ImportLeadsResult {
   imported: number;
@@ -21,6 +22,11 @@ interface ImportLeadsResult {
 }
 
 const INTENT_SEARCH_DEBOUNCE_MS = 300;
+
+// "Unqualified" ~= status "New" and "Qualified" is already a status option,
+// so only these two qualification stages add anything new to the combined
+// status/qualification filter dropdown below.
+const EXTRA_QUALIFICATION_FILTER_OPTIONS: LeadQualificationStatus[] = ["in_review", "disqualified"];
 
 async function downloadLeadsCsv(channel?: "voice" | "whatsapp", search?: string): Promise<void> {
   const params = new URLSearchParams();
@@ -87,7 +93,20 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
   const initialChannelParam = searchParams.get("channel");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<LeadStatus | "">("");
+  // Combined status/qualification filter — a single dropdown that reads from
+  // whichever field the chosen option belongs to. Encoded as "status:<value>"
+  // or "qual:<value>" so one Select can drive two separate Lead fields
+  // without showing two near-duplicate dropdowns (both have a "Qualified"
+  // option). Only the qualification stages not already implied by a status
+  // value are offered here — "Unqualified" ~= "New" and "Qualified" already
+  // exists as a status.
+  const [stageFilter, setStageFilter] = useState("");
+  const status = stageFilter.startsWith("status:")
+    ? (stageFilter.slice("status:".length) as LeadStatus)
+    : "";
+  const qualificationFilter = stageFilter.startsWith("qual:")
+    ? (stageFilter.slice("qual:".length) as LeadQualificationStatus)
+    : "";
   const [channelFilter, setChannelFilter] = useState<"voice" | "whatsapp" | "">(
     initialChannelParam === "voice" || initialChannelParam === "whatsapp" ? initialChannelParam : ""
   );
@@ -112,6 +131,7 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
   const filters = {
     channel: effectiveChannel,
     ...(status ? { status } : {}),
+    ...(qualificationFilter ? { qualification_status: qualificationFilter } : {}),
     ...(search ? { search } : {}),
   };
   const { data, isLoading, isError, error, refetch } = useLeads(filters);
@@ -196,14 +216,19 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
               </Select>
             )}
             <Select
-              value={status}
-              onChange={(v) => setStatus(v as LeadStatus | "")}
+              value={stageFilter}
+              onChange={(v) => setStageFilter(v)}
               aria-label="Filter leads by status"
             >
               <option value="">All statuses</option>
               {LEAD_STATUS_OPTIONS.map((s) => (
-                <option key={s} value={s}>
+                <option key={s} value={`status:${s}`}>
                   {LEAD_STATUS_LABELS[s]}
+                </option>
+              ))}
+              {EXTRA_QUALIFICATION_FILTER_OPTIONS.map((s) => (
+                <option key={s} value={`qual:${s}`}>
+                  {LEAD_QUALIFICATION_LABELS[s]}
                 </option>
               ))}
             </Select>

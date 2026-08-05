@@ -23,7 +23,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
-from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy import String, case, cast, func, or_, select
 
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.whatsapp import client as wa_client
@@ -116,6 +116,13 @@ async def get_stats(
     def scoped(stmt, model):  # noqa: ANN001, ANN202 — SQLAlchemy Select generics
         return stmt if scope_org_id is None else stmt.where(model.org_id == scope_org_id)
 
+    # Below: each table gets exactly one round trip regardless of how many
+    # counters are pulled from it (conditional SUM/CASE in place of separate
+    # queries) — DB is a remote Neon instance (see .env), so every extra
+    # round trip is real latency on a page loaded on every dashboard visit.
+    def _count_if(condition):  # noqa: ANN001, ANN202 — SQLAlchemy boolean expr
+        return func.sum(case((condition, 1), else_=0))
+
     users_today_result = await db.execute(
         scoped(
             select(func.count()).select_from(User).where(User.created_at >= today_start),
@@ -134,38 +141,10 @@ async def get_stats(
     )
     calls_today = calls_today_result.scalar_one()
 
-    whatsapp_messages_today_result = await db.execute(
-        scoped(
-            select(func.count())
-            .select_from(Message)
-            .where(Message.channel == "whatsapp", Message.created_at >= today_start),
-            Message,
-        )
-    )
-    whatsapp_messages_today = whatsapp_messages_today_result.scalar_one()
-
-    leads_today_result = await db.execute(
-        scoped(
-            select(func.count()).select_from(Lead).where(Lead.created_at >= today_start),
-            Lead,
-        )
-    )
-    leads_today = leads_today_result.scalar_one()
-
-    leads_today_by_channel_result = await db.execute(
-        scoped(
-            select(Lead.channel, func.count()).where(Lead.created_at >= today_start),
-            Lead,
-        ).group_by(Lead.channel)
-    )
-    leads_by_channel = dict(leads_today_by_channel_result.all())
-    leads_today_voice = leads_by_channel.get("voice", 0)
-    leads_today_whatsapp = leads_by_channel.get("whatsapp", 0)
-
-    # usd_spend_today — approximate cost over today's persisted messages.
-    cost_result = await db.execute(
+    message_stats_result = await db.execute(
         scoped(
             select(
+                func.coalesce(_count_if(Message.channel == "whatsapp"), 0),
                 func.coalesce(func.sum(Message.tokens_in), 0),
                 func.coalesce(func.sum(Message.tokens_out), 0),
                 func.coalesce(func.sum(Message.audio_secs), 0.0),
@@ -173,12 +152,26 @@ async def get_stats(
             Message,
         )
     )
-    tokens_in_sum, tokens_out_sum, audio_secs_sum = cost_result.one()
+    whatsapp_messages_today, tokens_in_sum, tokens_out_sum, audio_secs_sum = (
+        message_stats_result.one()
+    )
     usd_spend_today = (
         float(tokens_in_sum) * _INPUT_USD_PER_TOKEN
         + float(tokens_out_sum) * _OUTPUT_USD_PER_TOKEN
         + float(audio_secs_sum) * _REALTIME_AUDIO_USD_PER_SECOND
     )
+
+    lead_stats_result = await db.execute(
+        scoped(
+            select(
+                func.count(),
+                func.coalesce(_count_if(Lead.channel == "voice"), 0),
+                func.coalesce(_count_if(Lead.channel == "whatsapp"), 0),
+            ).where(Lead.created_at >= today_start),
+            Lead,
+        )
+    )
+    leads_today, leads_today_voice, leads_today_whatsapp = lead_stats_result.one()
 
     # error_count_today — Redis counter keyed by today's UTC date. Written by
     # apps.api.redis_client.record_error(), called from each channel/worker's
@@ -247,53 +240,19 @@ async def get_reports_timeseries(
             )
         ).all()
     }
-    whatsapp_by_day = {
-        str(day_val): count_val
-        for day_val, count_val in (
-            await db.execute(
-                scoped(
-                    select(func.date(Message.created_at), func.count()).where(
-                        Message.channel == "whatsapp", Message.created_at >= since
-                    ),
-                    Message,
-                ).group_by(func.date(Message.created_at))
-            )
-        ).all()
-    }
-    leads_by_day_channel = (
-        await db.execute(
-            scoped(
-                select(func.date(Lead.created_at), Lead.channel, func.count()).where(
-                    Lead.created_at >= since
-                ),
-                Lead,
-            ).group_by(func.date(Lead.created_at), Lead.channel)
-        )
-    ).all()
-    leads_voice_by_day: dict[str, int] = {}
-    leads_whatsapp_by_day: dict[str, int] = {}
-    for day_val, channel_val, count_val in leads_by_day_channel:
-        target = leads_voice_by_day if channel_val == "voice" else leads_whatsapp_by_day
-        if channel_val in ("voice", "whatsapp"):
-            target[str(day_val)] = count_val
-    qualified_by_day = {
-        str(day_val): count_val
-        for day_val, count_val in (
-            await db.execute(
-                scoped(
-                    select(func.date(Lead.created_at), func.count()).where(
-                        Lead.status == "qualified", Lead.created_at >= since
-                    ),
-                    Lead,
-                ).group_by(func.date(Lead.created_at))
-            )
-        ).all()
-    }
-    spend_by_day = (
+    # One round trip per table instead of one per counter (conditional SUM in
+    # place of a separate query for each breakdown) — DB is a remote Neon
+    # instance (see .env), so every extra query here is real page-load
+    # latency on the Reports page.
+    def _count_if(condition):  # noqa: ANN001, ANN202 — SQLAlchemy boolean expr
+        return func.sum(case((condition, 1), else_=0))
+
+    message_rows = (
         await db.execute(
             scoped(
                 select(
                     func.date(Message.created_at),
+                    func.coalesce(_count_if(Message.channel == "whatsapp"), 0),
                     func.coalesce(func.sum(Message.tokens_in), 0),
                     func.coalesce(func.sum(Message.tokens_out), 0),
                     func.coalesce(func.sum(Message.audio_secs), 0.0),
@@ -302,13 +261,39 @@ async def get_reports_timeseries(
             ).group_by(func.date(Message.created_at))
         )
     ).all()
+    whatsapp_by_day: dict[str, int] = {}
     usd_spend_by_day: dict[str, float] = {}
-    for day_val, tokens_in_sum, tokens_out_sum, audio_secs_sum in spend_by_day:
-        usd_spend_by_day[str(day_val)] = (
+    for day_val, whatsapp_count, tokens_in_sum, tokens_out_sum, audio_secs_sum in message_rows:
+        day = str(day_val)
+        whatsapp_by_day[day] = whatsapp_count
+        usd_spend_by_day[day] = (
             float(tokens_in_sum) * _INPUT_USD_PER_TOKEN
             + float(tokens_out_sum) * _OUTPUT_USD_PER_TOKEN
             + float(audio_secs_sum) * _REALTIME_AUDIO_USD_PER_SECOND
         )
+
+    lead_rows = (
+        await db.execute(
+            scoped(
+                select(
+                    func.date(Lead.created_at),
+                    Lead.channel,
+                    func.count(),
+                    func.coalesce(_count_if(Lead.status == "qualified"), 0),
+                ).where(Lead.created_at >= since),
+                Lead,
+            ).group_by(func.date(Lead.created_at), Lead.channel)
+        )
+    ).all()
+    leads_voice_by_day: dict[str, int] = {}
+    leads_whatsapp_by_day: dict[str, int] = {}
+    qualified_by_day: dict[str, int] = {}
+    for day_val, channel_val, count_val, qualified_val in lead_rows:
+        day = str(day_val)
+        if channel_val in ("voice", "whatsapp"):
+            target = leads_voice_by_day if channel_val == "voice" else leads_whatsapp_by_day
+            target[day] = count_val
+        qualified_by_day[day] = qualified_by_day.get(day, 0) + qualified_val
 
     all_days = sorted(
         {str(d) for d in calls_by_day}

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Phone, MessageSquare } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { SettingsView } from "@/components/settings/settings-view";
+import { useAuth } from "@/lib/auth-context";
 
 type Tab = "calling" | "whatsapp";
 
@@ -20,10 +21,36 @@ const TABS: { key: Tab; label: string; icon: typeof Phone }[] = [
  */
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>("calling");
+  const { user } = useAuth();
 
   return (
     <div className="mx-auto max-w-5xl">
       <PageHeader title="Settings" description="Connection status, prompts, and tools for each agent channel." />
+
+      {user && (
+        <div className="mb-6 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+            Account
+          </h2>
+          <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-3">
+            <div>
+              <dt className="text-xs text-slate-500 dark:text-slate-400">Organization</dt>
+              <dd className="text-sm font-semibold text-slate-800 dark:text-slate-100">{user.org_name}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-500 dark:text-slate-400">Organization ID</dt>
+              <dd className="font-mono text-xs text-slate-600 dark:text-slate-400">{user.org_id}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-500 dark:text-slate-400">Signed in as</dt>
+              <dd className="text-sm text-slate-700 dark:text-slate-300">
+                {user.email}
+                <span className="ml-1.5 text-xs text-slate-400 dark:text-slate-500">({user.role})</span>
+              </dd>
+            </div>
+          </dl>
+        </div>
+      )}
 
       <div className="mb-6 inline-flex gap-1 rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-900">
         {TABS.map(({ key, label, icon: Icon }) => (

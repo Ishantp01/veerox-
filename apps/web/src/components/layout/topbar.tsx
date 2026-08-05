@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
-import { ChevronRight, Menu, Moon, Sun } from "lucide-react";
+import { Building2, ChevronRight, Menu, Moon, Sun } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
 import { useWhatsAppSettings } from "@/lib/hooks";
 
 const SEGMENT_LABELS: Record<string, string> = {
@@ -55,6 +56,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
 
   const whatsapp = useWhatsAppSettings();
   const connected = whatsapp.data?.configured ?? false;
+  const { user } = useAuth();
 
   return (
     <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-slate-200/80 bg-white/80 px-4 backdrop-blur-md sm:px-6 lg:px-8 dark:border-slate-700/80 dark:bg-slate-950/70">
@@ -87,6 +89,17 @@ export function Topbar({ onMenuClick }: TopbarProps) {
       </div>
 
       <div className="flex shrink-0 items-center gap-3">
+        {user && (
+          <div
+            className="hidden items-center gap-2 rounded-full border border-slate-200 bg-slate-100 px-3 py-1 md:flex dark:border-slate-700 dark:bg-slate-900"
+            title={`Org ID: ${user.org_id}`}
+          >
+            <Building2 size={12} className="text-slate-400 dark:text-slate-500" aria-hidden />
+            <span className="max-w-[10rem] truncate text-[11px] font-medium text-slate-600 dark:text-slate-300">
+              {user.org_name}
+            </span>
+          </div>
+        )}
         {!whatsapp.isLoading && (
           <div
             className={`hidden items-center gap-2 rounded-full border px-3 py-1 md:flex ${

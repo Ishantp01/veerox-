@@ -141,6 +141,7 @@ async def _dispatch_tool(
     db: AsyncSession,
     tool_call: ToolCall,
     user_id: UUID,
+    org_id: UUID,
     channel: Channel,
     campaign_target_id: UUID | None = None,
 ) -> dict[str, Any]:
@@ -169,7 +170,12 @@ async def _dispatch_tool(
     # _dispatch_realtime_tool so qualify_lead can find the CampaignTarget row
     # to update on either channel.
     result = await handler(
-        db, user_id=user_id, channel=channel, campaign_target_id=campaign_target_id, **args
+        db,
+        user_id=user_id,
+        org_id=org_id,
+        channel=channel,
+        campaign_target_id=campaign_target_id,
+        **args,
     )
     if not isinstance(result, dict):
         # Defensive: every handler advertises dict[str, Any] but be paranoid here
@@ -211,6 +217,11 @@ class AgentCore:
             The assistant's reply as a plain string. The caller is responsible
             for transporting that string back over the channel.
         """
+        # TODO: hardcoded to the platform default org — unlike the voice path
+        # (CallState.org_id, resolved per-call from the answer_url), nothing
+        # here yet maps an inbound WhatsApp message to the org whose WABA
+        # number received it. Every WhatsApp-originated lead/appointment/
+        # escalation lands in the default org until that resolution exists.
         org_id = UUID(settings.default_org_id)
 
         # Kill switch — operators can pause via dashboard. Check BEFORE any
@@ -269,7 +280,7 @@ class AgentCore:
 
             for tool_call in result.tool_calls:
                 tool_result = await _dispatch_tool(
-                    db, tool_call, user_id, channel, campaign_target_id=campaign_target_id
+                    db, tool_call, user_id, org_id, channel, campaign_target_id=campaign_target_id
                 )
                 messages.append(
                     {

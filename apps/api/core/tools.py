@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
 from apps.api.db.models.campaign_target import CampaignTarget
+from apps.api.db.models.appointment import Appointment
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.lead import Lead
 from apps.api.db.models.user import User
@@ -67,7 +68,6 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "string", "description": "UUID of the user booking."},
                     "date": {
                         "type": "string",
                         "description": "Requested appointment date (ISO 8601, e.g. 2025-06-01).",
@@ -81,7 +81,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "description": "Optional notes or reason for the appointment.",
                     },
                 },
-                "required": ["user_id", "date", "time"],
+                "required": ["date", "time"],
             },
         },
     },
@@ -225,15 +225,19 @@ async def capture_lead(
     intent: str,
     name: str | None = None,
     user_id: UUID | None = None,
+    org_id: UUID | None = None,
     channel: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     """Persist a new lead. Idempotent on ``(org_id, phone, intent)`` for 10 min.
 
     Idempotency uses Redis ``SET NX EX`` — a duplicate call within the window
-    returns ``status="duplicate"`` with no row written.
+    returns ``status="duplicate"`` with no row written. ``org_id`` is caller
+    context injected by the dispatch layer (the call/message's already-
+    resolved tenant); falls back to the platform default only if the caller
+    genuinely has no org context to give (e.g. CLI/test invocations).
     """
-    org_id = _default_org_id()
+    org_id = org_id or _default_org_id()
     redis = get_redis_pool()
     key = _lead_dedupe_key(org_id, phone, intent)
 
@@ -276,23 +280,44 @@ async def capture_lead(
 
 async def book_appointment(
     db: AsyncSession,
-    user_id: str,
     date: str,
     time: str,
     notes: str | None = None,
+    user_id: UUID | None = None,
+    org_id: UUID | None = None,
     channel: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    """Record a booking by writing to ``Lead.metadata`` with ``intent='booking'``.
+    """Record a booking: a ``Lead`` (intent='booking', for the CRM timeline)
+    plus an ``Appointment`` row (for the Appointments page/calendar).
 
-    Intentionally does not create an ``Appointment`` table — that scope is
-    deferred to Day 5 per implementation plan §2.3.
+    ``user_id``/``org_id`` are caller context injected by the agent dispatch
+    layer (``core/agent.py``'s ``_dispatch_tool`` and the voice adapter's
+    ``_dispatch_realtime_tool``) — they must NOT also be properties on this
+    tool's LLM-facing schema above, or the injected kwarg and the LLM's own
+    argument collide (``TypeError: got multiple values for argument
+    'user_id'``), which previously made every booking silently fail before
+    any row was written. ``org_id`` is the call/message's already-resolved
+    tenant; without threading it through, every booking landed in the
+    platform default org regardless of which org's number was actually
+    called, invisible to every other org's dashboard.
+
+    ``date``/``time`` come from the LLM per the tool schema above — ISO 8601
+    date, HH:MM 24-hour time — and are combined into a UTC ``scheduled_at``.
+    Malformed values fail the booking outright rather than silently landing
+    on the CRM with no calendar entry.
     """
-    org_id = _default_org_id()
+    if user_id is None:
+        return {"status": "error", "reason": "missing_user_id"}
+
+    org_id = org_id or _default_org_id()
+    booking_user_id = user_id
+    booking_user = await db.get(User, booking_user_id)
+
     try:
-        booking_user_id = UUID(user_id)
-    except (ValueError, TypeError):
-        return {"status": "error", "reason": "invalid_user_id"}
+        scheduled_at = datetime.fromisoformat(f"{date}T{time}").replace(tzinfo=UTC)
+    except ValueError:
+        return {"status": "error", "reason": "invalid_date_or_time"}
 
     metadata: dict[str, Any] = {
         "date": date,
@@ -304,16 +329,28 @@ async def book_appointment(
     lead = Lead(
         org_id=org_id,
         user_id=booking_user_id,
+        name=booking_user.name if booking_user else None,
+        phone=booking_user.phone if booking_user else None,
         intent="booking",
         channel=channel,
         metadata_=metadata,
     )
     db.add(lead)
+    await db.flush()  # populate lead.id for the Appointment FK below
+
+    appointment = Appointment(
+        org_id=org_id,
+        lead_id=lead.id,
+        scheduled_at=scheduled_at,
+        notes=notes,
+    )
+    db.add(appointment)
     await db.commit()
 
     logger.info(
         "book_appointment_persisted",
         lead_id=str(lead.id),
+        appointment_id=str(appointment.id),
         user_id=str(booking_user_id),
         date=date,
         time=time,
@@ -321,6 +358,7 @@ async def book_appointment(
     return {
         "status": "ok",
         "lead_id": str(lead.id),
+        "appointment_id": str(appointment.id),
         "date": date,
         "time": time,
     }
@@ -331,6 +369,7 @@ async def transfer_to_human(
     reason: str,
     urgency: str = "medium",
     user_id: UUID | None = None,
+    org_id: UUID | None = None,
     channel: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
@@ -340,7 +379,7 @@ async def transfer_to_human(
     ``user_id`` (the LLM args don't carry one). When absent, the Redis
     enqueue still happens so operators see the request on the dashboard.
     """
-    org_id = _default_org_id()
+    org_id = org_id or _default_org_id()
     redis = get_redis_pool()
 
     payload = {
@@ -448,14 +487,15 @@ async def qualify_lead(
 async def lookup_customer(
     db: AsyncSession,
     phone: str,
+    org_id: UUID | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    """Look up a user by phone within the default org.
+    """Look up a user by phone within the caller's org.
 
     Returns the user's name and most-recent conversation timestamp, or
     ``{"found": False}`` when no row matches.
     """
-    org_id = _default_org_id()
+    org_id = org_id or _default_org_id()
     normalized = _normalize_phone(phone)
 
     user_stmt = select(User).where(User.org_id == org_id, User.phone == normalized)

@@ -178,12 +178,17 @@ async def _dispatch_realtime_tool(
     name: str,
     arguments_json: str,
     user_id: UUID,
+    org_id: UUID,
     campaign_target_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Run a Realtime function call through the shared ``DISPATCH_TABLE``.
 
     Mirrors ``apps.api.core.agent._dispatch_tool`` but owns a fresh DB session
     (the agent's request-scoped session doesn't exist on the voice path).
+    ``org_id`` is the call's already-resolved tenant (``CallState.org_id``,
+    see ``_resolve_org_id`` in realtime_bridge.py) — threaded through so tool
+    handlers write leads/appointments/escalations to the org that actually
+    owns the call, instead of falling back to the platform's default org.
     """
     handler = DISPATCH_TABLE.get(name)
     if handler is None:
@@ -199,6 +204,7 @@ async def _dispatch_realtime_tool(
         result = await handler(
             db,
             user_id=user_id,
+            org_id=org_id,
             channel="voice",
             campaign_target_id=campaign_target_id,
             **args,
@@ -274,7 +280,11 @@ async def handle_openai_event(
         name = event.get("name") or ""
         args_json = event.get("arguments") or "{}"
         result = await _dispatch_realtime_tool(
-            name, args_json, state.user_id, campaign_target_id=state.campaign_target_id
+            name,
+            args_json,
+            state.user_id,
+            state.org_id,
+            campaign_target_id=state.campaign_target_id,
         )
         # Feed the tool result back into the session, then ask the model to
         # continue speaking with that result in context.

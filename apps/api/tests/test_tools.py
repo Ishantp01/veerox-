@@ -21,7 +21,7 @@ from apps.api.core.tools import (
     qualify_lead,
     transfer_to_human,
 )
-from apps.api.db.models import CallCampaign, CampaignTarget, Lead, Org, User
+from apps.api.db.models import Appointment, CallCampaign, CampaignTarget, Lead, Org, User
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -137,7 +137,7 @@ async def test_book_appointment_persists_channel_when_provided(
 
     result = await book_appointment(
         db_session,
-        user_id=str(user.id),
+        user_id=user.id,
         date="2026-08-01",
         time="10:00",
         channel="voice",
@@ -148,6 +148,11 @@ async def test_book_appointment_persists_channel_when_provided(
         await db_session.execute(select(Lead).where(Lead.intent == "booking"))
     ).scalars().one()
     assert row.channel == "voice"
+
+    appointment = (
+        await db_session.execute(select(Appointment).where(Appointment.lead_id == row.id))
+    ).scalars().one()
+    assert appointment.scheduled_at.replace(tzinfo=None).isoformat() == "2026-08-01T10:00:00"
 
 
 async def test_transfer_to_human_enqueues_and_writes_lead(

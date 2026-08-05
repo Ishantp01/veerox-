@@ -11,7 +11,6 @@ import {
   Phone,
   Users,
   UserCheck,
-  BadgeCheck,
   CalendarClock,
   AlertTriangle,
   BarChart3,
@@ -71,7 +70,6 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: "/crm/contacts", label: "Contacts", Icon: Users },
       { href: "/crm/leads", label: "Leads", Icon: UserCheck },
-      { href: "/crm/qualification", label: "Lead Qualification", Icon: BadgeCheck },
       { href: "/crm/appointments", label: "Appointments", Icon: CalendarClock },
       { href: "/conversations", label: "Conversations", Icon: MessagesSquare },
       { href: "/escalations", label: "Escalations", Icon: AlertTriangle },
