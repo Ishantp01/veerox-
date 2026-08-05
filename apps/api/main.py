@@ -19,6 +19,8 @@ from apps.api.rate_limit import limiter
 from apps.api.routers import (
     admin,
     appointments,
+    auth,
+    billing,
     conversations,
     crm,
     diag,
@@ -26,9 +28,11 @@ from apps.api.routers import (
     health,
     leads,
     sales,
+    team,
     templates,
 )
 from apps.api.sentry import init_sentry
+from apps.api.workers.billing_expiry import run_billing_expiry_checker
 from apps.api.workers.campaign_dialer import run_campaign_dialer
 from apps.api.workers.follow_up_dispatcher import run_follow_up_dispatcher
 from apps.api.workers.whatsapp_dispatcher import run_whatsapp_dispatcher
@@ -42,7 +46,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     dialer_task = asyncio.create_task(run_campaign_dialer())
     whatsapp_dispatcher_task = asyncio.create_task(run_whatsapp_dispatcher())
     follow_up_task = asyncio.create_task(run_follow_up_dispatcher())
-    background_tasks = (dialer_task, whatsapp_dispatcher_task, follow_up_task)
+    billing_expiry_task = asyncio.create_task(run_billing_expiry_checker())
+    background_tasks = (dialer_task, whatsapp_dispatcher_task, follow_up_task, billing_expiry_task)
     try:
         yield
     finally:
@@ -79,6 +84,8 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
+    app.include_router(auth.router)
+    app.include_router(billing.router)
     app.include_router(conversations.router)
     app.include_router(leads.router)
     app.include_router(crm.router)
@@ -86,6 +93,7 @@ def create_app() -> FastAPI:
     app.include_router(follow_ups.router)
     app.include_router(templates.router)
     app.include_router(sales.router)
+    app.include_router(team.router)
     app.include_router(admin.router)
     app.include_router(diag.router)
     app.include_router(whatsapp_router)

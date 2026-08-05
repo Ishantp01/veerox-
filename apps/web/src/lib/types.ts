@@ -43,6 +43,7 @@ export interface Lead {
   name: string | null;
   phone: string | null;
   intent: string | null;
+  tags: string[] | null;
   channel: "voice" | "whatsapp" | null;
   // Backend column is named "metadata" but the SQLAlchemy attribute is
   // `metadata_` (to avoid shadowing SQLAlchemy's DeclarativeBase.metadata).

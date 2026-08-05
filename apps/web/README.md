@@ -15,9 +15,9 @@ npm run dev                   # http://localhost:3001
 
 | Variable | Required | Description |
 |---|---|---|
-| `NEXT_PUBLIC_API_URL` | Yes | Base URL of the FastAPI backend, e.g. `http://localhost:8001`. No trailing slash. |
+| `NEXT_PUBLIC_API_URL` | Yes | Base URL of the FastAPI backend, e.g. `http://localhost:8002`. No trailing slash. |
 
-The admin token is **not** an env var — it is entered via the `/login` page and persisted in `localStorage` under the key `veerox_admin_token`. It is injected as the `X-Admin-Token` header on every API request.
+The shared admin token is entered via the `/login` page and persisted in `localStorage` under the key `veerox_admin_token`. It can sign in the owner org, and it is also injected as the `X-Admin-Token` header on every API request.
 
 ## Page map
 

@@ -7,7 +7,11 @@ import { expect, test } from "@playwright/test";
  * pass, so they're guarded — set E2E_WITH_BACKEND=1 to run the full flow.
  */
 
-const ADMIN_TOKEN = process.env.E2E_ADMIN_TOKEN ?? "change-me-before-prod";
+const ADMIN_TOKEN = process.env.E2E_ADMIN_TOKEN;
+
+if (!ADMIN_TOKEN) {
+  throw new Error("E2E_ADMIN_TOKEN is required");
+}
 const withBackend = process.env.E2E_WITH_BACKEND === "1";
 
 test("login screen renders and accepts a token", async ({ page }) => {

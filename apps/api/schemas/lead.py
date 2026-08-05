@@ -25,7 +25,6 @@ LeadQualificationStatus = Literal["unqualified", "in_review", "qualified", "disq
 
 
 class LeadCreate(BaseModel):
-    org_id: UUID
     user_id: UUID
     name: str | None = None
     phone: str | None = None
@@ -44,6 +43,7 @@ class LeadOut(BaseModel):
     name: str | None
     phone: str | None
     intent: str | None
+    tags: list[str] | None
     channel: str | None
     metadata_: dict | None
     status: str
@@ -77,6 +77,7 @@ class LeadUpdateIn(BaseModel):
     qualification_score: int | None = None
     qualification_notes: str | None = None
     deal_value: float | None = None
+    tags: list[str] | None = None
 
 
 class LeadImportRow(BaseModel):

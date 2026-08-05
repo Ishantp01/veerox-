@@ -31,6 +31,11 @@ export function useOutboundCall() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.conversations() });
       queryClient.invalidateQueries({ queryKey: queryKeys.stats() });
+      // Call duration is only known once the call ends (see
+      // close_voice_conversation), well after this mutation resolves — so
+      // this alone won't show the new minutes, but it does clear any stale
+      // cached usage so the Billing page's next mount/focus refetches.
+      queryClient.invalidateQueries({ queryKey: ["billing", "usage"] });
     },
   });
 }
@@ -69,6 +74,7 @@ export function useOutboundWhatsApp() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.conversations() });
       queryClient.invalidateQueries({ queryKey: queryKeys.stats() });
+      queryClient.invalidateQueries({ queryKey: ["billing", "usage"] });
     },
   });
 }

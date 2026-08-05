@@ -22,9 +22,11 @@ from sqlalchemy import func, select, update
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.config import settings
 from apps.api.core.agent import _is_kill_switch_active
+from apps.api.core.usage import get_monthly_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.session import AsyncSessionLocal
+from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
 
 logger = structlog.get_logger(__name__)
@@ -116,6 +118,12 @@ async def _claim_targets() -> list[tuple[str, str, int]]:
     the caller can place the calls outside this short-lived session. Empty
     if there's nothing to dial right now or ``max_concurrent_calls`` voice
     calls are already in flight.
+
+    Targets belonging to an org that's over its plan's
+    ``max_call_minutes_per_month`` are skipped (left ``pending``, not
+    claimed) rather than dialed — this is the only place campaign calls
+    actually get placed, so without this check a 0-minute (or exhausted)
+    plan would never stop an already-running campaign from dialing.
     """
     async with AsyncSessionLocal() as db:
         await _reclaim_stale_calls(db)
@@ -123,8 +131,10 @@ async def _claim_targets() -> list[tuple[str, str, int]]:
         if capacity <= 0:
             return []
 
+        # Over-fetch beyond `capacity` since some candidates may belong to an
+        # over-limit org and get skipped rather than claimed.
         stmt = (
-            select(CampaignTarget)
+            select(CampaignTarget, CallCampaign.org_id)
             .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
             .where(
                 CampaignTarget.status == "pending",
@@ -132,11 +142,22 @@ async def _claim_targets() -> list[tuple[str, str, int]]:
                 CallCampaign.channel == "voice",
             )
             .order_by(CampaignTarget.created_at)
-            .limit(capacity)
+            .limit(max(capacity * 4, 50))
         )
-        targets = (await db.execute(stmt)).scalars().all()
+        rows = (await db.execute(stmt)).all()
+
+        org_over_limit: dict[UUID, bool] = {}
         claimed = []
-        for target in targets:
+        for target, org_id in rows:
+            if len(claimed) >= capacity:
+                break
+            if org_id not in org_over_limit:
+                usage = await get_monthly_usage(db, org_id)
+                org_over_limit[org_id] = await is_over_plan_limit(
+                    db, org_id, "max_call_minutes_per_month", usage.call_minutes
+                )
+            if org_over_limit[org_id]:
+                continue
             target.status = "calling"
             target.attempt_count += 1
             target.called_at = datetime.now(UTC)

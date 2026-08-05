@@ -86,6 +86,15 @@ export function DialogContent({
   const { open, setOpen, titleId } = useDialogContext("DialogContent");
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  // Callers pass onOpenChange as a fresh inline function on every render
+  // (e.g. every keystroke in a form field re-renders the dialog owner). A
+  // ref lets the effect below read the latest setOpen without needing it
+  // as a dependency — putting it in the deps array would re-run the
+  // open-effect (and re-steal focus into the panel) on every such render,
+  // which is exactly what caused inputs inside dialogs to lose focus after
+  // a single keystroke.
+  const setOpenRef = useRef(setOpen);
+  setOpenRef.current = setOpen;
 
   useEffect(() => {
     if (!open) return;
@@ -97,7 +106,7 @@ export function DialogContent({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        setOpen(false);
+        setOpenRef.current(false);
         return;
       }
       if (e.key === "Tab") {
@@ -134,7 +143,7 @@ export function DialogContent({
       document.body.style.overflow = prevOverflow;
       previouslyFocused.current?.focus?.();
     };
-  }, [open, setOpen]);
+  }, [open]);
 
   if (!open) return null;
 

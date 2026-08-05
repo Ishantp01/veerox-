@@ -39,12 +39,14 @@ def _xml_escape(value: str) -> str:
     )
 
 
-def _ws_stream_url(caller: str, call_uuid: str, campaign_target_id: str | None = None) -> str:
+def _ws_stream_url(
+    caller: str, call_uuid: str, campaign_target_id: str | None = None, org_id: str | None = None
+) -> str:
     """Build the ``wss://`` URL Plivo streams to, carrying caller context.
 
     Scheme is derived from ``PUBLIC_BASE_URL`` (https -> wss, http -> ws). The
-    bridge reads ``from`` / ``call_uuid`` / ``campaign_target_id`` from the
-    query string.
+    bridge reads ``from`` / ``call_uuid`` / ``campaign_target_id`` / ``org_id``
+    from the query string.
     """
     base = settings.public_base_url.rstrip("/")
     if base.startswith("https://"):
@@ -56,6 +58,8 @@ def _ws_stream_url(caller: str, call_uuid: str, campaign_target_id: str | None =
     params = {"from": caller, "call_uuid": call_uuid}
     if campaign_target_id:
         params["campaign_target_id"] = campaign_target_id
+    if org_id:
+        params["org_id"] = org_id
     qs = urlencode(params)
     return f"{ws_base}/voice/stream?{qs}"
 
@@ -82,8 +86,12 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
     # POST body never carries it) — always present in the URL query string
     # regardless of request method.
     campaign_target_id = request.query_params.get("campaign_target_id")
+    # Set by routers/admin.py's outbound_call on the answer_url it gives
+    # Plivo for a dashboard-placed single call (campaign calls resolve their
+    # org from the campaign itself instead — see realtime_bridge._resolve_org_id).
+    org_id = request.query_params.get("org_id")
 
-    ws_url = _ws_stream_url(caller, call_uuid, campaign_target_id)
+    ws_url = _ws_stream_url(caller, call_uuid, campaign_target_id, org_id)
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"

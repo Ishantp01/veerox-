@@ -9,6 +9,7 @@ import { QueryBoundary } from "@/components/layout/query-boundary";
 import { LeadTable } from "@/components/leads/lead-table";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
 import { Button, EmptyState, Input, Select, SkeletonRows, Table, useToast } from "@/components/ui";
+import { SESSION_TOKEN_KEY } from "@/lib/api";
 import { downloadCsv } from "@/lib/download-csv";
 import { useLeads } from "@/lib/hooks";
 import type { LeadStatus } from "@/lib/types";
@@ -19,13 +20,15 @@ interface ImportLeadsResult {
   errors: { row: number; reason: string }[];
 }
 
-const TOKEN_KEY = "veerox_admin_token";
 const INTENT_SEARCH_DEBOUNCE_MS = 300;
 
-async function downloadLeadsCsv(channel?: "voice" | "whatsapp"): Promise<void> {
-  const qs = channel ? `?channel=${encodeURIComponent(channel)}` : "";
+async function downloadLeadsCsv(channel?: "voice" | "whatsapp", search?: string): Promise<void> {
+  const params = new URLSearchParams();
+  if (channel) params.set("channel", channel);
+  if (search) params.set("search", search);
+  const qs = params.toString();
   const stamp = new Date().toISOString().slice(0, 10);
-  await downloadCsv(`/admin/leads.csv${qs}`, `leads-${stamp}.csv`);
+  await downloadCsv(`/admin/leads.csv${qs ? `?${qs}` : ""}`, `leads-${stamp}.csv`);
 }
 
 async function downloadSampleImportFile(format: "csv" | "xlsx"): Promise<void> {
@@ -35,20 +38,21 @@ async function downloadSampleImportFile(format: "csv" | "xlsx"): Promise<void> {
 /**
  * Upload a CSV or Excel (.xlsx) file of leads to `POST /admin/leads/import`
  * (same auth pattern as `downloadLeadsCsv` above — plain `fetch` with the
- * admin token header, since this is a one-off outside the
- * `apiFetch`/react-query flow). The backend sniffs the file extension to
- * pick a CSV or Excel parser.
+ * session token header, since this is a one-off outside the
+ * `apiFetch`/react-query flow; apiFetch would force a JSON Content-Type onto
+ * what has to be multipart/form-data). The backend sniffs the file extension
+ * to pick a CSV or Excel parser.
  */
 async function importLeadsFile(
   file: File,
   channel?: "voice" | "whatsapp"
 ): Promise<ImportLeadsResult> {
-  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8002";
   const token =
-    typeof window === "undefined" ? "" : localStorage.getItem(TOKEN_KEY) ?? "";
+    typeof window === "undefined" ? "" : localStorage.getItem(SESSION_TOKEN_KEY) ?? "";
 
   const headers: Record<string, string> = {};
-  if (token) headers["X-Admin-Token"] = token;
+  if (token) headers["X-Session-Token"] = token;
 
   const qs = channel ? `?channel=${encodeURIComponent(channel)}` : "";
   const form = new FormData();
@@ -81,8 +85,8 @@ export interface LeadsViewProps {
 export function LeadsView({ title, description, channel, detailBasePath }: LeadsViewProps) {
   const searchParams = useSearchParams();
   const initialChannelParam = searchParams.get("channel");
-  const [intentInput, setIntentInput] = useState("");
-  const [intent, setIntent] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
   const [status, setStatus] = useState<LeadStatus | "">("");
   const [channelFilter, setChannelFilter] = useState<"voice" | "whatsapp" | "">(
     initialChannelParam === "voice" || initialChannelParam === "whatsapp" ? initialChannelParam : ""
@@ -96,23 +100,27 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
   // per-channel pages already have `channel` fixed by their caller.
   const effectiveChannel = channel ?? (channelFilter || undefined);
 
-  // Intent is a freeform sentence captured by the LLM (e.g. "Book an
-  // appointment on July 8th"), not a fixed category — so this is a debounced
-  // substring search rather than an exact-match dropdown. See
-  // apps/api/routers/admin.py's ilike() filter.
+  // Single search box matches against intent (a freeform sentence captured
+  // by the LLM, e.g. "Book an appointment on July 8th") OR tags — so this is
+  // a debounced substring search rather than an exact-match dropdown. See
+  // apps/api/routers/admin.py's _lead_search_clause().
   useEffect(() => {
-    const t = setTimeout(() => setIntent(intentInput.trim()), INTENT_SEARCH_DEBOUNCE_MS);
+    const t = setTimeout(() => setSearch(searchInput.trim()), INTENT_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [intentInput]);
+  }, [searchInput]);
 
-  const filters = { channel: effectiveChannel, ...(intent ? { intent } : {}), ...(status ? { status } : {}) };
+  const filters = {
+    channel: effectiveChannel,
+    ...(status ? { status } : {}),
+    ...(search ? { search } : {}),
+  };
   const { data, isLoading, isError, error, refetch } = useLeads(filters);
   const leads = data ?? [];
 
   async function handleExport() {
     setExporting(true);
     try {
-      await downloadLeadsCsv(effectiveChannel);
+      await downloadLeadsCsv(effectiveChannel, search || undefined);
       toast({ title: "Export started", description: "Your CSV download is ready.", variant: "success" });
     } catch (err: unknown) {
       toast({
@@ -167,13 +175,13 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
                 className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
               />
               <Input
-                id="intent-filter"
+                id="lead-search"
                 type="search"
-                value={intentInput}
-                onChange={(e) => setIntentInput(e.target.value)}
-                placeholder="Search intent…"
-                aria-label="Search leads by intent"
-                className="w-40 pl-8 sm:w-48"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="Search intent or tag…"
+                aria-label="Search leads by intent or tag"
+                className="w-48 pl-8 sm:w-56"
               />
             </div>
             {channel === undefined && (
@@ -258,7 +266,7 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
           <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
-                <SkeletonRows rows={5} cols={5} />
+                <SkeletonRows rows={5} cols={6} />
               </tbody>
             </Table>
           </div>

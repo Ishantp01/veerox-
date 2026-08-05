@@ -13,16 +13,16 @@ import { AuthProvider } from "@/lib/auth-context";
  * TanStack Query hooks. The QueryClient is created once per browser session
  * via useState (not at module scope) so it isn't shared across SSR requests.
  *
- * Defaults to dark on first visit (the app's primary "Lumina Dark" look) but
- * the topbar's theme toggle can switch to light (`.dark` Tailwind variant,
- * `tailwind.config.ts`'s `darkMode: "class"`) — `enableSystem={false}` so
- * that choice, not the OS preference, decides the initial theme.
+ * Defaults to light on first visit; the topbar's theme toggle switches to
+ * dark (`.dark` Tailwind variant, `tailwind.config.ts`'s `darkMode: "class"`)
+ * — `enableSystem={false}` so that choice, not the OS preference, decides
+ * the initial theme.
  */
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(makeQueryClient);
 
   return (
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
+    <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
           <ToastProvider>{children}</ToastProvider>

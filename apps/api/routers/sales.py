@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 
-from apps.api.core.tools import _default_org_id
 from apps.api.db.models import Lead
-from apps.api.deps import DbDep
+from apps.api.deps import DbDep, RequestOrgDep, verify_admin_or_session
 from apps.api.schemas.lead import LEAD_QUALIFICATION_STATUSES, LEAD_STATUSES
 from apps.api.schemas.sales import (
     ChannelBreakdown,
@@ -15,15 +14,16 @@ from apps.api.schemas.sales import (
     RevenueSummaryOut,
 )
 
-router = APIRouter(prefix="/sales", tags=["sales"])
+router = APIRouter(
+    prefix="/sales", tags=["sales"], dependencies=[Depends(verify_admin_or_session)]
+)
 
 
 @router.get("/pipeline", response_model=PipelineOut)
-async def get_pipeline(db: DbDep) -> PipelineOut:
+async def get_pipeline(db: DbDep, org_id: RequestOrgDep) -> PipelineOut:
     """Lead count + $ value per CRM status — aggregated from the existing
     `Lead.status`/`Lead.deal_value` columns rather than a separate Deal
     entity (see db/models/lead.py's `deal_value` comment)."""
-    org_id = _default_org_id()
     rows = (
         await db.execute(
             select(Lead.status, func.count(), func.coalesce(func.sum(Lead.deal_value), 0))
@@ -42,9 +42,7 @@ async def get_pipeline(db: DbDep) -> PipelineOut:
 
 
 @router.get("/revenue-summary", response_model=RevenueSummaryOut)
-async def get_revenue_summary(db: DbDep) -> RevenueSummaryOut:
-    org_id = _default_org_id()
-
+async def get_revenue_summary(db: DbDep, org_id: RequestOrgDep) -> RevenueSummaryOut:
     pipeline_value_row = (
         await db.execute(
             select(func.coalesce(func.sum(Lead.deal_value), 0)).where(

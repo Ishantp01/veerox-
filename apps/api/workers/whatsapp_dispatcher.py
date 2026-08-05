@@ -28,9 +28,11 @@ from sqlalchemy import select, update
 
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.core.agent import _is_kill_switch_active
+from apps.api.core.usage import get_monthly_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.session import AsyncSessionLocal
+from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
 
 logger = structlog.get_logger(__name__)
@@ -73,10 +75,18 @@ async def _claim_targets() -> list[tuple[str, str, str, int]]:
 
     Returns ``[(target_id, phone, criteria, attempt_count), ...]`` so the
     caller can send outside this short-lived session.
+
+    Targets belonging to an org that's over its plan's
+    ``max_whatsapp_messages_per_month`` are skipped (left ``pending``, not
+    claimed) — this is the only place campaign WhatsApp sends actually
+    happen, so without this check a 0-message (or exhausted) plan would
+    never stop an already-running campaign from sending.
     """
     async with AsyncSessionLocal() as db:
+        # Over-fetch beyond `_BATCH_SIZE` since some candidates may belong to
+        # an over-limit org and get skipped rather than claimed.
         stmt = (
-            select(CampaignTarget, CallCampaign.criteria)
+            select(CampaignTarget, CallCampaign.criteria, CallCampaign.org_id)
             .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
             .where(
                 CampaignTarget.status == "pending",
@@ -84,11 +94,22 @@ async def _claim_targets() -> list[tuple[str, str, str, int]]:
                 CallCampaign.channel == "whatsapp",
             )
             .order_by(CampaignTarget.created_at)
-            .limit(_BATCH_SIZE)
+            .limit(_BATCH_SIZE * 4)
         )
         rows = (await db.execute(stmt)).all()
+
+        org_over_limit: dict[UUID, bool] = {}
         claimed = []
-        for target, criteria in rows:
+        for target, criteria, org_id in rows:
+            if len(claimed) >= _BATCH_SIZE:
+                break
+            if org_id not in org_over_limit:
+                usage = await get_monthly_usage(db, org_id)
+                org_over_limit[org_id] = await is_over_plan_limit(
+                    db, org_id, "max_whatsapp_messages_per_month", usage.whatsapp_messages
+                )
+            if org_over_limit[org_id]:
+                continue
             target.status = "calling"
             target.attempt_count += 1
             target.called_at = datetime.now(UTC)

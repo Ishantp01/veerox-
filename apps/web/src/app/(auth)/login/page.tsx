@@ -3,51 +3,53 @@
 import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/ui/button";
+import { Input, Label } from "@/components/ui/input";
 import { LogIn, AlertCircle } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-
-/**
- * Check a candidate token against the backend before persisting it. Can't
- * use `apiFetch` here — it always reads the *stored* token from
- * localStorage, but we need to test one that hasn't been saved yet.
- */
-async function validateToken(candidate: string): Promise<boolean> {
-  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
-  const res = await fetch(`${base}/admin/settings`, {
-    headers: { "X-Admin-Token": candidate },
-  });
-  return res.ok;
-}
+import { login as loginRequest } from "@/lib/hooks/useAuthApi";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login } = useAuth();
-  const [token, setToken] = useState("");
+  const { login, loginAdmin } = useAuth();
+  const [loginToken, setLoginToken] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [checking, setChecking] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const trimmed = token.trim();
-    if (!trimmed) {
-      setError("Please enter your admin token.");
+    if (!loginToken.trim()) {
+      setError("Please enter your login token.");
       return;
     }
 
-    setChecking(true);
+    setSubmitting(true);
     setError(null);
     try {
-      const valid = await validateToken(trimmed);
-      if (!valid) {
-        setError("That token was rejected by the server. Double-check and try again.");
-        return;
-      }
-      login(trimmed);
+      const session = await loginRequest(loginToken.trim());
+      login(session);
       router.push("/");
-    } catch {
-      setError("Couldn't reach the API to verify the token. Is the backend running?");
+    } catch (err) {
+      const status = (err as { status?: number } | undefined)?.status;
+      if (status === 401) {
+        try {
+          const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8002";
+          const response = await fetch(`${base}/admin/settings`, {
+            headers: { "X-Admin-Token": loginToken.trim() },
+          });
+          if (!response.ok) {
+            throw new Error("admin token rejected");
+          }
+          await loginAdmin(loginToken.trim());
+          router.push("/");
+          return;
+        } catch {
+          setError("Invalid login token.");
+          return;
+        }
+      }
+      setError("Couldn't reach the API to sign in. Is the backend running?");
     } finally {
-      setChecking(false);
+      setSubmitting(false);
     }
   }
 
@@ -67,22 +69,22 @@ export default function LoginPage() {
         {/* Card */}
         <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-8 shadow-card-lg backdrop-blur-xl">
           <h2 className="text-base font-bold text-slate-100 mb-1">Sign in</h2>
-          <p className="text-sm text-slate-400 mb-6">Enter your admin token to continue.</p>
+          <p className="text-sm text-slate-400 mb-6">
+            Enter your org login token, or the shared admin token for the owner org.
+          </p>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
-              <label htmlFor="token" className="block text-xs font-semibold uppercase tracking-widest text-slate-500 mb-2">
-                Admin Token
-              </label>
-              <input
-                id="token"
+              <Label htmlFor="loginToken" className="!text-slate-400">Login token</Label>
+              <Input
+                id="loginToken"
                 type="password"
                 autoComplete="current-password"
-                value={token}
-                onChange={(e) => { setToken(e.target.value); setError(null); }}
-                placeholder="Paste token here"
+                value={loginToken}
+                onChange={(e) => { setLoginToken(e.target.value); setError(null); }}
+                placeholder="Paste your login or admin token"
                 aria-invalid={error ? true : undefined}
-                className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-slate-100 shadow-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition aria-[invalid=true]:border-red-500/50 aria-[invalid=true]:focus:ring-red-500"
+                className="!bg-white/5 !border-white/10 !text-slate-100 font-mono text-xs"
               />
             </div>
 
@@ -92,13 +94,13 @@ export default function LoginPage() {
               </p>
             )}
 
-            <Button type="submit" variant="default" className="w-full py-2.5 mt-1 gap-2" loading={checking}>
-              {!checking && <LogIn size={15} />} {checking ? "Checking…" : "Sign in"}
+            <Button type="submit" variant="default" className="w-full py-2.5 mt-1 gap-2" loading={submitting}>
+              {!submitting && <LogIn size={15} />} {submitting ? "Signing in…" : "Sign in"}
             </Button>
           </form>
 
           <p className="mt-5 text-xs text-slate-500 text-center">
-            Token is sent as <code className="font-mono bg-white/5 px-1 rounded">X-Admin-Token</code> on every request.
+            Don&apos;t have a token? Ask your organization&apos;s admin.
           </p>
         </div>
       </div>

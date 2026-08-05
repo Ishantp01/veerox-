@@ -24,6 +24,11 @@ class Lead(Base):
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     intent: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Free-form multi-tag classification, layered on top of `intent` (the
+    # AI-captured single reason-for-contact) — lets a rep classify a lead
+    # along several axes at once (e.g. "hot", "enterprise", "needs-demo").
+    # Mirrors Contact.tags (db/models/contact.py).
+    tags: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     channel: Mapped[str | None] = mapped_column(String(16), nullable=True)
     metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="new")

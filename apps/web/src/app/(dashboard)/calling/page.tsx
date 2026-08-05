@@ -58,9 +58,13 @@ export default function CallingDialPage() {
           });
         },
         onError: (err) => {
+          const status = (err as Error & { status?: number }).status;
           toast({
-            title: "Call failed",
-            description: err.message,
+            title: status === 402 ? "Credit limit reached" : "Call failed",
+            description:
+              status === 402
+                ? "You've used up your plan's call minutes this month. Upgrade your plan to keep calling."
+                : err.message,
             variant: "error",
           });
         },

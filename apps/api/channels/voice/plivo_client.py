@@ -122,6 +122,29 @@ async def start_recording(call_uuid: str, callback_url: str) -> None:
         logger.warning("plivo_recording_start_failed", call_uuid=call_uuid, error=str(exc))
 
 
+async def hangup_call(call_uuid: str) -> None:
+    """Force-terminate a live call via ``DELETE /Call/{call_uuid}/``.
+
+    The answer XML's ``<Stream keepCallAlive="true">`` (see
+    ``channels/voice/webhook.py``) means closing our side of the WebSocket
+    does NOT end the call — this Call-API hangup is the only way to actually
+    disconnect the caller (used when a plan's usage limit is hit mid-call).
+    Best-effort: never raises, mirroring ``start_recording``.
+    """
+    if not is_configured():
+        return
+
+    url = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}/Call/{call_uuid}/"
+    try:
+        r = await _http.delete(
+            url, auth=(settings.plivo_auth_id or "", settings.plivo_auth_token or "")
+        )
+        r.raise_for_status()
+        logger.info("plivo_call_hungup", call_uuid=call_uuid)
+    except httpx.HTTPError as exc:
+        logger.warning("plivo_hangup_failed", call_uuid=call_uuid, error=str(exc))
+
+
 _INBOUND_APP_NAME = "veerox-voice-app"
 
 

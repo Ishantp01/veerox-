@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
 from apps.api.db.models import Conversation, Message
-from apps.api.deps import DbDep
+from apps.api.deps import DbDep, verify_admin_or_session
 from apps.api.schemas.conversation import ConversationOut, MessageOut
 
-router = APIRouter(prefix="/conversations", tags=["conversations"])
+router = APIRouter(
+    prefix="/conversations", tags=["conversations"], dependencies=[Depends(verify_admin_or_session)]
+)
 
 
 @router.get("/{user_id}", response_model=list[ConversationOut])

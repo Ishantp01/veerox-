@@ -24,6 +24,9 @@ dependencies = [
     "psycopg2-binary>=2.9.12",
     "python-multipart",
     "openpyxl",
+    "argon2-cffi",
+    "razorpay",
+    "email-validator",
 ]
 
 [dependency-groups]
@@ -61,6 +64,11 @@ strict = true
 [[tool.mypy.overrides]]
 # No official type stubs are published for openpyxl.
 module = "openpyxl.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# razorpay ships no py.typed marker / official stubs for this pinned version.
+module = "razorpay.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

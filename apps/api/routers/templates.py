@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 
 from apps.api.core.tools import _default_org_id
 from apps.api.db.models import WhatsAppTemplate
-from apps.api.deps import DbDep
+from apps.api.deps import DbDep, verify_admin_or_session
 from apps.api.schemas.template import TemplateCreate, TemplateOut, TemplateUpdateIn
 
-router = APIRouter(tags=["templates"])
+router = APIRouter(tags=["templates"], dependencies=[Depends(verify_admin_or_session)])
 
 
 @router.get("/whatsapp-templates", response_model=list[TemplateOut])

@@ -141,6 +141,45 @@ async def test_list_leads_filters_by_intent_substring(
     assert rows[0]["intent"] == "Book an appointment on July 8th"
 
 
+async def test_list_leads_filters_by_tag(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000010")
+    db_session.add(user)
+    await db_session.flush()
+    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", tags=["hot", "enterprise"]))
+    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", tags=["cold"]))
+    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", tags=None))
+    await db_session.commit()
+
+    response = await client.get("/admin/leads", params={"tag": "hot"}, headers=ADMIN_HEADERS)
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["tags"] == ["hot", "enterprise"]
+
+
+async def test_update_lead_sets_tags(client: AsyncClient, db_session: AsyncSession) -> None:
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000011")
+    db_session.add(user)
+    await db_session.flush()
+    lead = Lead(org_id=ORG_ID, user_id=user.id, intent="quote")
+    db_session.add(lead)
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/admin/leads/{lead.id}",
+        json={"tags": ["hot", "needs-demo"]},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tags"] == ["hot", "needs-demo"]
+
+
 async def test_list_leads_filters_by_status(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -324,8 +363,27 @@ async def test_leads_csv_includes_channel_column(
 
     assert response.status_code == 200
     lines = response.text.strip().splitlines()
-    assert lines[0] == "id,name,phone,intent,channel,status,created_at"
-    assert lines[1].split(",")[3:6] == ["quote", "voice", "new"]
+    assert lines[0] == "id,name,phone,intent,tags,channel,status,created_at"
+    assert lines[1].split(",")[3:7] == ["quote", "", "voice", "new"]
+
+
+async def test_leads_csv_includes_tags_and_filters_by_tag(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000012")
+    db_session.add(user)
+    await db_session.flush()
+    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="a", tags=["hot", "enterprise"]))
+    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="b", tags=["cold"]))
+    await db_session.commit()
+
+    response = await client.get("/admin/leads.csv", params={"tag": "hot"}, headers=ADMIN_HEADERS)
+
+    assert response.status_code == 200
+    lines = response.text.strip().splitlines()
+    assert len(lines) == 2
+    assert '"hot,enterprise"' in lines[1] or "hot,enterprise" in lines[1]
 
 
 async def test_leads_csv_filters_by_status(
@@ -346,7 +404,7 @@ async def test_leads_csv_filters_by_status(
     assert response.status_code == 200
     lines = response.text.strip().splitlines()
     assert len(lines) == 2  # header + one qualified row
-    assert lines[1].split(",")[5] == "qualified"
+    assert lines[1].split(",")[6] == "qualified"
 
 
 async def test_import_leads_csv_stages_campaign_not_leads(

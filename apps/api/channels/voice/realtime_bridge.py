@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -26,11 +27,14 @@ import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from apps.api.channels.voice import adapter as voice_adapter
+from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.config import settings
 from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND, campaign_qualification_prompt
+from apps.api.core.usage import get_monthly_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.session import AsyncSessionLocal
+from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
 
 logger = structlog.get_logger(__name__)
@@ -38,6 +42,26 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["voice"])
 
 _OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
+
+
+async def _resolve_org_id(campaign_target_id: UUID | None, raw_org_id: str | None) -> UUID | None:
+    """The org this call's usage/transcripts should be attributed to.
+
+    A campaign-driven call's org comes from the campaign itself (authoritative
+    regardless of any org_id query param) — this is what makes
+    ``workers/campaign_dialer.py``'s per-org plan-limit gate and this call's
+    actual recorded usage agree on the same org. A dashboard-placed single
+    call (``routers/admin.py``'s ``outbound_call``) has no campaign, so it
+    carries its org explicitly via ``?org_id=`` on the answer_url instead.
+    """
+    if campaign_target_id is not None:
+        async with AsyncSessionLocal() as db:
+            target = await db.get(CampaignTarget, campaign_target_id)
+            if target is not None:
+                campaign = await db.get(CallCampaign, target.campaign_id)
+                if campaign is not None:
+                    return campaign.org_id
+    return UUID(raw_org_id) if raw_org_id else None
 
 
 async def _system_instructions(campaign_target_id: UUID | None) -> str:
@@ -82,6 +106,58 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
     }
 
 
+_USAGE_CHECK_INTERVAL_SECS = 20
+
+
+async def _watch_usage_limit(
+    org_id: UUID, call_started_at: datetime, oai: Any, call_uuid: str, log: Any
+) -> None:
+    """Poll the org's plan usage while this call is live and force-hang-up
+    the instant it crosses ``max_call_minutes_per_month``.
+
+    ``core.usage.get_monthly_usage`` only sums *ended* conversations, so it
+    can't see this call's own in-progress duration — add elapsed wall-clock
+    time for the current call on top of it, otherwise a single long call
+    could run well past the limit before anything noticed.
+    """
+    log.info("voice_usage_watcher_started", org_id=str(org_id))
+    while True:
+        await asyncio.sleep(_USAGE_CHECK_INTERVAL_SECS)
+        elapsed_minutes = (datetime.now(UTC) - call_started_at).total_seconds() / 60.0
+        async with AsyncSessionLocal() as db:
+            usage = await get_monthly_usage(db, org_id)
+            over_limit = await is_over_plan_limit(
+                db, org_id, "max_call_minutes_per_month", usage.call_minutes + elapsed_minutes
+            )
+        log.info(
+            "voice_usage_watcher_check",
+            call_minutes=usage.call_minutes,
+            elapsed_minutes=elapsed_minutes,
+            over_limit=over_limit,
+        )
+        if over_limit:
+            log.info("voice_call_limit_reached", call_uuid=call_uuid)
+            try:
+                await oai.send(
+                    json.dumps(
+                        {
+                            "type": "response.create",
+                            "response": {
+                                "instructions": (
+                                    "Apologize briefly, say you have to end the "
+                                    "call now, then stop."
+                                ),
+                            },
+                        }
+                    )
+                )
+                await asyncio.sleep(4)
+            except Exception:  # noqa: BLE001
+                pass
+            await voice_plivo.hangup_call(call_uuid)
+            return
+
+
 @router.websocket("/voice/stream")
 async def voice_stream(ws: WebSocket) -> None:
     """Bridge a single Plivo call to an OpenAI Realtime session."""
@@ -90,17 +166,19 @@ async def voice_stream(ws: WebSocket) -> None:
     call_uuid = ws.query_params.get("call_uuid", "")
     raw_campaign_target_id = ws.query_params.get("campaign_target_id")
     campaign_target_id = UUID(raw_campaign_target_id) if raw_campaign_target_id else None
+    org_id = await _resolve_org_id(campaign_target_id, ws.query_params.get("org_id"))
     log = logger.bind(caller=caller, call_uuid=call_uuid)
     log.info("voice_stream_connected")
 
     conversation_id: Any = None
     try:
         user_id, conversation_id = await voice_adapter.open_voice_conversation(
-            caller, call_uuid
+            caller, call_uuid, org_id=org_id
         )
         state = voice_adapter.CallState(
             user_id=user_id,
             conversation_id=conversation_id,
+            org_id=org_id or UUID(settings.default_org_id),
             campaign_target_id=campaign_target_id,
         )
         if campaign_target_id is not None:
@@ -180,7 +258,21 @@ async def voice_stream(ws: WebSocket) -> None:
                 except Exception as exc:  # noqa: BLE001
                     log.warning("pump_openai_error", error=str(exc))
 
-            await asyncio.gather(pump_plivo_to_openai(), pump_openai_to_plivo())
+            call_started_at = datetime.now(UTC)
+            tasks = [
+                asyncio.create_task(pump_plivo_to_openai()),
+                asyncio.create_task(pump_openai_to_plivo()),
+            ]
+            if call_uuid and state.org_id:
+                tasks.append(
+                    asyncio.create_task(
+                        _watch_usage_limit(state.org_id, call_started_at, oai, call_uuid, log)
+                    )
+                )
+            _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
     except Exception as exc:  # noqa: BLE001
         log.warning("voice_stream_error", error=str(exc))
         await record_error()

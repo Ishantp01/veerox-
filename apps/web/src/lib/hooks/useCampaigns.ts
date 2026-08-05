@@ -1,10 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiFetch } from "@/lib/api";
+import { apiFetch, SESSION_TOKEN_KEY } from "@/lib/api";
 import { POLL, queryKeys } from "@/lib/query";
 import type { Campaign, CampaignCreateResult, CampaignDetail } from "@/lib/types";
-
-const TOKEN_KEY = "veerox_admin_token";
 
 /**
  * Campaign list, newest first. Polls every 5s (POLL.campaigns) so progress
@@ -49,11 +47,12 @@ export interface CreateCampaignInput {
  * same reasoning as `importLeadsFile` in leads-view.tsx.
  */
 async function createCampaign(input: CreateCampaignInput): Promise<CampaignCreateResult> {
-  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
-  const token = typeof window === "undefined" ? "" : localStorage.getItem(TOKEN_KEY) ?? "";
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8002";
+  const token =
+    typeof window === "undefined" ? "" : localStorage.getItem(SESSION_TOKEN_KEY) ?? "";
 
   const headers: Record<string, string> = {};
-  if (token) headers["X-Admin-Token"] = token;
+  if (token) headers["X-Session-Token"] = token;
 
   const form = new FormData();
   form.append("name", input.name);

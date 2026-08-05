@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 import Nav from "@/components/nav";
 import { Topbar } from "@/components/layout/topbar";
+import { UsageWarningBanner } from "@/components/billing/usage-warning-banner";
 
 /**
  * Owns the mobile-drawer open state shared by Nav (the sidebar itself) and
@@ -18,6 +19,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
       <Nav mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Topbar onMenuClick={() => setMobileNavOpen(true)} />
+        <UsageWarningBanner />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
     </div>

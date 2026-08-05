@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, BadgeCheck, CalendarClock, MessageSquare, Save, Users } from "lucide-react";
+import { ArrowLeft, BadgeCheck, CalendarClock, MessageSquare, Save, Tag, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -15,12 +15,14 @@ import {
   LEAD_QUALIFICATION_OPTIONS,
 } from "@/components/leads/qualification-badge";
 import {
+  Badge,
   Button,
   Card,
   CardContent,
   CardHeader,
   CardTitle,
   EmptyState,
+  Input,
   Label,
   Select,
   Skeleton,
@@ -72,6 +74,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
   const [qualificationStatus, setQualificationStatus] = useState<LeadQualificationStatus>("unqualified");
   const [qualificationScore, setQualificationScore] = useState("");
   const [qualificationNotes, setQualificationNotes] = useState("");
+  const [tagsInput, setTagsInput] = useState("");
 
   useEffect(() => {
     if (!lead.data) return;
@@ -81,6 +84,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
     setQualificationStatus(lead.data.qualification_status);
     setQualificationScore(lead.data.qualification_score?.toString() ?? "");
     setQualificationNotes(lead.data.qualification_notes ?? "");
+    setTagsInput((lead.data.tags ?? []).join(", "));
   }, [lead.data]);
 
   function handleSave() {
@@ -94,6 +98,24 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
       {
         onSuccess: () => {
           toast({ title: "Lead updated", variant: "success" });
+        },
+        onError: (err) => {
+          toast({ title: "Update failed", description: err.message, variant: "error" });
+        },
+      },
+    );
+  }
+
+  function handleSaveTags() {
+    const tags = tagsInput
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    updateLead.mutate(
+      { id, tags: tags.length > 0 ? tags : null },
+      {
+        onSuccess: () => {
+          toast({ title: "Tags updated", variant: "success" });
         },
         onError: (err) => {
           toast({ title: "Update failed", description: err.message, variant: "error" });
@@ -291,6 +313,49 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                     >
                       {!updateLead.isPending && <Save size={15} aria-hidden />}
                       Save qualification
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <Tag size={15} aria-hidden className="text-slate-400" />
+                    <CardTitle>Tags</CardTitle>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-col gap-4">
+                    {lead.data.tags && lead.data.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {lead.data.tags.map((t) => (
+                          <Badge key={t} variant="neutral" icon={null}>
+                            {t}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    <div>
+                      <Label htmlFor="lead-tags">Edit tags</Label>
+                      <Input
+                        id="lead-tags"
+                        value={tagsInput}
+                        onChange={(e) => setTagsInput(e.target.value)}
+                        placeholder="hot, enterprise, needs-demo"
+                      />
+                      <p className="mt-1 text-xs text-slate-400 dark:text-slate-600">
+                        Comma-separated.
+                      </p>
+                    </div>
+                    <Button
+                      variant="primary"
+                      className="self-start"
+                      loading={updateLead.isPending}
+                      onClick={handleSaveTags}
+                    >
+                      {!updateLead.isPending && <Save size={15} aria-hidden />}
+                      Save tags
                     </Button>
                   </div>
                 </CardContent>

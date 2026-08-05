@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel
+
+
+class PlanOut(BaseModel):
+    code: str
+    name: str
+    price_cents_monthly: int
+    limits: dict[str, Any]
+
+
+class PlanAdminOut(BaseModel):
+    code: str
+    name: str
+    price_cents_monthly: int
+    limits: dict[str, Any]
+    is_active: bool
+
+
+class RegenerateAdminTokenOut(BaseModel):
+    account_user_id: str
+    email: str
+    # Shown exactly once — only the SHA-256 digest is stored server-side.
+    # The previous token stops working immediately.
+    login_token: str
+
+
+class OrgAdminOut(BaseModel):
+    id: str
+    name: str
+    plan_code: str | None
+    billing_status: str
+    seat_count: int
+    admin_email: str | None
+    created_at: str
+
+
+class PlanCreateIn(BaseModel):
+    code: str
+    name: str
+    price_cents_monthly: int
+    limits: dict[str, Any]
+    is_active: bool = True
+
+
+class PlanUpdateIn(BaseModel):
+    """All fields optional — only what's sent gets changed (PATCH semantics)."""
+
+    name: str | None = None
+    price_cents_monthly: int | None = None
+    limits: dict[str, Any] | None = None
+    is_active: bool | None = None
+
+
+class BillingStatusOut(BaseModel):
+    billing_status: str
+    plan: PlanOut | None
+    seat_count: int
+    current_period_end: str | None
+
+
+class UsageMetricOut(BaseModel):
+    used: float
+    limit: float | None
+
+
+class BillingUsageOut(BaseModel):
+    period_start: str
+    call_minutes: UsageMetricOut
+    whatsapp_messages: UsageMetricOut
+
+
+class CheckoutSessionIn(BaseModel):
+    plan_code: str
+    success_url: str
+    cancel_url: str
+
+
+class CheckoutSessionOut(BaseModel):
+    # Free plans: set, frontend redirects straight there (no Razorpay
+    # involved). Paid plans: null — the frontend instead uses order_id +
+    # razorpay_key_id to launch Razorpay's embedded Checkout modal for a
+    # one-time payment, then confirms via POST /billing/verify-payment.
+    checkout_url: str | None = None
+    order_id: str | None = None
+    amount_cents: int | None = None
+    razorpay_key_id: str | None = None
+
+
+class VerifyPaymentIn(BaseModel):
+    razorpay_payment_id: str
+    razorpay_order_id: str
+    razorpay_signature: str

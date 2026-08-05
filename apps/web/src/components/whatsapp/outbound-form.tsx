@@ -155,9 +155,13 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
           });
         },
         onError: (err) => {
+          const status = (err as Error & { status?: number }).status;
           toast({
-            title: "Send failed",
-            description: err.message,
+            title: status === 402 ? "Credit limit reached" : "Send failed",
+            description:
+              status === 402
+                ? "You've used up your plan's WhatsApp messages this month. Upgrade your plan to keep sending."
+                : err.message,
             variant: "error",
           });
         },

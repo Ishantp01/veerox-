@@ -11,9 +11,19 @@ from uuid import UUID, uuid4
 import httpx
 import openpyxl
 import structlog
-from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, or_, select
 
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.whatsapp import client as wa_client
@@ -22,11 +32,18 @@ from apps.api.core.llm import chat_completion
 from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND, WHATSAPP_APPEND
 from apps.api.core.tools import (
     TOOL_DEFINITIONS,
-    _default_org_id,
     _normalize_phone,
 )
+from apps.api.core.usage import get_monthly_usage
 from apps.api.db.models import CallCampaign, CampaignTarget, Conversation, Lead, Message, User
-from apps.api.deps import DbDep, RedisDep
+from apps.api.deps import (
+    AnalyticsScopeDep,
+    DbDep,
+    RedisDep,
+    RequestOrgDep,
+    enforce_plan_limit,
+    verify_admin_or_session,
+)
 from apps.api.rate_limit import limiter
 from apps.api.redis_client import ERROR_COUNTER_KEY_FMT
 from apps.api.schemas.admin import (
@@ -61,7 +78,9 @@ from apps.api.schemas.reports import ReportsCampaignRow, ReportsTimeseriesPoint
 
 logger = structlog.get_logger(__name__)
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(
+    prefix="/admin", tags=["admin"], dependencies=[Depends(verify_admin_or_session)]
+)
 
 # Redis keys / channels used by the control plane.
 KILL_SWITCH_KEY = "veerox:kill_switch"
@@ -76,11 +95,6 @@ _OUTPUT_USD_PER_TOKEN = 10.00 / 1_000_000  # $10.00 / 1M output tokens
 _REALTIME_AUDIO_USD_PER_SECOND = 0.30 / 60.0  # $0.30 / minute of realtime audio
 
 
-def _verify_admin(x_admin_token: str | None) -> None:
-    if x_admin_token != settings.admin_token:
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-
 def _today_start_utc() -> datetime:
     return datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -89,40 +103,60 @@ def _today_start_utc() -> datetime:
 async def get_stats(
     db: DbDep,
     redis: RedisDep,
+    scope_org_id: AnalyticsScopeDep,
     x_admin_token: str | None = Header(None),
 ) -> dict:
-    _verify_admin(x_admin_token)
-
+    """Today's activity counters. Scoped to the caller's own org for a
+    normal customer, platform-wide only for the platform admin — see
+    `resolve_analytics_scope_org_id`, where `scope_org_id is None` is what
+    "count every org" means.
+    """
     today_start = _today_start_utc()
 
+    def scoped(stmt, model):  # noqa: ANN001, ANN202 — SQLAlchemy Select generics
+        return stmt if scope_org_id is None else stmt.where(model.org_id == scope_org_id)
+
     users_today_result = await db.execute(
-        select(func.count()).select_from(User).where(User.created_at >= today_start)
+        scoped(
+            select(func.count()).select_from(User).where(User.created_at >= today_start),
+            User,
+        )
     )
     users_today = users_today_result.scalar_one()
 
     calls_today_result = await db.execute(
-        select(func.count())
-        .select_from(Conversation)
-        .where(Conversation.channel == "voice", Conversation.started_at >= today_start)
+        scoped(
+            select(func.count())
+            .select_from(Conversation)
+            .where(Conversation.channel == "voice", Conversation.started_at >= today_start),
+            Conversation,
+        )
     )
     calls_today = calls_today_result.scalar_one()
 
     whatsapp_messages_today_result = await db.execute(
-        select(func.count())
-        .select_from(Message)
-        .where(Message.channel == "whatsapp", Message.created_at >= today_start)
+        scoped(
+            select(func.count())
+            .select_from(Message)
+            .where(Message.channel == "whatsapp", Message.created_at >= today_start),
+            Message,
+        )
     )
     whatsapp_messages_today = whatsapp_messages_today_result.scalar_one()
 
     leads_today_result = await db.execute(
-        select(func.count()).select_from(Lead).where(Lead.created_at >= today_start)
+        scoped(
+            select(func.count()).select_from(Lead).where(Lead.created_at >= today_start),
+            Lead,
+        )
     )
     leads_today = leads_today_result.scalar_one()
 
     leads_today_by_channel_result = await db.execute(
-        select(Lead.channel, func.count())
-        .where(Lead.created_at >= today_start)
-        .group_by(Lead.channel)
+        scoped(
+            select(Lead.channel, func.count()).where(Lead.created_at >= today_start),
+            Lead,
+        ).group_by(Lead.channel)
     )
     leads_by_channel = dict(leads_today_by_channel_result.all())
     leads_today_voice = leads_by_channel.get("voice", 0)
@@ -130,11 +164,14 @@ async def get_stats(
 
     # usd_spend_today — approximate cost over today's persisted messages.
     cost_result = await db.execute(
-        select(
-            func.coalesce(func.sum(Message.tokens_in), 0),
-            func.coalesce(func.sum(Message.tokens_out), 0),
-            func.coalesce(func.sum(Message.audio_secs), 0.0),
-        ).where(Message.created_at >= today_start)
+        scoped(
+            select(
+                func.coalesce(func.sum(Message.tokens_in), 0),
+                func.coalesce(func.sum(Message.tokens_out), 0),
+                func.coalesce(func.sum(Message.audio_secs), 0.0),
+            ).where(Message.created_at >= today_start),
+            Message,
+        )
     )
     tokens_in_sum, tokens_out_sum, audio_secs_sum = cost_result.one()
     usd_spend_today = (
@@ -146,13 +183,18 @@ async def get_stats(
     # error_count_today — Redis counter keyed by today's UTC date. Written by
     # apps.api.redis_client.record_error(), called from each channel/worker's
     # top-level catch-all (whatsapp adapter, voice realtime bridge, campaign
-    # dialer tick).
-    today_key = ERROR_COUNTER_KEY_FMT.format(date=datetime.now(UTC).date().isoformat())
-    raw_err = await redis.get(today_key)
-    try:
-        error_count_today = int(raw_err) if raw_err is not None else 0
-    except (TypeError, ValueError):
-        error_count_today = 0
+    # dialer tick). It's a single platform-wide counter with no org
+    # dimension, so it's only meaningful — and only reported — for the
+    # platform admin; a customer org would otherwise see error counts driven
+    # by other tenants' traffic.
+    error_count_today = 0
+    if scope_org_id is None:
+        today_key = ERROR_COUNTER_KEY_FMT.format(date=datetime.now(UTC).date().isoformat())
+        raw_err = await redis.get(today_key)
+        try:
+            error_count_today = int(raw_err) if raw_err is not None else 0
+        except (TypeError, ValueError):
+            error_count_today = 0
 
     return {
         "users_today": users_today,
@@ -170,17 +212,22 @@ async def get_stats(
 @router.get("/reports/timeseries", response_model=list[ReportsTimeseriesPoint])
 async def get_reports_timeseries(
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
     x_admin_token: str | None = Header(None),
     days: int = Query(30, ge=1, le=365),
 ) -> list[ReportsTimeseriesPoint]:
-    """Daily trend data for the sales-team reports page — the historical
-    counterpart to GET /admin/stats, which only ever covers "today".
+    """Daily trend data for the sales reports page — the historical
+    counterpart to GET /admin/stats, which only ever covers "today". Carries
+    the same org scoping: a customer sees only their own org's trend, the
+    platform admin sees every org's combined.
 
     Buckets by ``func.date(...)`` rather than ``date_trunc`` so the same
     query works against both Postgres (production) and SQLite (tests).
     """
-    _verify_admin(x_admin_token)
     since = datetime.now(UTC) - timedelta(days=days)
+
+    def scoped(stmt, model):  # noqa: ANN001, ANN202 — SQLAlchemy Select generics
+        return stmt if scope_org_id is None else stmt.where(model.org_id == scope_org_id)
 
     # Keys are cast to str immediately — func.date(...) returns a raw
     # `datetime.date` on Postgres, but `all_days`/the lookups below are
@@ -191,9 +238,12 @@ async def get_reports_timeseries(
         str(day_val): count_val
         for day_val, count_val in (
             await db.execute(
-                select(func.date(Conversation.started_at), func.count())
-                .where(Conversation.channel == "voice", Conversation.started_at >= since)
-                .group_by(func.date(Conversation.started_at))
+                scoped(
+                    select(func.date(Conversation.started_at), func.count()).where(
+                        Conversation.channel == "voice", Conversation.started_at >= since
+                    ),
+                    Conversation,
+                ).group_by(func.date(Conversation.started_at))
             )
         ).all()
     }
@@ -201,17 +251,23 @@ async def get_reports_timeseries(
         str(day_val): count_val
         for day_val, count_val in (
             await db.execute(
-                select(func.date(Message.created_at), func.count())
-                .where(Message.channel == "whatsapp", Message.created_at >= since)
-                .group_by(func.date(Message.created_at))
+                scoped(
+                    select(func.date(Message.created_at), func.count()).where(
+                        Message.channel == "whatsapp", Message.created_at >= since
+                    ),
+                    Message,
+                ).group_by(func.date(Message.created_at))
             )
         ).all()
     }
     leads_by_day_channel = (
         await db.execute(
-            select(func.date(Lead.created_at), Lead.channel, func.count())
-            .where(Lead.created_at >= since)
-            .group_by(func.date(Lead.created_at), Lead.channel)
+            scoped(
+                select(func.date(Lead.created_at), Lead.channel, func.count()).where(
+                    Lead.created_at >= since
+                ),
+                Lead,
+            ).group_by(func.date(Lead.created_at), Lead.channel)
         )
     ).all()
     leads_voice_by_day: dict[str, int] = {}
@@ -224,22 +280,26 @@ async def get_reports_timeseries(
         str(day_val): count_val
         for day_val, count_val in (
             await db.execute(
-                select(func.date(Lead.created_at), func.count())
-                .where(Lead.status == "qualified", Lead.created_at >= since)
-                .group_by(func.date(Lead.created_at))
+                scoped(
+                    select(func.date(Lead.created_at), func.count()).where(
+                        Lead.status == "qualified", Lead.created_at >= since
+                    ),
+                    Lead,
+                ).group_by(func.date(Lead.created_at))
             )
         ).all()
     }
     spend_by_day = (
         await db.execute(
-            select(
-                func.date(Message.created_at),
-                func.coalesce(func.sum(Message.tokens_in), 0),
-                func.coalesce(func.sum(Message.tokens_out), 0),
-                func.coalesce(func.sum(Message.audio_secs), 0.0),
-            )
-            .where(Message.created_at >= since)
-            .group_by(func.date(Message.created_at))
+            scoped(
+                select(
+                    func.date(Message.created_at),
+                    func.coalesce(func.sum(Message.tokens_in), 0),
+                    func.coalesce(func.sum(Message.tokens_out), 0),
+                    func.coalesce(func.sum(Message.audio_secs), 0.0),
+                ).where(Message.created_at >= since),
+                Message,
+            ).group_by(func.date(Message.created_at))
         )
     ).all()
     usd_spend_by_day: dict[str, float] = {}
@@ -275,13 +335,13 @@ async def get_reports_timeseries(
 @router.get("/reports/campaigns", response_model=list[ReportsCampaignRow])
 async def get_reports_campaigns(
     db: DbDep,
+    org: RequestOrgDep,
     x_admin_token: str | None = Header(None),
 ) -> list[ReportsCampaignRow]:
     """Per-campaign conversion table for the reports page — reuses
     ``_campaign_counts`` (defined further down) so this stays consistent
     with the counts already shown on the campaigns list."""
-    _verify_admin(x_admin_token)
-    org_id = _default_org_id()
+    org_id = org
     stmt = (
         select(CallCampaign)
         .where(CallCampaign.org_id == org_id)
@@ -311,13 +371,12 @@ async def get_reports_campaigns(
 @router.get("/conversations")
 async def list_conversations(
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
     x_admin_token: str | None = Header(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[dict]:
-    _verify_admin(x_admin_token)
-
     msg_count_subq = (
         select(Message.conversation_id, func.count().label("message_count"))
         .group_by(Message.conversation_id)
@@ -328,6 +387,8 @@ async def list_conversations(
         select(Conversation, func.coalesce(msg_count_subq.c.message_count, 0))
         .outerjoin(msg_count_subq, Conversation.id == msg_count_subq.c.conversation_id)
     )
+    if scope_org_id is not None:
+        stmt = stmt.where(Conversation.org_id == scope_org_id)
     if channel:
         stmt = stmt.where(Conversation.channel == channel)
     stmt = stmt.order_by(Conversation.started_at.desc()).limit(limit).offset(offset)
@@ -349,8 +410,6 @@ async def get_conversation_messages(
     db: DbDep,
     x_admin_token: str | None = Header(None),
 ) -> list[MessageOut]:
-    _verify_admin(x_admin_token)
-
     stmt = (
         select(Message)
         .where(Message.conversation_id == conversation_id)
@@ -375,8 +434,6 @@ async def summarize_conversation(
 ) -> Conversation:
     """Generate (or regenerate) an AI summary of a conversation's transcript,
     on demand — not automatic, since not every conversation needs one."""
-    _verify_admin(x_admin_token)
-
     conversation = await db.get(Conversation, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -407,20 +464,38 @@ _LEAD_STATUS_PATTERN = f"^({'|'.join(LEAD_STATUSES)})$"
 _LEAD_QUALIFICATION_STATUS_PATTERN = f"^({'|'.join(LEAD_QUALIFICATION_STATUSES)})$"
 
 
+def _lead_tag_clause(tag: str):
+    """Match a tag inside `Lead.tags` (a JSON string array) by casting to
+    text and checking for the quoted value — portable across SQLite (tests)
+    and Postgres (prod) without needing JSONB containment operators.
+    """
+    return cast(Lead.tags, String).ilike(f'%"{tag}"%')
+
+
+def _lead_search_clause(search: str):
+    """Unified search box (UI) — matches leads whose intent OR tags contain
+    the term, so one field can stand in for the separate intent/tag filters.
+    """
+    return or_(Lead.intent.ilike(f"%{search}%"), cast(Lead.tags, String).ilike(f"%{search}%"))
+
+
 @router.get("/leads")
 async def list_leads(
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
     x_admin_token: str | None = Header(None),
     intent: str | None = Query(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
     status: str | None = Query(None, pattern=_LEAD_STATUS_PATTERN),
     qualification_status: str | None = Query(None, pattern=_LEAD_QUALIFICATION_STATUS_PATTERN),
+    tag: str | None = Query(None, description="Filter by a single tag"),
+    search: str | None = Query(None, description="Match against intent or tags"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[LeadOut]:
-    _verify_admin(x_admin_token)
-
     stmt = select(Lead).order_by(Lead.created_at.desc()).limit(limit).offset(offset)
+    if scope_org_id is not None:
+        stmt = stmt.where(Lead.org_id == scope_org_id)
     if intent:
         stmt = stmt.where(Lead.intent.ilike(f"%{intent}%"))
     if channel:
@@ -429,6 +504,10 @@ async def list_leads(
         stmt = stmt.where(Lead.status == status)
     if qualification_status:
         stmt = stmt.where(Lead.qualification_status == qualification_status)
+    if tag:
+        stmt = stmt.where(_lead_tag_clause(tag))
+    if search:
+        stmt = stmt.where(_lead_search_clause(search))
 
     leads = (await db.execute(stmt)).scalars().all()
     return [LeadOut.model_validate(lead) for lead in leads]
@@ -448,8 +527,6 @@ async def sample_leads_csv(x_admin_token: str | None = Header(None)) -> Streamin
     /leads/{lead_id} so its literal path isn't swallowed by that route's
     UUID path param.
     """
-    _verify_admin(x_admin_token)
-
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["name", "phone", "channel"])
@@ -467,8 +544,6 @@ async def sample_leads_csv(x_admin_token: str | None = Header(None)) -> Streamin
 @router.get("/leads/sample.xlsx")
 async def sample_leads_xlsx(x_admin_token: str | None = Header(None)) -> StreamingResponse:
     """Same template as GET /leads/sample.csv, as an .xlsx workbook."""
-    _verify_admin(x_admin_token)
-
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Leads"
@@ -497,8 +572,6 @@ async def get_lead(
     history (dashboard/CRM view). Conversations are joined via the shared
     ``user_id`` since Lead has no direct FK to Conversation.
     """
-    _verify_admin(x_admin_token)
-
     lead = (await db.execute(select(Lead).where(Lead.id == lead_id))).scalar_one_or_none()
     if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -538,8 +611,6 @@ async def update_lead(
     leaves follow_up_at/note untouched, while `{"follow_up_at": null}`
     explicitly clears it.
     """
-    _verify_admin(x_admin_token)
-
     lead = (await db.execute(select(Lead).where(Lead.id == lead_id))).scalar_one_or_none()
     if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -561,28 +632,37 @@ async def update_lead(
 @router.get("/leads.csv")
 async def export_leads_csv(
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
     x_admin_token: str | None = Header(None),
     intent: str | None = Query(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
     status: str | None = Query(None, pattern=_LEAD_STATUS_PATTERN),
+    tag: str | None = Query(None, description="Filter by a single tag"),
+    search: str | None = Query(None, description="Match against intent or tags"),
     limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
 ) -> StreamingResponse:
-    """Same data as GET /admin/leads but rendered as CSV for download."""
-    _verify_admin(x_admin_token)
-
+    """Same data as GET /admin/leads but rendered as CSV for download —
+    including the same org scoping, so an export can't pull rows the list
+    view wouldn't show."""
     stmt = select(Lead).order_by(Lead.created_at.desc()).limit(limit).offset(offset)
+    if scope_org_id is not None:
+        stmt = stmt.where(Lead.org_id == scope_org_id)
     if intent:
         stmt = stmt.where(Lead.intent.ilike(f"%{intent}%"))
     if channel:
         stmt = stmt.where(Lead.channel == channel)
     if status:
         stmt = stmt.where(Lead.status == status)
+    if tag:
+        stmt = stmt.where(_lead_tag_clause(tag))
+    if search:
+        stmt = stmt.where(_lead_search_clause(search))
     leads = (await db.execute(stmt)).scalars().all()
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["id", "name", "phone", "intent", "channel", "status", "created_at"])
+    writer.writerow(["id", "name", "phone", "intent", "tags", "channel", "status", "created_at"])
     for lead in leads:
         writer.writerow(
             [
@@ -590,6 +670,7 @@ async def export_leads_csv(
                 lead.name or "",
                 lead.phone or "",
                 lead.intent or "",
+                ",".join(lead.tags) if lead.tags else "",
                 lead.channel or "",
                 lead.status or "",
                 lead.created_at.isoformat() if lead.created_at else "",
@@ -652,6 +733,7 @@ _DEFAULT_IMPORT_CRITERIA = (
 @router.post("/leads/import", response_model=CampaignCreateResult)
 async def import_leads_file(
     db: DbDep,
+    org: RequestOrgDep,
     file: UploadFile = File(...),
     x_admin_token: str | None = Header(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
@@ -676,8 +758,6 @@ async def import_leads_file(
     column picks its destination and the file is split into one campaign per
     channel found.
     """
-    _verify_admin(x_admin_token)
-
     filename = (file.filename or "").lower()
     raw = await file.read()
 
@@ -688,7 +768,7 @@ async def import_leads_file(
     else:
         raise HTTPException(status_code=400, detail="Only .csv or .xlsx files are supported")
 
-    org_id = _default_org_id()
+    org_id = org
     name = campaign_name or _default_campaign_name()
     crit = criteria or _DEFAULT_IMPORT_CRITERIA
 
@@ -749,6 +829,7 @@ async def import_leads_file(
 async def import_leads_bulk(
     payload: LeadBulkImportIn,
     db: DbDep,
+    org: RequestOrgDep,
     x_admin_token: str | None = Header(None),
 ) -> CampaignCreateResult:
     """Bulk-import leads from a JSON array — the programmatic counterpart to
@@ -756,9 +837,7 @@ async def import_leads_bulk(
     API rather than uploading a file. Same auto-campaign behavior as
     ``POST /admin/leads/import``.
     """
-    _verify_admin(x_admin_token)
-
-    org_id = _default_org_id()
+    org_id = org
     rows = (
         (row_num, {"phone": row.phone, "name": row.name or ""})
         for row_num, row in enumerate(payload.leads, start=1)
@@ -891,6 +970,7 @@ async def _create_campaign_from_rows(
 @router.post("/campaigns", response_model=CampaignCreateResult)
 async def create_campaign(
     db: DbDep,
+    org: RequestOrgDep,
     name: str = Form(...),
     criteria: str = Form(...),
     file: UploadFile = File(...),
@@ -904,8 +984,6 @@ async def create_campaign(
     WhatsApp dispatcher (apps/api/workers/whatsapp_dispatcher.py). Defaults
     to "voice" to match this endpoint's original (pre-WhatsApp) behavior.
     """
-    _verify_admin(x_admin_token)
-
     filename = (file.filename or "").lower()
     raw = await file.read()
     if filename.endswith(".csv"):
@@ -915,7 +993,11 @@ async def create_campaign(
     else:
         raise HTTPException(status_code=400, detail="Only .csv or .xlsx files are supported")
 
-    org_id = _default_org_id()
+    org_id = org
+    campaign_count_result = await db.execute(
+        select(func.count()).select_from(CallCampaign).where(CallCampaign.org_id == org_id)
+    )
+    await enforce_plan_limit(db, org_id, "max_campaigns", campaign_count_result.scalar_one())
     return await _create_campaign_from_rows(
         db, org_id=org_id, name=name, criteria=criteria, channel=channel, rows=rows
     )
@@ -924,11 +1006,11 @@ async def create_campaign(
 @router.get("/campaigns", response_model=list[CampaignOut])
 async def list_campaigns(
     db: DbDep,
+    org: RequestOrgDep,
     x_admin_token: str | None = Header(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
 ) -> list[CampaignOut]:
-    _verify_admin(x_admin_token)
-    org_id = _default_org_id()
+    org_id = org
     stmt = (
         select(CallCampaign)
         .where(CallCampaign.org_id == org_id)
@@ -954,8 +1036,6 @@ async def sample_campaign_csv(x_admin_token: str | None = Header(None)) -> Strea
     /campaigns/{campaign_id} so its literal path isn't swallowed by that
     route's UUID path param.
     """
-    _verify_admin(x_admin_token)
-
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["name", "phone"])
@@ -973,8 +1053,6 @@ async def sample_campaign_csv(x_admin_token: str | None = Header(None)) -> Strea
 @router.get("/campaigns/sample.xlsx")
 async def sample_campaign_xlsx(x_admin_token: str | None = Header(None)) -> StreamingResponse:
     """Same template as GET /campaigns/sample.csv, as an .xlsx workbook."""
-    _verify_admin(x_admin_token)
-
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Contacts"
@@ -999,7 +1077,6 @@ async def get_campaign(
     db: DbDep,
     x_admin_token: str | None = Header(None),
 ) -> CampaignDetailOut:
-    _verify_admin(x_admin_token)
     campaign = await db.get(CallCampaign, campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -1025,7 +1102,6 @@ async def pause_campaign(
     db: DbDep,
     x_admin_token: str | None = Header(None),
 ) -> CampaignStatusUpdateOut:
-    _verify_admin(x_admin_token)
     campaign = await db.get(CallCampaign, campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -1040,7 +1116,6 @@ async def resume_campaign(
     db: DbDep,
     x_admin_token: str | None = Header(None),
 ) -> CampaignStatusUpdateOut:
-    _verify_admin(x_admin_token)
     campaign = await db.get(CallCampaign, campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -1053,7 +1128,6 @@ async def resume_campaign(
 async def get_settings(
     x_admin_token: str | None = Header(None),
 ) -> dict:
-    _verify_admin(x_admin_token)
     return {
         "environment": settings.environment,
         "default_org_id": str(settings.default_org_id),
@@ -1071,7 +1145,6 @@ async def get_whatsapp_settings(
     second source of truth that can silently diverge from them (see the
     OPENAI_CHAT_MODEL incident in project notes).
     """
-    _verify_admin(x_admin_token)
     return WhatsAppSettingsOut(
         configured=bool(settings.meta_access_token and settings.meta_phone_number_id),
         app_id_configured=bool(settings.meta_app_id),
@@ -1093,7 +1166,6 @@ async def get_calling_settings(
     /calling/settings page — see get_whatsapp_settings for why this is
     view-only rather than editable.
     """
-    _verify_admin(x_admin_token)
     return CallingSettingsOut(
         configured=voice_plivo.is_configured(),
         auth_id_configured=bool(settings.plivo_auth_id),
@@ -1113,7 +1185,6 @@ async def get_prompts(
     x_admin_token: str | None = Header(None),
 ) -> PromptsOut:
     """Read-only view of the active system prompts."""
-    _verify_admin(x_admin_token)
     return PromptsOut(
         base=OUTBOUND_CALL_PROMPT,
         voice_append=VOICE_APPEND,
@@ -1126,7 +1197,6 @@ async def get_tools(
     x_admin_token: str | None = Header(None),
 ) -> list[dict]:
     """Read-only view of the registered tool schemas."""
-    _verify_admin(x_admin_token)
     return TOOL_DEFINITIONS
 
 
@@ -1134,18 +1204,24 @@ async def get_tools(
 async def get_escalations(
     db: DbDep,
     redis: RedisDep,
+    scope_org_id: AnalyticsScopeDep,
     x_admin_token: str | None = Header(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
 ) -> dict:
-    """Return recent escalation Lead rows plus the live human_handoff_queue."""
-    _verify_admin(x_admin_token)
-
+    """Return recent escalation Lead rows plus the live human_handoff_queue,
+    both scoped to the caller's own org unless they're the platform admin.
+    The queue is a single Redis list with no per-org key, so it's filtered
+    in Python on the `org_id` each entry carries (written by
+    core/tools.py's transfer_to_human).
+    """
     stmt = (
         select(Lead)
         .where(Lead.intent == "escalation")
         .order_by(Lead.created_at.desc())
         .limit(50)
     )
+    if scope_org_id is not None:
+        stmt = stmt.where(Lead.org_id == scope_org_id)
     if channel:
         stmt = stmt.where(Lead.channel == channel)
     lead_rows = (await db.execute(stmt)).scalars().all()
@@ -1164,6 +1240,11 @@ async def get_escalations(
             parsed = entry
         if channel and isinstance(parsed, dict) and parsed.get("channel") != channel:
             continue
+        if scope_org_id is not None:
+            # A non-dict entry (plain-string fallback above) has no org to
+            # check, so it can only be shown platform-wide.
+            if not isinstance(parsed, dict) or parsed.get("org_id") != str(scope_org_id):
+                continue
         queue.append(parsed)
 
     return {"recent_leads": recent_leads, "queue": queue}
@@ -1180,6 +1261,7 @@ async def outbound_whatsapp(
     request: Request,
     payload: OutboundWhatsappIn,
     db: DbDep,
+    org: RequestOrgDep,
     x_admin_token: str | None = Header(None),
 ) -> OutboundWhatsappOut:
     """Send an outbound WhatsApp message and persist the assistant turn.
@@ -1189,9 +1271,9 @@ async def outbound_whatsapp(
     ``wa_client.send_text``. When the token is unset we keep the stub
     behaviour — useful for local development without Meta credentials.
     """
-    _verify_admin(x_admin_token)
-
-    org_id = UUID(settings.default_org_id)
+    org_id = org
+    usage = await get_monthly_usage(db, org_id)
+    await enforce_plan_limit(db, org_id, "max_whatsapp_messages_per_month", usage.whatsapp_messages)
 
     # Find or create the recipient user under the default org.
     user_stmt = select(User).where(User.org_id == org_id, User.phone == payload.phone)
@@ -1296,6 +1378,8 @@ async def outbound_whatsapp(
 async def outbound_call(
     request: Request,
     payload: OutboundCallIn,
+    db: DbDep,
+    org: RequestOrgDep,
     x_admin_token: str | None = Header(None),
 ) -> OutboundCallOut:
     """Place an outbound voice call via Plivo.
@@ -1309,7 +1393,9 @@ async def outbound_call(
     When Plivo answers it fetches ``{PUBLIC_BASE_URL}/voice/answer`` — see
     ``channels/voice/webhook.py`` — which currently speaks a test message.
     """
-    _verify_admin(x_admin_token)
+    org_id = org
+    usage = await get_monthly_usage(db, org_id)
+    await enforce_plan_limit(db, org_id, "max_call_minutes_per_month", usage.call_minutes)
 
     if not voice_plivo.is_configured():
         logger.warning(
@@ -1319,7 +1405,12 @@ async def outbound_call(
         )
         return OutboundCallOut(call_sid=f"STUB-{uuid4()}", status="stub")
 
-    answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer"
+    # org_id travels on the answer_url so the realtime bridge attributes this
+    # call's usage to the org that actually placed it (see
+    # channels/voice/webhook.py / realtime_bridge.py) rather than the
+    # platform default — this is the one call site with no campaign context
+    # to resolve org from instead.
+    answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer?org_id={org_id}"
     try:
         result = await voice_plivo.initiate_call(payload.to_phone, answer_url)
     except httpx.HTTPError as exc:
@@ -1347,7 +1438,6 @@ async def set_kill_switch(
     x_admin_token: str | None = Header(None),
 ) -> KillSwitchOut:
     """Engage or release the global kill switch."""
-    _verify_admin(x_admin_token)
     if payload.enabled:
         await redis.set(KILL_SWITCH_KEY, "1")
     else:
@@ -1361,6 +1451,5 @@ async def get_kill_switch(
     x_admin_token: str | None = Header(None),
 ) -> KillSwitchOut:
     """Return current kill-switch state for the frontend banner."""
-    _verify_admin(x_admin_token)
     value = await redis.get(KILL_SWITCH_KEY)
     return KillSwitchOut(enabled=value is not None)

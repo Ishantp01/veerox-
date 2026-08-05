@@ -11,8 +11,9 @@ For architecture decisions, data-flow diagrams, and the full build plan, see [`l
 ```bash
 cp .env.example .env
 # Fill in OPENAI_API_KEY, PLIVO_*, META_*, and ADMIN_TOKEN
+# ADMIN_TOKEN doubles as the owner-org dashboard login token
 
-./scripts/dev.sh          # boots Postgres + Redis, runs migrations, starts FastAPI on :8001
+./scripts/dev.sh          # boots Postgres + Redis, runs migrations, starts FastAPI on :8002
 
 # In a separate terminal — admin dashboard on :3001
 cd apps/web && npm install && npm run dev

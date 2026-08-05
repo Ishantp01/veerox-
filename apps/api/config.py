@@ -1,20 +1,49 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # Resolve `.env` from the repository root so the API loads the same
+    # settings no matter which working directory uvicorn is launched from.
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore"
+    )
 
     # App
     environment: str = "dev"
     log_level: str = "INFO"
     default_org_id: str = "00000000-0000-0000-0000-000000000001"
-    admin_token: str = "change-me-before-prod"
+    # Required secret for the shared owner-org admin path. Keep it in the
+    # repository root `.env` or the process environment; do not rely on a
+    # placeholder fallback.
+    admin_token: str
+
+    # Dashboard login sessions (server-side, stored in Redis — see
+    # apps/api/deps.py's get_current_user). Feature-flagged during rollout so
+    # existing X-Admin-Token access keeps working until session auth is
+    # verified end-to-end; see docs/plan for phase sequencing.
+    session_ttl_seconds: int = 60 * 60 * 24 * 14
+    require_session_auth: bool = True
+
+    # Razorpay billing
+    razorpay_key_id: str | None = None
+    razorpay_key_secret: str | None = None
+    razorpay_webhook_secret: str | None = None
 
     # Database / Redis
     database_url: str = "postgresql+asyncpg://veerox:veerox@localhost:5432/veerox"
     redis_url: str = "redis://localhost:6379/0"
+    # SQLAlchemy's echo=True logs every statement synchronously — measured
+    # adding multiple seconds per request locally (blocking console I/O, made
+    # worse by non-ASCII AI-generated text tripping the stdlib logging
+    # module's cp1252 encode fallback on every line). Opt-in only, never
+    # tied to `environment` again.
+    db_echo: bool = False
     test_database_url: str = "sqlite+aiosqlite:///:memory:"
 
     # OpenAI

@@ -9,6 +9,9 @@ export interface LeadFilters {
   channel?: "voice" | "whatsapp";
   status?: LeadStatus;
   qualification_status?: LeadQualificationStatus;
+  tag?: string;
+  /** Unified search box — matches against intent OR tags. */
+  search?: string;
 }
 
 function buildLeadsPath(filters?: LeadFilters): string {
@@ -17,6 +20,8 @@ function buildLeadsPath(filters?: LeadFilters): string {
   if (filters?.channel) params.set("channel", filters.channel);
   if (filters?.status) params.set("status", filters.status);
   if (filters?.qualification_status) params.set("qualification_status", filters.qualification_status);
+  if (filters?.tag) params.set("tag", filters.tag);
+  if (filters?.search) params.set("search", filters.search);
   const qs = params.toString();
   return qs ? `/admin/leads?${qs}` : "/admin/leads";
 }
@@ -58,6 +63,7 @@ export interface LeadUpdateInput {
   qualification_status?: LeadQualificationStatus;
   qualification_score?: number | null;
   qualification_notes?: string | null;
+  tags?: string[] | null;
 }
 
 /**

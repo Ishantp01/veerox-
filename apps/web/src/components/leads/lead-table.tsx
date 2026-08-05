@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useRouter } from "next/navigation";
-import { Table, TableHeader, TableRow, TableCell } from "@/components/ui";
+import { Badge, Table, TableHeader, TableRow, TableCell } from "@/components/ui";
 import { formatDateTime, formatPhone } from "@/lib/format";
 import type { Lead } from "@/lib/types";
 import { IntentBadge } from "./intent-badge";
@@ -29,6 +29,7 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
             <TableHeader>Name</TableHeader>
             <TableHeader>Phone</TableHeader>
             <TableHeader>Intent</TableHeader>
+            <TableHeader>Tags</TableHeader>
             <TableHeader>Status</TableHeader>
             <TableHeader>Created</TableHeader>
           </TableRow>
@@ -69,6 +70,19 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
                 </TableCell>
                 <TableCell>
                   <IntentBadge intent={lead.intent} />
+                </TableCell>
+                <TableCell>
+                  {lead.tags && lead.tags.length > 0 ? (
+                    <div className="flex flex-wrap gap-1">
+                      {lead.tags.map((tag) => (
+                        <Badge key={tag} variant="neutral" icon={null}>
+                          {tag}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-slate-400 dark:text-slate-600">—</span>
+                  )}
                 </TableCell>
                 <TableCell>
                   <StatusBadge status={lead.status} />

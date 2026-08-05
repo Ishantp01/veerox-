@@ -5,8 +5,10 @@ import { QueryClient } from "@tanstack/react-query";
  * - retry transient failures 3x with backoff, but never retry an auth
  *   failure (401/403) — a bad/missing admin token will never succeed on
  *   retry, so retrying just delays the error state the user needs to see
- * - don't refetch on window focus (operators keep the tab open; polling covers freshness)
- * - 30s staleTime baseline; individual queries override refetchInterval for live data
+ * - refetch on window focus — tab-switching back to a stale page (e.g.
+ *   after a call ended or a limit was hit elsewhere) should show current
+ *   state immediately rather than waiting on the next poll tick
+ * - 10s staleTime baseline; individual queries override refetchInterval for live data
  */
 export function makeQueryClient(): QueryClient {
   return new QueryClient({
@@ -18,8 +20,8 @@ export function makeQueryClient(): QueryClient {
           return failureCount < 3;
         },
         retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
-        refetchOnWindowFocus: false,
-        staleTime: 30_000,
+        refetchOnWindowFocus: true,
+        staleTime: 10_000,
       },
     },
   });
@@ -63,10 +65,11 @@ export const queryKeys = {
  * Centralized so the cadence is consistent and tunable in one place.
  */
 export const POLL = {
-  liveConversation: 5_000,
-  escalations: 5_000,
-  dashboard: 10_000,
-  conversationList: 10_000,
-  leads: 30_000,
-  campaigns: 5_000,
+  liveConversation: 3_000,
+  escalations: 3_000,
+  dashboard: 4_000,
+  conversationList: 4_000,
+  leads: 10_000,
+  campaigns: 3_000,
+  billing: 4_000,
 } as const;

@@ -30,6 +30,8 @@ const DATE_RANGES = [
   { label: "Last 7 days", days: 7 },
   { label: "Last 30 days", days: 30 },
   { label: "Last 90 days", days: 90 },
+  { label: "Last 180 days", days: 180 },
+  { label: "Last 365 days", days: 365 },
 ] as const;
 
 function SummaryStat({ label, value }: { label: string; value: string | number }) {
@@ -73,8 +75,23 @@ export default function ReportsPage() {
     setExporting(true);
     try {
       const stamp = new Date().toISOString().slice(0, 10);
-      await downloadCsv("/admin/leads.csv?status=qualified", `qualified-leads-${stamp}.csv`);
-      toast({ title: "Export started", description: "Your CSV download is ready.", variant: "success" });
+      const { rows } = await downloadCsv(
+        "/admin/leads.csv?status=qualified",
+        `qualified-leads-${stamp}.csv`
+      );
+      if (rows === 0) {
+        toast({
+          title: "Nothing to export",
+          description: "No leads have reached the qualified stage yet.",
+          variant: "info",
+        });
+        return;
+      }
+      toast({
+        title: "Export started",
+        description: `Your CSV download is ready (${rows} leads).`,
+        variant: "success",
+      });
     } catch (err: unknown) {
       toast({
         title: "Export failed",

@@ -22,6 +22,9 @@ import {
   LogIn,
   LogOut,
   X,
+  CreditCard,
+  Building2,
+  UsersRound,
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -47,6 +50,9 @@ interface NavGroup {
 // their channel root; the conversations/leads/escalations/settings pages that
 // used to be flat top-level items now live as secondary nav within each
 // channel section (see components/layout/section-tabs.tsx).
+// Base groups every user sees. The "Platform" group (Organizations
+// directory) is appended only for superuser sessions — see Nav() below —
+// since it lists every org on the platform, not just the caller's own.
 const GROUPS: NavGroup[] = [
   {
     label: "Main",
@@ -87,11 +93,22 @@ const GROUPS: NavGroup[] = [
   },
   {
     label: "Settings",
-    items: [{ href: "/settings", label: "Settings", Icon: Settings }],
+    items: [
+      { href: "/team", label: "Team", Icon: UsersRound },
+      { href: "/settings", label: "Settings", Icon: Settings },
+      { href: "/billing", label: "Billing", Icon: CreditCard },
+    ],
   },
 ];
 
-const ALL_HREFS = GROUPS.flatMap((group) => group.items.map((item) => item.href));
+const PLATFORM_GROUP: NavGroup = {
+  label: "Platform",
+  items: [{ href: "/organizations", label: "Organizations", Icon: Building2 }],
+};
+
+const ALL_HREFS = [...GROUPS, PLATFORM_GROUP].flatMap((group) =>
+  group.items.map((item) => item.href)
+);
 
 // Exact match on a group root ("/", "/calling", "/whatsapp", ...) — otherwise
 // every sub-route would also match its section's own root by prefix. A root
@@ -112,9 +129,23 @@ export interface NavProps {
   onCloseMobile?: () => void;
 }
 
+// Org-level pages (team management, billing, connection settings) — visible
+// to the org's admin, hidden for a plain "member" so they land on
+// their working tools only, not the org's back office.
+const MEMBER_RESTRICTED_HREFS = new Set(["/team", "/settings", "/billing"]);
+
 export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
   const pathname = usePathname();
-  const { isAuthenticated, logout } = useAuth();
+  const { isAuthenticated, logout, user } = useAuth();
+  const isRestrictedMember = user?.role === "member" && !user?.is_superuser;
+  const groups = (user?.is_superuser ? [...GROUPS, PLATFORM_GROUP] : GROUPS)
+    .map((group) => ({
+      ...group,
+      items: isRestrictedMember
+        ? group.items.filter((item) => !MEMBER_RESTRICTED_HREFS.has(item.href))
+        : group.items,
+    }))
+    .filter((group) => group.items.length > 0);
 
   // Close the mobile drawer whenever the route changes instead of requiring
   // a second tap.
@@ -162,7 +193,7 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
 
         {/* Grouped nav */}
         <div className="flex flex-1 flex-col gap-5">
-          {GROUPS.map((group) => (
+          {groups.map((group) => (
             <div key={group.label}>
               <p className="px-3 mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">
                 {group.label}

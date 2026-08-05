@@ -43,6 +43,7 @@ class CallState:
 
     user_id: UUID
     conversation_id: UUID
+    org_id: UUID
     plivo_stream_id: str | None = None
     pending_user_transcript: str | None = None
     # Set only for calls placed by the campaign dialer — lets qualify_lead
@@ -86,15 +87,22 @@ async def _get_or_create_user(db: AsyncSession, org_id: UUID, phone: str) -> Use
     return user
 
 
-async def open_voice_conversation(caller: str, call_uuid: str | None = None) -> tuple[UUID, UUID]:
+async def open_voice_conversation(
+    caller: str, call_uuid: str | None = None, org_id: UUID | None = None
+) -> tuple[UUID, UUID]:
     """Resolve the caller to a User and open a fresh voice Conversation.
 
     Owns its own session and commits immediately so transcripts persisted
     later (during the call) have a committed parent row to attach to.
     ``call_uuid`` is stored so the recording-finished webhook (which only
     reports CallUUID) can find its way back to this row.
+
+    ``org_id`` comes from the answer_url's query string (see
+    ``routers/admin.py``'s ``outbound_call``, which is the only caller that
+    knows which dashboard org actually placed this call — a genuine inbound
+    call, with no such context, falls back to the platform's default org).
     """
-    org_id = UUID(settings.default_org_id)
+    org_id = org_id or UUID(settings.default_org_id)
     phone = _normalize_phone(caller)
     async with AsyncSessionLocal() as db:
         user = await _get_or_create_user(db, org_id, phone)
@@ -206,7 +214,7 @@ async def _persist_voice_turn(state: CallState, assistant_text: str) -> None:
             db,
             conversation_id=state.conversation_id,
             user_id=state.user_id,
-            org_id=UUID(settings.default_org_id),
+            org_id=state.org_id,
             channel="voice",
             user_text=user_text,
             assistant_text=assistant_text,

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 
 from apps.api.core.tools import _default_org_id
 from apps.api.db.models import FollowUpRule, FollowUpTask
-from apps.api.deps import DbDep
+from apps.api.deps import DbDep, verify_admin_or_session
 from apps.api.schemas.follow_up import (
     FollowUpRuleCreate,
     FollowUpRuleOut,
@@ -15,7 +15,7 @@ from apps.api.schemas.follow_up import (
     FollowUpTaskOut,
 )
 
-router = APIRouter(tags=["follow-ups"])
+router = APIRouter(tags=["follow-ups"], dependencies=[Depends(verify_admin_or_session)])
 
 
 @router.get("/follow-up-rules", response_model=list[FollowUpRuleOut])

@@ -47,6 +47,6 @@ USER app
 # Add venv binaries to PATH
 ENV PATH="/app/.venv/bin:$PATH"
 
-EXPOSE 8001
+EXPOSE 8002
 
-CMD ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8002"]
