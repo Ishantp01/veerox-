@@ -40,6 +40,7 @@ export interface Lead {
   org_id: string;
   user_id: string;
   contact_id: string | null;
+  conversation_id: string | null;
   name: string | null;
   phone: string | null;
   intent: string | null;
@@ -174,6 +175,8 @@ export interface HandoffQueueEntry {
   user_id: string | null;
   org_id: string;
   channel?: "voice" | "whatsapp" | null;
+  phone?: string | null;
+  conversation_id?: string | null;
   requested_at: string;
 }
 

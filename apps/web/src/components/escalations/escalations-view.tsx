@@ -24,23 +24,20 @@ function leadToEscalation(lead: Lead): Escalation {
     user_phone: lead.phone,
     reason: typeof meta.reason === "string" ? meta.reason : "—",
     urgency: typeof meta.urgency === "string" ? meta.urgency : "medium",
-    conversation_id: null, // Lead rows don't carry conversation_id today.
+    conversation_id: lead.conversation_id,
   };
 }
 
-/**
- * Map a live Redis-queue entry into the unified row shape. The queue entry
- * doesn't carry a phone (only user_id), so phone shows as "—".
- */
+/** Map a live Redis-queue entry into the unified row shape. */
 function queueEntryToEscalation(entry: HandoffQueueEntry): Escalation {
   return {
     source: "queue",
     created_at: entry.requested_at,
     user_id: entry.user_id,
-    user_phone: null,
+    user_phone: entry.phone ?? null,
     reason: entry.reason,
     urgency: entry.urgency ?? "medium",
-    conversation_id: null,
+    conversation_id: entry.conversation_id ?? null,
   };
 }
 

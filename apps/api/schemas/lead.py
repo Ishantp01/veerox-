@@ -40,6 +40,7 @@ class LeadOut(BaseModel):
     org_id: UUID
     user_id: UUID
     contact_id: UUID | None
+    conversation_id: UUID | None
     name: str | None
     phone: str | None
     intent: str | None

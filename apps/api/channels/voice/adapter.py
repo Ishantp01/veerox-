@@ -180,6 +180,7 @@ async def _dispatch_realtime_tool(
     user_id: UUID,
     org_id: UUID,
     campaign_target_id: UUID | None = None,
+    conversation_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Run a Realtime function call through the shared ``DISPATCH_TABLE``.
 
@@ -207,6 +208,7 @@ async def _dispatch_realtime_tool(
             org_id=org_id,
             channel="voice",
             campaign_target_id=campaign_target_id,
+            conversation_id=conversation_id,
             **args,
         )
     return result if isinstance(result, dict) else {"status": "ok", "result": str(result)}
@@ -285,6 +287,7 @@ async def handle_openai_event(
             state.user_id,
             state.org_id,
             campaign_target_id=state.campaign_target_id,
+            conversation_id=state.conversation_id,
         )
         # Feed the tool result back into the session, then ask the model to
         # continue speaking with that result in context.

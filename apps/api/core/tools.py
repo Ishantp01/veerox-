@@ -371,6 +371,7 @@ async def transfer_to_human(
     user_id: UUID | None = None,
     org_id: UUID | None = None,
     channel: str | None = None,
+    conversation_id: UUID | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     """Escalate to a human: enqueue in Redis and write an escalation ``Lead``.
@@ -378,9 +379,17 @@ async def transfer_to_human(
     The ``Lead`` row is only written when the agent layer supplies a
     ``user_id`` (the LLM args don't carry one). When absent, the Redis
     enqueue still happens so operators see the request on the dashboard.
+    ``conversation_id`` is likewise agent-layer context (see module
+    docstring) — threaded through so the Escalations dashboard can link
+    straight to the transcript.
     """
     org_id = org_id or _default_org_id()
     redis = get_redis_pool()
+
+    phone: str | None = None
+    if user_id is not None:
+        user = await db.get(User, user_id)
+        phone = user.phone if user is not None else None
 
     payload = {
         "reason": reason,
@@ -388,6 +397,8 @@ async def transfer_to_human(
         "user_id": str(user_id) if user_id else None,
         "org_id": str(org_id),
         "channel": channel,
+        "phone": phone,
+        "conversation_id": str(conversation_id) if conversation_id else None,
         "requested_at": datetime.now(UTC).isoformat(),
     }
     # redis-py stubs type rpush as `Awaitable[int] | int` because the same
@@ -400,6 +411,8 @@ async def transfer_to_human(
         lead = Lead(
             org_id=org_id,
             user_id=user_id,
+            phone=phone,
+            conversation_id=conversation_id,
             intent="escalation",
             channel=channel,
             metadata_={"reason": reason, "urgency": urgency},

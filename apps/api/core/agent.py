@@ -144,6 +144,7 @@ async def _dispatch_tool(
     org_id: UUID,
     channel: Channel,
     campaign_target_id: UUID | None = None,
+    conversation_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Look up the handler, parse args, run it. Returns a JSON-serialisable dict.
 
@@ -175,6 +176,7 @@ async def _dispatch_tool(
         org_id=org_id,
         channel=channel,
         campaign_target_id=campaign_target_id,
+        conversation_id=conversation_id,
         **args,
     )
     if not isinstance(result, dict):
@@ -280,7 +282,13 @@ class AgentCore:
 
             for tool_call in result.tool_calls:
                 tool_result = await _dispatch_tool(
-                    db, tool_call, user_id, org_id, channel, campaign_target_id=campaign_target_id
+                    db,
+                    tool_call,
+                    user_id,
+                    org_id,
+                    channel,
+                    campaign_target_id=campaign_target_id,
+                    conversation_id=conversation.id,
                 )
                 messages.append(
                     {

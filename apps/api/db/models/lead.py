@@ -21,6 +21,13 @@ class Lead(Base):
     contact_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
     )
+    # Set only by transfer_to_human — the conversation the escalation was
+    # raised from, so operators can jump straight to the transcript.
+    # Other Lead-creation paths (capture_lead, campaign qualification) leave
+    # this null.
+    conversation_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     intent: Mapped[str | None] = mapped_column(String(128), nullable=True)

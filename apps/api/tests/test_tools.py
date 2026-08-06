@@ -21,7 +21,15 @@ from apps.api.core.tools import (
     qualify_lead,
     transfer_to_human,
 )
-from apps.api.db.models import Appointment, CallCampaign, CampaignTarget, Lead, Org, User
+from apps.api.db.models import (
+    Appointment,
+    CallCampaign,
+    CampaignTarget,
+    Conversation,
+    Lead,
+    Org,
+    User,
+)
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -163,18 +171,24 @@ async def test_transfer_to_human_enqueues_and_writes_lead(
     db_session.add(user)
     await db_session.commit()
 
+    conversation = Conversation(org_id=ORG_ID, user_id=user.id, channel="voice")
+    db_session.add(conversation)
+    await db_session.commit()
+
     result = await transfer_to_human(
         db_session,
         reason="needs human help",
         urgency="high",
         user_id=user.id,
         channel="voice",
+        conversation_id=conversation.id,
     )
 
     assert result["status"] == "ok"
     assert result["lead_id"]  # was written because user_id was supplied
 
-    # Lead row exists with intent=escalation and metadata captured.
+    # Lead row exists with intent=escalation, metadata, phone, and
+    # conversation_id all captured.
     rows = (
         await db_session.execute(
             select(Lead).where(Lead.intent == "escalation")
@@ -183,14 +197,19 @@ async def test_transfer_to_human_enqueues_and_writes_lead(
     assert len(rows) == 1
     assert rows[0].metadata_ == {"reason": "needs human help", "urgency": "high"}
     assert rows[0].channel == "voice"
+    assert rows[0].phone == "+910000000099"
+    assert rows[0].conversation_id == conversation.id
 
-    # Redis queue got a JSON entry, tagged with the channel.
+    # Redis queue got a JSON entry, tagged with the channel, phone, and
+    # conversation_id.
     queue = fake_redis.lists.get("human_handoff_queue", [])
     assert len(queue) == 1
     entry = json.loads(queue[0])
     assert entry["reason"] == "needs human help"
     assert entry["urgency"] == "high"
     assert entry["channel"] == "voice"
+    assert entry["phone"] == "+910000000099"
+    assert entry["conversation_id"] == str(conversation.id)
 
 
 async def test_transfer_to_human_without_user_id_only_enqueues(
