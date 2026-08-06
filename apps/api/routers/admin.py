@@ -535,6 +535,8 @@ async def sample_leads_xlsx(x_admin_token: str | None = Header(None)) -> Streami
     sheet.append(["name", "phone", "channel"])
     for row in _SAMPLE_IMPORT_ROWS:
         sheet.append([row["name"], row["phone"], row["channel"]])
+    for cell in sheet["B"][1:]:
+        cell.number_format = "@"
 
     buf = io.BytesIO()
     workbook.save(buf)
@@ -1044,6 +1046,8 @@ async def sample_campaign_xlsx(x_admin_token: str | None = Header(None)) -> Stre
     sheet.append(["name", "phone"])
     for row in _SAMPLE_CAMPAIGN_ROWS:
         sheet.append([row["name"], row["phone"]])
+    for cell in sheet["B"][1:]:
+        cell.number_format = "@"
 
     buf = io.BytesIO()
     workbook.save(buf)
