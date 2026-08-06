@@ -16,7 +16,7 @@ import {
 } from "@/components/ui";
 import { useCreateContact } from "@/lib/hooks";
 
-const EMPTY = { name: "", phone: "", email: "", company: "" };
+const EMPTY = { name: "", phone: "+91", email: "", company: "" };
 
 export function NewContactDialog() {
   const [open, setOpen] = useState(false);

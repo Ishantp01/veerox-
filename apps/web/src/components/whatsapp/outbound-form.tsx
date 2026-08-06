@@ -89,7 +89,7 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
   } = useForm<WhatsAppForm>({
     resolver: zodResolver(whatsappSchema),
     defaultValues: {
-      phone: defaultPhone,
+      phone: defaultPhone || "+91",
       mode: "text",
       text: "",
       templateName: "",

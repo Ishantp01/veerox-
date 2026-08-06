@@ -41,10 +41,11 @@ export default function CallingDialPage() {
     formState: { errors },
   } = useForm<DialForm>({
     resolver: zodResolver(dialSchema),
-    defaultValues: { to_phone: "" },
+    defaultValues: { to_phone: "+91" },
   });
 
   const onSubmit = handleSubmit((values) => {
+    
     setCallSid(null);
     outboundCall.mutate(
       { to_phone: values.to_phone },
