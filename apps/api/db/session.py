@@ -16,6 +16,12 @@ engine = create_async_engine(
     # instead: proactively refresh connections on a timer rather than
     # pinging (and re-paying a round trip for) every single checkout.
     pool_recycle=270,
+    # SQLAlchemy defaults (5 + 10 overflow) get pinched under concurrent
+    # dashboard polling (multiple open tabs, several 3-4s intervals each).
+    # Neon's pooled endpoint fronts this with PgBouncer, so raising the
+    # app-side pool doesn't multiply real Postgres connections.
+    pool_size=10,
+    max_overflow=20,
     # Neon's pooled endpoint runs PgBouncer in transaction-pooling mode, which
     # is incompatible with asyncpg's server-side prepared statement cache.
     connect_args={"statement_cache_size": 0},

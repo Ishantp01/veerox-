@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,20 @@ from apps.api.db.models import AccountUser, Org, OrgMembership
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 ADMIN_HEADERS = {"X-Admin-Token": settings.admin_token}
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _stub_plivo_sms(monkeypatch: pytest.MonkeyPatch) -> None:
+    """provision_org SMS's the login token via the real Plivo API — stub it
+    so these tests never make a live network call. Individual tests can
+    still override this via monkeypatch for their own scenarios.
+    """
+    from apps.api.routers import auth as auth_module
+
+    async def _fake_send_sms(to_e164: str, text: str) -> tuple[dict, str]:
+        return {"message_uuid": "fake"}, "plivo"
+
+    monkeypatch.setattr(auth_module.voice_failover, "send_sms", _fake_send_sms)
 
 
 async def _seed_org(db: AsyncSession) -> Org:
@@ -36,18 +51,20 @@ async def account_with_membership(db_session: AsyncSession) -> tuple[AccountUser
 async def test_provision_org_creates_org_user_and_membership(client: AsyncClient) -> None:
     response = await client.post(
         "/auth/provision-org",
-        json={"org_name": "Acme", "email": "founder@acme.com"},
+        json={"org_name": "Acme", "email": "founder@acme.com", "mobile": "+919876543210"},
         headers=ADMIN_HEADERS,
     )
     assert response.status_code == 201
     body = response.json()
     assert body["email"] == "founder@acme.com"
     assert body["login_token"]
+    assert body["sms_sent"] is True
 
 
 async def test_provision_org_requires_admin(client: AsyncClient) -> None:
     response = await client.post(
-        "/auth/provision-org", json={"org_name": "Acme", "email": "founder@acme.com"}
+        "/auth/provision-org",
+        json={"org_name": "Acme", "email": "founder@acme.com", "mobile": "+919876543210"},
     )
     assert response.status_code == 403
 
@@ -57,7 +74,11 @@ async def test_provision_org_rejects_duplicate_email(
 ) -> None:
     response = await client.post(
         "/auth/provision-org",
-        json={"org_name": "Another Org", "email": "admin@example.com"},
+        json={
+            "org_name": "Another Org",
+            "email": "admin@example.com",
+            "mobile": "+919876543210",
+        },
         headers=ADMIN_HEADERS,
     )
     assert response.status_code == 400

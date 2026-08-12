@@ -23,6 +23,12 @@ export interface ProvisionOrgInput {
   org_name: string;
   email: string;
   full_name?: string;
+  mobile: string;
+  // Optional dedicated numbers for this org. Omit to use the platform
+  // default calling/WhatsApp numbers (see apps/api/schemas/auth.py's
+  // ProvisionOrgIn) — can be set later from the org's own settings pages.
+  plivo_phone_number?: string;
+  whatsapp_phone_number_id?: string;
 }
 
 export interface ProvisionOrgResult {
@@ -32,6 +38,8 @@ export interface ProvisionOrgResult {
   // Shown exactly once — hand both this and the email to the organization
   // so its admin can log in (see apps/api/routers/auth.py's provision_org).
   login_token: string;
+  // True when the login token was also SMS'd to the mobile number.
+  sms_sent: boolean;
 }
 
 /** POST /auth/provision-org → ProvisionOrgResult (platform-admin only) */

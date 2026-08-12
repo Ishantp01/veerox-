@@ -44,7 +44,11 @@ class CallState:
     user_id: UUID
     conversation_id: UUID
     org_id: UUID
-    plivo_stream_id: str | None = None
+    # "plivo" or "twilio" — which outbound WS message dialect to speak back
+    # (see _send_media/_send_clear below). Set from the ?provider= query
+    # param webhook.py put on the stream URL.
+    provider: str = "plivo"
+    stream_id: str | None = None
     pending_user_transcript: str | None = None
     # Set only for calls placed by the campaign dialer — lets qualify_lead
     # find the CampaignTarget row to update (see core/tools.py).
@@ -230,18 +234,50 @@ async def _persist_voice_turn(state: CallState, assistant_text: str) -> None:
     state.pending_user_transcript = None
 
 
-async def _send_plivo(ws: WebSocket, message: dict[str, Any]) -> None:
+async def _send_media(ws: WebSocket, state: CallState, payload: str) -> None:
+    """Send one chunk of model audio back down the provider's WS.
+
+    Plivo and Twilio Media Streams use different envelopes for the same
+    mu-law payload — Plivo names the event ``playAudio`` and repeats the
+    codec on every message; Twilio names it ``media`` and requires the
+    ``streamSid`` it handed us in its own ``start`` event on every message
+    instead.
+    """
+    if state.provider == "twilio":
+        message = {
+            "event": "media",
+            "streamSid": state.stream_id,
+            "media": {"payload": payload},
+        }
+    else:
+        message = {
+            "event": "playAudio",
+            "media": {
+                "contentType": "audio/x-mulaw",
+                "sampleRate": 8000,
+                "payload": payload,
+            },
+        }
+    await ws.send_text(json.dumps(message))
+
+
+async def _send_clear(ws: WebSocket, state: CallState) -> None:
+    """Barge-in: tell the provider to drop buffered playback audio."""
+    if state.provider == "twilio":
+        message = {"event": "clear", "streamSid": state.stream_id}
+    else:
+        message = {"event": "clearAudio"}
     await ws.send_text(json.dumps(message))
 
 
 async def handle_openai_event(
     event: dict[str, Any],
-    plivo_ws: WebSocket,
+    call_ws: WebSocket,
     oai_ws: Any,
     state: CallState,
     log: Any,
 ) -> None:
-    """Translate one OpenAI Realtime event into Plivo actions / tool calls."""
+    """Translate one OpenAI Realtime event into provider actions / tool calls."""
     etype = event.get("type")
 
     # GA renamed several beta event types (response.audio.delta ->
@@ -250,22 +286,11 @@ async def handle_openai_event(
     if etype in ("response.audio.delta", "response.output_audio.delta"):
         delta = event.get("delta")
         if delta:
-            await _send_plivo(
-                plivo_ws,
-                {
-                    "event": "playAudio",
-                    "media": {
-                        "contentType": "audio/x-mulaw",
-                        "sampleRate": 8000,
-                        "payload": delta,
-                    },
-                },
-            )
+            await _send_media(call_ws, state, delta)
 
     elif etype == "input_audio_buffer.speech_started":
-        # Barge-in: the caller started talking over the agent. Tell Plivo to
-        # drop buffered playback so we don't talk over them.
-        await _send_plivo(plivo_ws, {"event": "clearAudio"})
+        # Barge-in: the caller started talking over the agent.
+        await _send_clear(call_ws, state)
 
     elif etype == "conversation.item.input_audio_transcription.completed":
         state.pending_user_transcript = (event.get("transcript") or "").strip()

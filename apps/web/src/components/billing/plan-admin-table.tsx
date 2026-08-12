@@ -20,7 +20,7 @@ function formatRupees(cents: number): string {
 function LimitCell({ plan, field }: { plan: AdminPlan; field: string }) {
   const updatePlan = useUpdatePlan();
   const { toast } = useToast();
-  const value = plan.limits[field] ?? 0;
+  const value = Number(plan.limits[field] ?? 0);
 
   function handleBlur(e: React.FocusEvent<HTMLInputElement>) {
     const next = Number(e.target.value);
@@ -41,6 +41,32 @@ function LimitCell({ plan, field }: { plan: AdminPlan; field: string }) {
       defaultValue={value}
       onBlur={handleBlur}
       className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm dark:border-slate-700 dark:bg-slate-900"
+    />
+  );
+}
+
+function BooleanLimitCell({ plan, field }: { plan: AdminPlan; field: string }) {
+  const updatePlan = useUpdatePlan();
+  const { toast } = useToast();
+  const checked = plan.limits[field] === true;
+
+  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+    updatePlan.mutate(
+      { code: plan.code, limits: { ...plan.limits, [field]: e.target.checked } },
+      {
+        onError: (err) =>
+          toast({ title: "Could not update limit", description: err.message, variant: "error" }),
+      }
+    );
+  }
+
+  return (
+    <input
+      type="checkbox"
+      checked={checked}
+      onChange={handleChange}
+      className="h-4 w-4 rounded border-slate-300 text-primary-500 dark:border-slate-700"
+      aria-label={`${field} for ${plan.name}`}
     />
   );
 }
@@ -80,9 +106,11 @@ export function PlanAdminTable() {
             <TableRow isHeader>
               <TableHeader>Plan</TableHeader>
               <TableHeader>Price</TableHeader>
+              <TableHeader>Team members</TableHeader>
               <TableHeader>Campaigns</TableHeader>
               <TableHeader>Call min/mo</TableHeader>
               <TableHeader>WhatsApp msgs/mo</TableHeader>
+              <TableHeader>Automated follow-ups</TableHeader>
               <TableHeader className="text-right">Actions</TableHeader>
             </TableRow>
           </thead>
@@ -99,6 +127,9 @@ export function PlanAdminTable() {
                 </TableCell>
                 <TableCell>{formatRupees(plan.price_cents_monthly)}</TableCell>
                 <TableCell>
+                  <LimitCell plan={plan} field="max_seats" />
+                </TableCell>
+                <TableCell>
                   <LimitCell plan={plan} field="max_campaigns" />
                 </TableCell>
                 <TableCell>
@@ -106,6 +137,9 @@ export function PlanAdminTable() {
                 </TableCell>
                 <TableCell>
                   <LimitCell plan={plan} field="max_whatsapp_messages_per_month" />
+                </TableCell>
+                <TableCell>
+                  <BooleanLimitCell plan={plan} field="automated_followups" />
                 </TableCell>
                 <TableCell className="text-right">
                   <Button

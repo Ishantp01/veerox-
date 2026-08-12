@@ -26,16 +26,18 @@ _http: httpx.AsyncClient = httpx.AsyncClient(timeout=10.0)
 _GRAPH_BASE = "https://graph.facebook.com"
 
 
-def _graph_url(path: str) -> str:
+def _graph_url(path: str, phone_number_id: str | None = None) -> str:
     """Build a Graph API URL pinned to the configured version + phone-number id.
 
     ``path`` is anything that follows the phone-number id (e.g. ``"/messages"``
     or ``""``). Pass ``path=""`` for endpoints that *are* the phone-number id
-    itself.
+    itself. ``phone_number_id`` overrides the platform-default
+    ``settings.meta_phone_number_id`` — used to send from an org's own
+    dedicated WhatsApp number (see ``Org.whatsapp_phone_number_id``).
     """
     return (
         f"{_GRAPH_BASE}/{settings.meta_graph_api_version}"
-        f"/{settings.meta_phone_number_id}{path}"
+        f"/{phone_number_id or settings.meta_phone_number_id}{path}"
     )
 
 
@@ -43,13 +45,17 @@ def _auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {settings.meta_access_token}"}
 
 
-async def send_text(to_e164: str, body: str) -> dict[str, Any]:
+async def send_text(to_e164: str, body: str, phone_number_id: str | None = None) -> dict[str, Any]:
     """Send a plain-text WhatsApp message via the Graph API.
+
+    ``phone_number_id``, when given, sends from an org's own dedicated
+    WhatsApp number instead of the platform default (see
+    ``Org.whatsapp_phone_number_id``).
 
     Returns the raw JSON response (which contains the outbound message id).
     Raises ``httpx.HTTPStatusError`` on a non-2xx response.
     """
-    url = _graph_url("/messages")
+    url = _graph_url("/messages", phone_number_id)
     payload = {
         "messaging_product": "whatsapp",
         "to": to_e164,
@@ -82,6 +88,7 @@ async def send_template(
     template_name: str,
     language_code: str = "en_US",
     body_params: list[str] | None = None,
+    phone_number_id: str | None = None,
 ) -> dict[str, Any]:
     """Send a pre-approved WhatsApp **template** message via the Graph API.
 
@@ -92,12 +99,13 @@ async def send_template(
 
     ``body_params`` fills the ``{{1}}``, ``{{2}}`` ... placeholders in the
     template body, in order. Pass ``None`` for templates with no variables
-    (e.g. the built-in ``hello_world``).
+    (e.g. the built-in ``hello_world``). ``phone_number_id`` overrides the
+    platform default the same way it does for ``send_text``.
 
     Returns the raw JSON response (contains the outbound message id). Raises
     ``httpx.HTTPStatusError`` on a non-2xx response.
     """
-    url = _graph_url("/messages")
+    url = _graph_url("/messages", phone_number_id)
     template: dict[str, Any] = {
         "name": template_name,
         "language": {"code": language_code},
@@ -189,16 +197,18 @@ async def download_media(media_id: str) -> bytes:
     return bin_r.content
 
 
-async def mark_read(message_id: str, typing: bool = False) -> None:
+async def mark_read(message_id: str, typing: bool = False, phone_number_id: str | None = None) -> None:
     """POST a read receipt for an inbound message.
 
     With ``typing=True`` the receipt also shows a typing indicator in the
     user's chat (auto-dismissed by Meta after ~25s or when we send a reply).
+    ``phone_number_id`` overrides the platform default the same way it does
+    for ``send_text``.
 
     Best-effort: failures are logged but do NOT raise — losing a read
     receipt should not poison the surrounding reply pipeline.
     """
-    url = _graph_url("/messages")
+    url = _graph_url("/messages", phone_number_id)
     payload: dict[str, Any] = {
         "messaging_product": "whatsapp",
         "status": "read",

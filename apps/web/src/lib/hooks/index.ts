@@ -27,7 +27,9 @@ export {
 } from "./useLeads";
 export { useEscalations, type EscalationFilters } from "./useEscalations";
 export { useKillSwitch, useSetKillSwitch } from "./useKillSwitch";
-export { usePrompts, useTools, useWhatsAppSettings, useCallingSettings } from "./useConfig";
+export { useWhatsAppSettings, useCallingSettings } from "./useConfig";
+export { useScript, useUpdateScript } from "./useScript";
+export { useOrgNumbers, useUpdateOrgNumbers } from "./useOrgNumbers";
 export {
   useOutboundCall,
   useOutboundWhatsApp,
@@ -99,3 +101,10 @@ export {
   type UpdatePlanInput,
 } from "./useAdminPlans";
 export { useAdminOrgs, type AdminOrg } from "./useAdminOrgs";
+export {
+  usePlatformSettings,
+  useUpdatePlatformSettings,
+  type UpdatePlatformSettingsInput,
+} from "./useAdminSettings";
+export { useSocialLinks } from "./useSocialLinks";
+export { useHelpDeskChat, type HelpDeskChatInput, type HelpDeskChatResult } from "./useHelpDesk";

@@ -15,9 +15,14 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
+import httpx
+import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
+from apps.api.channels.voice import failover as voice_failover
+from apps.api.channels.voice.number_provider import resolve_calling_number
 from apps.api.config import settings
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import create_session, delete_session
@@ -26,6 +31,8 @@ from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
 from apps.api.deps import CurrentUserDep, DbDep, RedisDep, verify_platform_admin
 from apps.api.schemas.auth import LoginIn, MeOut, ProvisionOrgIn, ProvisionOrgOut, SessionOut
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -97,19 +104,47 @@ async def provision_org(
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=400, detail="Email already registered")
 
+    # The entered calling number is checked against both the Plivo and
+    # Twilio accounts and stored under whichever one owns it (see
+    # channels/voice/number_provider.py::detect_provider) so
+    # channels/voice/failover.py dials from — and can fail over around —
+    # the correct provider for this org.
+    plivo_number: str | None = None
+    twilio_number: str | None = None
+    if payload.plivo_phone_number:
+        digits, provider = await resolve_calling_number(payload.plivo_phone_number)
+        if provider == "twilio":
+            twilio_number = digits
+        else:
+            plivo_number = digits
+
     # No plan assigned yet on purpose: `Org.plan_id is None` is exactly the
     # signal the frontend's dashboard layout gates on to force new orgs
     # through /billing (choose-a-plan, even the free one) before anything
     # else in the app becomes reachable. See DashboardLayout in apps/web.
-    org = Org(name=payload.org_name)
+    org = Org(
+        name=payload.org_name,
+        plivo_phone_number=plivo_number,
+        twilio_phone_number=twilio_number,
+        whatsapp_phone_number_id=payload.whatsapp_phone_number_id.strip()
+        if payload.whatsapp_phone_number_id
+        else None,
+    )
     db.add(org)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409, detail="One of these numbers is already assigned to another org."
+        )
 
     login_token = generate_login_token()
     account_user = AccountUser(
         email=payload.email,
         token_hash=hash_token(login_token),
         full_name=payload.full_name,
+        mobile=payload.mobile,
     )
     db.add(account_user)
     await db.flush()
@@ -124,11 +159,24 @@ async def provision_org(
     )
     await db.commit()
 
+    sms_sent = False
+    try:
+        await voice_failover.send_sms(
+            payload.mobile,
+            f"Welcome to Veerox. Your login token: {login_token}",
+        )
+        sms_sent = True
+    except httpx.HTTPError as exc:
+        # Best-effort: the token is also shown once in the dashboard
+        # response, so a failed SMS doesn't block org creation.
+        logger.warning("provision_org_sms_failed", mobile=payload.mobile, error=str(exc))
+
     return ProvisionOrgOut(
         org_id=org.id,
         account_user_id=account_user.id,
         email=account_user.email,
         login_token=login_token,
+        sms_sent=sms_sent,
     )
 
 

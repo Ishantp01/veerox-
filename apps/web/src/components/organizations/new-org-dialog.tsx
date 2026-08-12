@@ -16,7 +16,14 @@ import {
 } from "@/components/ui";
 import { useProvisionOrg, type ProvisionOrgResult } from "@/lib/hooks/useAdminOrgs";
 
-const EMPTY = { orgName: "", email: "", fullName: "" };
+const EMPTY = {
+  orgName: "",
+  email: "",
+  fullName: "",
+  mobile: "",
+  plivoNumber: "",
+  whatsappNumberId: "",
+};
 
 /**
  * Platform-admin-only: creates a brand new org + admin account. There's no
@@ -40,6 +47,9 @@ export function NewOrgDialog() {
         org_name: form.orgName.trim(),
         email: form.email.trim(),
         full_name: form.fullName.trim() || undefined,
+        mobile: form.mobile.trim(),
+        plivo_phone_number: form.plivoNumber.trim() || undefined,
+        whatsapp_phone_number_id: form.whatsappNumberId.trim() || undefined,
       },
       {
         onSuccess: (res) => {
@@ -77,6 +87,11 @@ export function NewOrgDialog() {
               <p>
                 Give both of these to <strong>{result.email}</strong> — the token is their only way to
                 sign in, and it won&apos;t be shown again.
+              </p>
+              <p className="text-sm text-slate-500">
+                {result.sms_sent
+                  ? "The token was also texted to the mobile number provided."
+                  : "Could not send the token by SMS — share it manually."}
               </p>
               <div>
                 <Label>Email</Label>
@@ -128,6 +143,39 @@ export function NewOrgDialog() {
                   value={form.fullName}
                   onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))}
                   placeholder="Optional"
+                />
+              </div>
+              <div>
+                <Label htmlFor="admin-mobile">Admin mobile number *</Label>
+                <Input
+                  id="admin-mobile"
+                  type="tel"
+                  required
+                  value={form.mobile}
+                  onChange={(e) => setForm((f) => ({ ...f, mobile: e.target.value }))}
+                  placeholder="+919876543210"
+                />
+              </div>
+              <div>
+                <Label htmlFor="org-plivo-number">Dedicated calling number</Label>
+                <Input
+                  id="org-plivo-number"
+                  type="tel"
+                  value={form.plivoNumber}
+                  onChange={(e) => setForm((f) => ({ ...f, plivoNumber: e.target.value }))}
+                  placeholder="Optional — leave blank to use the default number"
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  Either a Plivo or a Twilio number — we detect which provider owns it automatically.
+                </p>
+              </div>
+              <div>
+                <Label htmlFor="org-whatsapp-number">Dedicated WhatsApp number ID</Label>
+                <Input
+                  id="org-whatsapp-number"
+                  value={form.whatsappNumberId}
+                  onChange={(e) => setForm((f) => ({ ...f, whatsappNumberId: e.target.value }))}
+                  placeholder="Optional — leave blank to use the default number"
                 />
               </div>
             </DialogBody>

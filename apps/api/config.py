@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     plivo_auth_id: str | None = None
     plivo_auth_token: str | None = None
     plivo_phone_number: str | None = None
+    # Twilio — outbound-call failover only (see channels/voice/failover.py).
+    # Unset by default; when absent, calling just runs on Plivo alone with no
+    # backup, same as before this existed.
+    twilio_account_sid: str | None = None
+    twilio_auth_token: str | None = None
+    twilio_phone_number: str | None = None
     # How many campaign calls the dialer will have in flight at once. Keep
     # below the Plivo account's concurrent-call cap (verified >= 6 by manual
     # test on 2026-07-16); defaults conservative since raising it costs

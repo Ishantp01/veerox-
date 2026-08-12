@@ -14,6 +14,10 @@ class TeamMemberOut(BaseModel):
     is_active: bool
     invited_at: datetime | None = None
     joined_at: datetime | None = None
+    # True for the org's original admin (created via /auth/provision-org, no
+    # inviter) — excluded from the plan's max_seats count, so a limit of N
+    # means "the owner plus up to N invited teammates", not N total.
+    is_owner: bool = False
 
 
 class InviteMemberIn(BaseModel):

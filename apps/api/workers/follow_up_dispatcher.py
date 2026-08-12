@@ -28,6 +28,7 @@ from sqlalchemy import select, update
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.core.agent import _is_kill_switch_active
 from apps.api.db.models import FollowUpRule, FollowUpTask, Lead
+from apps.api.db.models.org import Org
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.redis_client import record_error
 
@@ -165,8 +166,13 @@ async def _execute_task(task_id: UUID) -> None:
         rule = await db.get(FollowUpRule, task.rule_id) if task.rule_id else None
         message = rule.message_template if rule else (lead.follow_up_note or _DEFAULT_FOLLOW_UP_MESSAGE)
 
+        # Send from this org's own dedicated WhatsApp number when it has one
+        # (see Org.whatsapp_phone_number_id), falling back to the platform default.
+        org_record = await db.get(Org, lead.org_id)
+        phone_number_id = org_record.whatsapp_phone_number_id if org_record else None
+
     try:
-        await wa_client.send_text(lead.phone, message)
+        await wa_client.send_text(lead.phone, message, phone_number_id=phone_number_id)
     except httpx.HTTPError:
         logger.warning("follow_up_dispatcher_send_failed", task_id=str(task_id))
         await _resolve_task(task_id, "failed")

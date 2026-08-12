@@ -6,7 +6,7 @@ export interface Plan {
   code: string;
   name: string;
   price_cents_monthly: number;
-  limits: Record<string, number>;
+  limits: Record<string, number | boolean>;
 }
 
 export interface BillingStatus {

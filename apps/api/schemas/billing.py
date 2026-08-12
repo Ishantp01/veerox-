@@ -94,3 +94,19 @@ class VerifyPaymentIn(BaseModel):
     razorpay_payment_id: str
     razorpay_order_id: str
     razorpay_signature: str
+
+
+class PlatformSettingsOut(BaseModel):
+    help_desk_script: str | None
+    social_links: dict[str, str]
+
+
+class PlatformSettingsUpdateIn(BaseModel):
+    """All fields optional — only what's sent gets changed (PATCH semantics)."""
+
+    help_desk_script: str | None = None
+    social_links: dict[str, str] | None = None
+
+
+class SocialLinksOut(BaseModel):
+    social_links: dict[str, str]

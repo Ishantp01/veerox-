@@ -27,6 +27,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { useBillingStatus } from "@/lib/hooks/useBilling";
 
 interface NavItem {
   href: string;
@@ -132,16 +133,34 @@ export interface NavProps {
 // their working tools only, not the org's back office.
 const MEMBER_RESTRICTED_HREFS = new Set(["/team", "/settings", "/billing"]);
 
+// Hrefs gated behind a plan feature flag (a key in Plan.limits) rather than
+// a role — hidden whenever the org's current plan doesn't have that flag
+// set to true. Mirrors MEMBER_RESTRICTED_HREFS's filtering, just keyed off
+// billing data instead of the user's role.
+const PLAN_FEATURE_HREFS: Record<string, string> = {
+  "/automation/follow-ups": "automated_followups",
+};
+
 export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
   const pathname = usePathname();
   const { isAuthenticated, logout, user } = useAuth();
+  const billing = useBillingStatus();
   const isRestrictedMember = user?.role === "member" && !user?.is_superuser;
+  // Orgs with no plan resolved yet (still loading, or genuinely planless —
+  // the dashboard layout's onboarding gate handles that case) keep every
+  // feature-gated item visible rather than flashing it away and back.
+  const planLimits = billing.data?.plan?.limits;
   const groups = (user?.is_superuser ? [...GROUPS, PLATFORM_GROUP] : GROUPS)
     .map((group) => ({
       ...group,
-      items: isRestrictedMember
-        ? group.items.filter((item) => !MEMBER_RESTRICTED_HREFS.has(item.href))
-        : group.items,
+      items: group.items.filter((item) => {
+        if (isRestrictedMember && MEMBER_RESTRICTED_HREFS.has(item.href)) return false;
+        const feature = PLAN_FEATURE_HREFS[item.href];
+        if (feature && !user?.is_superuser && planLimits && planLimits[feature] !== true) {
+          return false;
+        }
+        return true;
+      }),
     }))
     .filter((group) => group.items.length > 0);
 
@@ -189,8 +208,13 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
           </button>
         </div>
 
-        {/* Grouped nav */}
-        <div className="flex flex-1 flex-col gap-5">
+        {/* Grouped nav — not flex-1: on tall viewports with a short list
+            (e.g. a plain member with several items hidden, or a superuser
+            with just a couple of platform items) forcing this to fill all
+            remaining height left a large dead gap above the footer. Login
+            /footer now follow directly in normal flow instead of
+            being pinned to the very bottom. */}
+        <div className="flex flex-col gap-5">
           {groups.map((group) => (
             <div key={group.label}>
               <p className="px-3 mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">
@@ -224,38 +248,41 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
           ))}
         </div>
 
-        {/* Login/Logout */}
-        {isAuthenticated ? (
-          <button
-            type="button"
-            onClick={logout}
-            className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-white/[0.04] dark:hover:text-slate-200"
-          >
-            <LogOut size={16} className="shrink-0" />
-            Logout
-          </button>
-        ) : (
-          <Link
-            href="/login"
-            className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150 ${
-              pathname === "/login"
-                ? "bg-primary-50 text-slate-900 dark:bg-white/[0.08] dark:text-white"
-                : "text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-white/[0.04] dark:hover:text-slate-200"
-            }`}
-          >
-            <LogIn size={16} className="shrink-0" />
-            Login
-          </Link>
-        )}
+        {/* Login/Logout + Footer — follows the nav list directly instead of
+            being pinned to the bottom, so a short list doesn't leave a big
+            dead gap above it (see the comment on the nav-list div above). */}
+        <div className="mt-6">
+          {isAuthenticated ? (
+            <button
+              type="button"
+              onClick={logout}
+              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-white/[0.04] dark:hover:text-slate-200"
+            >
+              <LogOut size={16} className="shrink-0" />
+              Logout
+            </button>
+          ) : (
+            <Link
+              href="/login"
+              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150 ${
+                pathname === "/login"
+                  ? "bg-primary-50 text-slate-900 dark:bg-white/[0.08] dark:text-white"
+                  : "text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-white/[0.04] dark:hover:text-slate-200"
+              }`}
+            >
+              <LogIn size={16} className="shrink-0" />
+              Login
+            </Link>
+          )}
 
-        {/* Footer */}
-        <div className="px-3 py-3 mt-2 border-t border-slate-200 flex items-center gap-2.5 dark:border-white/[0.06]">
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-slate-300 to-slate-400 text-[11px] font-bold text-slate-700 ring-1 ring-slate-200 dark:from-slate-700 dark:to-slate-800 dark:text-slate-300 dark:ring-white/10">
-            VX
-          </div>
-          <div>
-            <p className="text-xs font-medium text-slate-500 dark:text-slate-400">v0.1.0 · Dev Mode</p>
-            <p className="text-[11px] text-slate-400 dark:text-slate-600">Voice + WhatsApp Agent</p>
+          <div className="px-3 py-3 mt-2 border-t border-slate-200 flex items-center gap-2.5 dark:border-white/[0.06]">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-slate-300 to-slate-400 text-[11px] font-bold text-slate-700 ring-1 ring-slate-200 dark:from-slate-700 dark:to-slate-800 dark:text-slate-300 dark:ring-white/10">
+              VX
+            </div>
+            <div>
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400">v0.1.0 · Dev Mode</p>
+              <p className="text-[11px] text-slate-400 dark:text-slate-600">Voice + WhatsApp Agent</p>
+            </div>
           </div>
         </div>
       </nav>

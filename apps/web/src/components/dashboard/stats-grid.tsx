@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import {
   AlertTriangle,
   DollarSign,
@@ -10,7 +11,6 @@ import {
 } from "lucide-react";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { StatCard } from "@/components/dashboard/stat-card";
-import { StatsTrendChart } from "@/components/dashboard/stats-trend-chart";
 import { QuickActions } from "@/components/dashboard/quick-actions";
 import { RecentActivity } from "@/components/dashboard/recent-activity";
 import { SystemStatus } from "@/components/dashboard/system-status";
@@ -19,6 +19,11 @@ import { Skeleton } from "@/components/ui";
 import { useStats } from "@/lib/hooks";
 import { formatUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+const StatsTrendChart = dynamic(
+  () => import("@/components/dashboard/stats-trend-chart").then((m) => m.StatsTrendChart),
+  { ssr: false, loading: () => <Skeleton className="mb-6 h-56 w-full" /> },
+);
 
 function DashboardSkeleton({ count }: { count: number }) {
   return (

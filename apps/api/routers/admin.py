@@ -4,7 +4,7 @@ import csv
 import io
 import json
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -24,8 +24,11 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from sqlalchemy import String, case, cast, func, or_, select
+from sqlalchemy.exc import IntegrityError
 
+from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice import plivo_client as voice_plivo
+from apps.api.channels.voice.number_provider import resolve_calling_number as _resolve_calling_number
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.llm import chat_completion
@@ -35,7 +38,7 @@ from apps.api.core.tools import (
     _normalize_phone,
 )
 from apps.api.core.usage import get_monthly_usage
-from apps.api.db.models import CallCampaign, CampaignTarget, Conversation, Lead, Message, User
+from apps.api.db.models import CallCampaign, CampaignTarget, Conversation, Lead, Message, Org, User
 from apps.api.deps import (
     AnalyticsScopeDep,
     DbDep,
@@ -52,9 +55,13 @@ from apps.api.schemas.admin import (
     KillSwitchOut,
     OutboundCallIn,
     OutboundCallOut,
+    OrgNumbersIn,
+    OrgNumbersOut,
     OutboundWhatsappIn,
     OutboundWhatsappOut,
     PromptsOut,
+    ScriptIn,
+    ScriptOut,
     WhatsAppSettingsOut,
 )
 from apps.api.schemas.campaign import (
@@ -333,10 +340,11 @@ async def get_reports_campaigns(
         .order_by(CallCampaign.created_at.desc())
     )
     campaigns = (await db.execute(stmt)).scalars().all()
+    counts_by_id = await _campaign_counts_bulk(db, [c.id for c in campaigns])
 
     rows: list[ReportsCampaignRow] = []
     for campaign in campaigns:
-        counts = await _campaign_counts(db, campaign.id)
+        counts = counts_by_id[campaign.id]
         qualification_rate = (
             counts.qualified / counts.completed if counts.completed else None
         )
@@ -855,23 +863,47 @@ _E164_PATTERN = re.compile(r"^\+\d{8,15}$")
 
 
 async def _campaign_counts(db: DbDep, campaign_id: UUID) -> CampaignCounts:
+    counts = await _campaign_counts_bulk(db, [campaign_id])
+    return counts.get(campaign_id, CampaignCounts(pending=0, calling=0, completed=0, failed=0, qualified=0))
+
+
+async def _campaign_counts_bulk(
+    db: DbDep, campaign_ids: Sequence[UUID]
+) -> dict[UUID, CampaignCounts]:
+    """Batched counts for multiple campaigns in 2 queries total instead of
+    2 queries per campaign — used by list/report endpoints that render a
+    row per campaign."""
+    if not campaign_ids:
+        return {}
     status_stmt = (
-        select(CampaignTarget.status, func.count())
-        .where(CampaignTarget.campaign_id == campaign_id)
-        .group_by(CampaignTarget.status)
+        select(CampaignTarget.campaign_id, CampaignTarget.status, func.count())
+        .where(CampaignTarget.campaign_id.in_(campaign_ids))
+        .group_by(CampaignTarget.campaign_id, CampaignTarget.status)
     )
-    tally = dict((await db.execute(status_stmt)).all())
-    qualified_stmt = select(func.count()).where(
-        CampaignTarget.campaign_id == campaign_id, CampaignTarget.qualified.is_(True)
+    tallies: dict[UUID, dict[str, int]] = {cid: {} for cid in campaign_ids}
+    for cid, status, count in (await db.execute(status_stmt)).all():
+        tallies[cid][status] = count
+
+    qualified_stmt = (
+        select(CampaignTarget.campaign_id, func.count())
+        .where(
+            CampaignTarget.campaign_id.in_(campaign_ids),
+            CampaignTarget.qualified.is_(True),
+        )
+        .group_by(CampaignTarget.campaign_id)
     )
-    qualified = (await db.execute(qualified_stmt)).scalar_one()
-    return CampaignCounts(
-        pending=tally.get("pending", 0),
-        calling=tally.get("calling", 0),
-        completed=tally.get("completed", 0),
-        failed=tally.get("failed", 0),
-        qualified=qualified,
-    )
+    qualified_by_id = dict((await db.execute(qualified_stmt)).all())
+
+    return {
+        cid: CampaignCounts(
+            pending=tallies[cid].get("pending", 0),
+            calling=tallies[cid].get("calling", 0),
+            completed=tallies[cid].get("completed", 0),
+            failed=tallies[cid].get("failed", 0),
+            qualified=qualified_by_id.get(cid, 0),
+        )
+        for cid in campaign_ids
+    }
 
 
 def _campaign_out(campaign: CallCampaign, counts: CampaignCounts) -> CampaignOut:
@@ -1006,7 +1038,8 @@ async def list_campaigns(
     if channel:
         stmt = stmt.where(CallCampaign.channel == channel)
     campaigns = (await db.execute(stmt)).scalars().all()
-    return [_campaign_out(c, await _campaign_counts(db, c.id)) for c in campaigns]
+    counts_by_id = await _campaign_counts_bulk(db, [c.id for c in campaigns])
+    return [_campaign_out(c, counts_by_id[c.id]) for c in campaigns]
 
 
 _SAMPLE_CAMPAIGN_ROWS = [
@@ -1189,6 +1222,115 @@ async def get_tools(
     return TOOL_DEFINITIONS
 
 
+@router.get("/script", response_model=ScriptOut)
+async def get_script(
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> ScriptOut:
+    """The calling org's active script — its own override if set, else the
+    platform default (`OUTBOUND_CALL_PROMPT`)."""
+    record = await db.get(Org, org)
+    if record is not None and record.script:
+        return ScriptOut(script=record.script, is_default=False)
+    return ScriptOut(script=OUTBOUND_CALL_PROMPT.strip(), is_default=True)
+
+
+@router.put("/script", response_model=ScriptOut)
+async def update_script(
+    body: ScriptIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> ScriptOut:
+    """Set (or, with an empty body, clear) the calling org's script override.
+    Both the WhatsApp and voice channels pick this up on their next turn/call
+    (see `core/agent.py::_system_prompt_for` and
+    `channels/voice/realtime_bridge.py::_system_instructions`)."""
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    record.script = body.script.strip() if body.script and body.script.strip() else None
+    await db.commit()
+    if record.script:
+        return ScriptOut(script=record.script, is_default=False)
+    return ScriptOut(script=OUTBOUND_CALL_PROMPT.strip(), is_default=True)
+
+
+@router.get("/org-numbers", response_model=OrgNumbersOut)
+async def get_org_numbers(
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> OrgNumbersOut:
+    """The calling org's own WhatsApp/calling numbers — which inbound
+    messages/calls on those numbers get attributed to this org instead of
+    the platform default (see channels/whatsapp/adapter.py and
+    channels/voice/webhook.py)."""
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    return OrgNumbersOut(
+        whatsapp_phone_number_id=record.whatsapp_phone_number_id,
+        plivo_phone_number=record.plivo_phone_number,
+        twilio_phone_number=record.twilio_phone_number,
+    )
+
+
+@router.put("/org-numbers", response_model=OrgNumbersOut)
+async def update_org_numbers(
+    body: OrgNumbersIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> OrgNumbersOut:
+    """Set (or, with an empty string, clear) this org's WhatsApp/calling
+    numbers. Each field is independently optional — a field omitted from the
+    request body (as opposed to sent as `null`/`""`) is left untouched, so
+    the calling/WhatsApp settings pages can each save just their own number
+    without clobbering the other.
+
+    The calling number is auto-detected against both the Plivo and Twilio
+    accounts (see channels/voice/number_provider.py::detect_provider) and
+    stored under whichever provider owns it — clearing the other column, so
+    an org only ever has a dedicated number on one provider at a time.
+    Stored digits-only either way, matching how channels/voice/webhook.py
+    normalizes the provider's `To` param before comparing.
+    """
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    fields = body.model_dump(exclude_unset=True)
+    if "whatsapp_phone_number_id" in fields:
+        value = fields["whatsapp_phone_number_id"]
+        record.whatsapp_phone_number_id = value.strip() if value else None
+    if "plivo_phone_number" in fields:
+        value = fields["plivo_phone_number"]
+        if not value:
+            record.plivo_phone_number = None
+            record.twilio_phone_number = None
+        else:
+            digits, provider = await _resolve_calling_number(value)
+            if provider == "twilio":
+                record.plivo_phone_number = None
+                record.twilio_phone_number = digits
+            else:
+                record.plivo_phone_number = digits
+                record.twilio_phone_number = None
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409, detail="One of these numbers is already assigned to another org."
+        )
+    return OrgNumbersOut(
+        whatsapp_phone_number_id=record.whatsapp_phone_number_id,
+        plivo_phone_number=record.plivo_phone_number,
+        twilio_phone_number=record.twilio_phone_number,
+    )
+
+
 @router.get("/escalations")
 async def get_escalations(
     db: DbDep,
@@ -1316,6 +1458,11 @@ async def outbound_whatsapp(
     # customer-service window (free-form text raises Meta error 131047); inside
     # the window, plain text is fine. The caller chooses by supplying
     # template_name (template) or text (free-form) — enforced by the schema.
+    # Send from this org's own dedicated WhatsApp number when it has one
+    # (see Org.whatsapp_phone_number_id), falling back to the platform default.
+    org_record = await db.get(Org, org_id)
+    phone_number_id = org_record.whatsapp_phone_number_id if org_record else None
+
     try:
         if payload.template_name:
             graph_response = await wa_client.send_template(
@@ -1323,10 +1470,13 @@ async def outbound_whatsapp(
                 template_name=payload.template_name,
                 language_code=payload.template_lang,
                 body_params=payload.template_params,
+                phone_number_id=phone_number_id,
             )
         else:
             # text is guaranteed non-None here by OutboundWhatsappIn's validator.
-            graph_response = await wa_client.send_text(payload.phone, payload.text or "")
+            graph_response = await wa_client.send_text(
+                payload.phone, payload.text or "", phone_number_id=phone_number_id
+            )
     except httpx.HTTPError as exc:
         logger.exception(
             "outbound_whatsapp_send_failed",
@@ -1386,13 +1536,22 @@ async def outbound_call(
     usage = await get_monthly_usage(db, org_id)
     await enforce_plan_limit(db, org_id, "max_call_minutes_per_month", usage.call_minutes)
 
-    if not voice_plivo.is_configured():
+    if not voice_failover.is_configured():
         logger.warning(
             "outbound_call_plivo_not_configured",
             to=payload.to_phone,
             reason="skipping_real_call",
         )
         return OutboundCallOut(call_sid=f"STUB-{uuid4()}", status="stub")
+
+    # Dial from this org's own dedicated number when it has one (see
+    # Org.plivo_phone_number / Org.twilio_phone_number — mutually exclusive,
+    # whichever provider actually owns the number an admin entered), falling
+    # back to each provider's platform default. Both are stored digits-only
+    # (see PUT /admin/org-numbers), so re-add the "+" the provider APIs expect.
+    org_record = await db.get(Org, org_id)
+    plivo_from = f"+{org_record.plivo_phone_number}" if org_record and org_record.plivo_phone_number else None
+    twilio_from = f"+{org_record.twilio_phone_number}" if org_record and org_record.twilio_phone_number else None
 
     # org_id travels on the answer_url so the realtime bridge attributes this
     # call's usage to the org that actually placed it (see
@@ -1401,7 +1560,9 @@ async def outbound_call(
     # to resolve org from instead.
     answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer?org_id={org_id}"
     try:
-        result = await voice_plivo.initiate_call(payload.to_phone, answer_url)
+        result, provider = await voice_failover.initiate_call(
+            payload.to_phone, answer_url, plivo_from_number=plivo_from, twilio_from_number=twilio_from
+        )
     except httpx.HTTPError as exc:
         logger.exception(
             "outbound_call_failed",
@@ -1410,7 +1571,10 @@ async def outbound_call(
         )
         raise HTTPException(status_code=502, detail="Outbound call failed") from exc
 
-    request_uuid = result.get("request_uuid")
+    if provider == "twilio":
+        logger.warning("outbound_call_fell_back_to_twilio", to=payload.to_phone)
+
+    request_uuid = result.get("request_uuid") or result.get("sid")
     call_sid = request_uuid if isinstance(request_uuid, str) else str(uuid4())
     return OutboundCallOut(call_sid=call_sid, status="queued")
 

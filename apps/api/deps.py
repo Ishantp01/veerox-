@@ -191,14 +191,51 @@ async def is_over_plan_limit(
 
 
 async def enforce_plan_limit(
-    db: AsyncSession, org_id: UUID, metric: str, current_count: float
+    db: AsyncSession,
+    org_id: UUID,
+    metric: str,
+    current_count: float,
+    *,
+    message: str = "Credit limit reached. Please upgrade your plan to continue.",
 ) -> None:
     """Raise 402 if the org has reached its plan limit for `metric` — see
-    `is_over_plan_limit` for the underlying check."""
+    `is_over_plan_limit` for the underlying check. `message` lets a caller
+    give a metric-appropriate reason ("credit" reads oddly for e.g. a user
+    seat cap)."""
     if await is_over_plan_limit(db, org_id, metric, current_count):
+        raise HTTPException(status_code=402, detail=message)
+
+
+async def is_plan_feature_enabled(db: AsyncSession, org_id: UUID, feature: str) -> bool:
+    """True if the org's plan includes boolean feature flag `feature` (a key
+    in `Plan.limits`, e.g. "automated_followups"). Orgs with no plan yet or
+    owned by the platform admin are treated as having every feature — same
+    defensive-backstop reasoning as `is_over_plan_limit` (the frontend's
+    onboarding/upgrade gates are the primary enforcement for those cases).
+    """
+    from apps.api.db.models.org import Org
+    from apps.api.db.models.plan import Plan
+
+    if await _org_is_platform_admin_owned(db, org_id):
+        return True
+
+    result = await db.execute(
+        select(Plan).join(Org, Org.plan_id == Plan.id).where(Org.id == org_id)
+    )
+    plan = result.scalar_one_or_none()
+    if plan is None:
+        return True
+    return plan.limits.get(feature) is True
+
+
+async def enforce_plan_feature(db: AsyncSession, org_id: UUID, feature: str) -> None:
+    """Raise 403 if the org's plan doesn't include `feature` — a UI-hidden
+    page redirects an ordinary click, but the API must reject the same
+    request made directly (curl, a stale tab, a bookmarked URL)."""
+    if not await is_plan_feature_enabled(db, org_id, feature):
         raise HTTPException(
-            status_code=402,
-            detail="Credit limit reached. Please upgrade your plan to continue.",
+            status_code=403,
+            detail="Your plan doesn't include this feature. Upgrade to unlock it.",
         )
 
 

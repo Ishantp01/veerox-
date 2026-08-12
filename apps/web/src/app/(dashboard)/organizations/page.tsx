@@ -75,7 +75,7 @@ export default function OrganizationsPage() {
                 <TableHeader>Admin</TableHeader>
                 <TableHeader>Plan</TableHeader>
                 <TableHeader>Status</TableHeader>
-                <TableHeader>Seats</TableHeader>
+                <TableHeader>Team members</TableHeader>
                 <TableHeader>Created</TableHeader>
                 <TableHeader className="text-right">Actions</TableHeader>
               </TableRow>

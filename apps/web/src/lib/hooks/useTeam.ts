@@ -9,6 +9,9 @@ export interface TeamMember {
   is_active: boolean;
   invited_at: string | null;
   joined_at: string | null;
+  // The org's original admin — exempt from the plan's max_seats count (see
+  // apps/api/routers/team.py's invite_member).
+  is_owner: boolean;
 }
 
 /** GET /team/members → TeamMember[], scoped to the caller's own org. */

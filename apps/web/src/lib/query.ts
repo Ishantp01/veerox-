@@ -45,6 +45,8 @@ export const queryKeys = {
   killSwitch: () => ["kill-switch"] as const,
   prompts: () => ["prompts"] as const,
   tools: () => ["tools"] as const,
+  script: () => ["script"] as const,
+  orgNumbers: () => ["org-numbers"] as const,
   settings: () => ["settings"] as const,
   whatsappSettings: () => ["settings", "whatsapp"] as const,
   callingSettings: () => ["settings", "calling"] as const,
@@ -58,6 +60,8 @@ export const queryKeys = {
   followUpRules: () => ["follow-up-rules"] as const,
   followUpTasks: (filters?: { status?: string }) => ["follow-up-tasks", filters ?? {}] as const,
   templates: (filters?: { active?: boolean }) => ["whatsapp-templates", filters ?? {}] as const,
+  platformSettings: () => ["platform-settings"] as const,
+  socialLinks: () => ["social-links"] as const,
 };
 
 /**

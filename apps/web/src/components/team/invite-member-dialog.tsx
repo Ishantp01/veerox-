@@ -26,7 +26,7 @@ const EMPTY = { email: "", fullName: "", role: "member" };
  * when the invite creates a fresh account; an email that already has one
  * elsewhere just gets added to this org on its existing login.
  */
-export function InviteMemberDialog() {
+export function InviteMemberDialog({ disabled = false }: { disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [result, setResult] = useState<InviteMemberResult | null>(null);
@@ -44,10 +44,18 @@ export function InviteMemberDialog() {
       {
         onSuccess: (res) => {
           setResult(res);
-          toast({ title: "Invite sent", variant: "success" });
+          toast({ title: "Team member added", variant: "success" });
         },
-        onError: (err) =>
-          toast({ title: "Could not invite member", description: err.message, variant: "error" }),
+        onError: (err) => {
+          const limitReached = (err as { status?: number }).status === 402;
+          toast({
+            title: limitReached ? "Team member limit reached" : "Could not add team member",
+            description: limitReached
+              ? "Your plan doesn't allow any more team members — upgrade to add more."
+              : err.message,
+            variant: "error",
+          });
+        },
       }
     );
   }
@@ -61,16 +69,39 @@ export function InviteMemberDialog() {
     }
   }
 
+  // A disabled Button never fires a click event (browsers suppress it), so a
+  // limit-reached org clicking "Add team member" would see nothing happen.
+  // Keep the button enabled and intercept the click with a toast instead —
+  // that's the "sensible" feedback a disabled+tooltip button can't give.
+  if (disabled) {
+    return (
+      <Button
+        variant="primary"
+        size="md"
+        onClick={() =>
+          toast({
+            title: "Team member limit reached",
+            description: "Your plan doesn't allow any more team members — upgrade to add more.",
+            variant: "error",
+          })
+        }
+      >
+        <Plus size={15} aria-hidden />
+        Add team member
+      </Button>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogTrigger>
         <Button variant="primary" size="md">
           <Plus size={15} aria-hidden />
-          Invite member
+          Add team member
         </Button>
       </DialogTrigger>
       <DialogContent>
-        <DialogTitle>Invite team member</DialogTitle>
+        <DialogTitle>Add team member</DialogTitle>
         {result ? (
           <>
             <DialogBody className="flex flex-col gap-3">
@@ -147,7 +178,7 @@ export function InviteMemberDialog() {
                 Cancel
               </Button>
               <Button type="submit" variant="primary" loading={inviteMember.isPending}>
-                Send invite
+                Add member
               </Button>
             </DialogFooter>
           </form>

@@ -18,6 +18,7 @@ import {
 } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
 import { downloadCsv } from "@/lib/download-csv";
+import { useBillingStatus } from "@/lib/hooks/useBilling";
 import { useRemoveMember, useTeamMembers, useUpdateMemberRole, type TeamMember } from "@/lib/hooks/useTeam";
 import { InviteMemberDialog } from "@/components/team/invite-member-dialog";
 import { RegenerateMemberTokenDialog } from "@/components/team/regenerate-member-token-dialog";
@@ -41,12 +42,20 @@ const ROLE_BADGE: Record<TeamMember["role"], "voice" | "neutral"> = {
 export default function TeamPage() {
   const { user } = useAuth();
   const { data, isLoading, isError, error, refetch } = useTeamMembers();
+  const billing = useBillingStatus();
   const updateRole = useUpdateMemberRole();
   const removeMember = useRemoveMember();
   const { toast } = useToast();
-  const members = data ?? [];
+  // The org owner is the account that bought the plan, not a "team member"
+  // — hidden from this list entirely (and, per apps/api/routers/team.py's
+  // invite_member, exempt from the plan's max_seats count).
+  const members = (data ?? []).filter((m) => !m.is_owner);
   const isAdmin = user?.role === "admin";
   const [exporting, setExporting] = useState(false);
+
+  const maxMembers = billing.data?.plan?.limits.max_seats;
+  const memberLimitReached =
+    typeof maxMembers === "number" && billing.data !== undefined && members.length >= maxMembers;
 
   async function handleExport() {
     setExporting(true);
@@ -87,14 +96,18 @@ export default function TeamPage() {
     <div className="mx-auto max-w-5xl">
       <PageHeader
         title="Team"
-        description="Everyone with access to your organization's dashboard."
+        description={
+          typeof maxMembers === "number"
+            ? `${members.length} / ${maxMembers} team members used`
+            : "Everyone with access to your organization's dashboard."
+        }
         action={
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={handleExport} loading={exporting}>
               <Download size={14} aria-hidden />
               Export
             </Button>
-            {isAdmin && <InviteMemberDialog />}
+            {isAdmin && <InviteMemberDialog disabled={memberLimitReached} />}
           </div>
         }
       />

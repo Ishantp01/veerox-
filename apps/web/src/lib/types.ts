@@ -198,6 +198,40 @@ export interface Prompts {
   whatsapp_append: string;
 }
 
+// GET/PUT /admin/script — the org's editable script (or the platform
+// default when the org hasn't overridden it).
+export interface Script {
+  script: string;
+  is_default: boolean;
+}
+
+// GET/PUT /admin/org-numbers — the org's dedicated WhatsApp/calling numbers.
+// Only one of plivo_phone_number/twilio_phone_number is ever set — whichever
+// provider's account was found to own the calling number entered.
+export interface OrgNumbers {
+  whatsapp_phone_number_id: string | null;
+  plivo_phone_number: string | null;
+  twilio_phone_number: string | null;
+}
+
+// GET/PATCH /billing/platform-settings — platform-admin-only view of the
+// help-desk script + social links (superset of GET /billing/social-links).
+export interface PlatformSettings {
+  help_desk_script: string | null;
+  social_links: Record<string, string>;
+}
+
+// GET /billing/social-links — read-only for any authenticated org member.
+export interface SocialLinks {
+  social_links: Record<string, string>;
+}
+
+// POST /helpdesk/chat request/response shapes.
+export interface HelpDeskMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 // Tool JSON schemas exposed by GET /admin/tools.
 // Shape is a passthrough of the OpenAI tool definitions stored server-side.
 export interface Tool {

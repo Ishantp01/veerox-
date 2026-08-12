@@ -5,7 +5,7 @@ export interface AdminPlan {
   code: string;
   name: string;
   price_cents_monthly: number;
-  limits: Record<string, number>;
+  limits: Record<string, number | boolean>;
   is_active: boolean;
 }
 
@@ -25,7 +25,7 @@ export interface CreatePlanInput {
   code: string;
   name: string;
   price_cents_monthly: number;
-  limits: Record<string, number>;
+  limits: Record<string, number | boolean>;
   is_active?: boolean;
 }
 
@@ -45,7 +45,7 @@ export interface UpdatePlanInput {
   code: string;
   name?: string;
   price_cents_monthly?: number;
-  limits?: Record<string, number>;
+  limits?: Record<string, number | boolean>;
   is_active?: boolean;
 }
 

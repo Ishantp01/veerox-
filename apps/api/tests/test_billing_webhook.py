@@ -179,7 +179,23 @@ async def test_billing_status_reflects_plan_and_seats(
     account = AccountUser(email="admin@example.com", token_hash=hash_token(login_token))
     db_session.add(account)
     await db_session.flush()
+    # The owner (invited_by_id is null) doesn't count as a used seat — only
+    # teammates actually invited do (matches routers/team.py's max_seats
+    # enforcement, which the same figure must agree with).
     db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=account.id, role="admin"))
+
+    invited_account = AccountUser(email="teammate@example.com", token_hash=hash_token("x" * 40))
+    db_session.add(invited_account)
+    await db_session.flush()
+    db_session.add(
+        OrgMembership(
+            org_id=ORG_ID,
+            account_user_id=invited_account.id,
+            role="agent",
+            invited_by_id=account.id,
+        )
+    )
+
     org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
     org.plan_id = plan.id
     await db_session.commit()

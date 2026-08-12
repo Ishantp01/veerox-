@@ -26,6 +26,7 @@ from apps.api.routers import (
     diag,
     follow_ups,
     health,
+    helpdesk,
     leads,
     sales,
     team,
@@ -42,12 +43,18 @@ from apps.api.workers.whatsapp_dispatcher import run_whatsapp_dispatcher
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging()
     init_sentry()
-    await plivo_client.register_inbound_answer_url()
+    plivo_registration_task = asyncio.create_task(plivo_client.register_inbound_answer_url())
     dialer_task = asyncio.create_task(run_campaign_dialer())
     whatsapp_dispatcher_task = asyncio.create_task(run_whatsapp_dispatcher())
     follow_up_task = asyncio.create_task(run_follow_up_dispatcher())
     billing_expiry_task = asyncio.create_task(run_billing_expiry_checker())
-    background_tasks = (dialer_task, whatsapp_dispatcher_task, follow_up_task, billing_expiry_task)
+    background_tasks = (
+        plivo_registration_task,
+        dialer_task,
+        whatsapp_dispatcher_task,
+        follow_up_task,
+        billing_expiry_task,
+    )
     try:
         yield
     finally:
@@ -79,8 +86,8 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Session-Token", "X-Admin-Token"],
     )
 
     app.include_router(health.router)
@@ -95,6 +102,7 @@ def create_app() -> FastAPI:
     app.include_router(sales.router)
     app.include_router(team.router)
     app.include_router(admin.router)
+    app.include_router(helpdesk.router)
     app.include_router(diag.router)
     app.include_router(whatsapp_router)
     app.include_router(voice_router)

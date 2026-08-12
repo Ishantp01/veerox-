@@ -31,6 +31,7 @@ from apps.api.core.agent import _is_kill_switch_active
 from apps.api.core.usage import get_monthly_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
+from apps.api.db.models.org import Org
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
@@ -69,12 +70,15 @@ async def _requeue_stuck_targets() -> None:
             logger.info("whatsapp_dispatcher_requeued_stuck_targets", count=result.rowcount)
 
 
-async def _claim_targets() -> list[tuple[str, str, str, int]]:
+async def _claim_targets() -> list[tuple[str, str, str, int, str | None]]:
     """Atomically claim up to ``_BATCH_SIZE`` oldest pending targets of
     running WhatsApp campaigns.
 
-    Returns ``[(target_id, phone, criteria, attempt_count), ...]`` so the
-    caller can send outside this short-lived session.
+    Returns ``[(target_id, phone, criteria, attempt_count, phone_number_id), ...]``
+    so the caller can send outside this short-lived session.
+    ``phone_number_id`` is the owning org's dedicated WhatsApp number (see
+    ``Org.whatsapp_phone_number_id``), or ``None`` to fall back to the
+    platform default.
 
     Targets belonging to an org that's over its plan's
     ``max_whatsapp_messages_per_month`` are skipped (left ``pending``, not
@@ -86,8 +90,11 @@ async def _claim_targets() -> list[tuple[str, str, str, int]]:
         # Over-fetch beyond `_BATCH_SIZE` since some candidates may belong to
         # an over-limit org and get skipped rather than claimed.
         stmt = (
-            select(CampaignTarget, CallCampaign.criteria, CallCampaign.org_id)
+            select(
+                CampaignTarget, CallCampaign.criteria, CallCampaign.org_id, Org.whatsapp_phone_number_id
+            )
             .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
+            .join(Org, Org.id == CallCampaign.org_id)
             .where(
                 CampaignTarget.status == "pending",
                 CallCampaign.status == "running",
@@ -100,7 +107,7 @@ async def _claim_targets() -> list[tuple[str, str, str, int]]:
 
         org_over_limit: dict[UUID, bool] = {}
         claimed = []
-        for target, criteria, org_id in rows:
+        for target, criteria, org_id, phone_number_id in rows:
             if len(claimed) >= _BATCH_SIZE:
                 break
             if org_id not in org_over_limit:
@@ -113,7 +120,9 @@ async def _claim_targets() -> list[tuple[str, str, str, int]]:
             target.status = "calling"
             target.attempt_count += 1
             target.called_at = datetime.now(UTC)
-            claimed.append((str(target.id), target.phone, criteria, target.attempt_count))
+            claimed.append(
+                (str(target.id), target.phone, criteria, target.attempt_count, phone_number_id)
+            )
         if claimed:
             await db.commit()
         return claimed
@@ -141,9 +150,11 @@ def _opening_message(criteria: str) -> str:
     )
 
 
-async def _send_one(target_id: str, phone: str, criteria: str, attempt_count: int) -> None:
+async def _send_one(
+    target_id: str, phone: str, criteria: str, attempt_count: int, phone_number_id: str | None
+) -> None:
     try:
-        await wa_client.send_text(phone, _opening_message(criteria))
+        await wa_client.send_text(phone, _opening_message(criteria), phone_number_id=phone_number_id)
     except httpx.HTTPError:
         logger.warning("whatsapp_dispatcher_send_failed", target_id=target_id)
         await _mark_target(target_id, "pending" if attempt_count < _MAX_ATTEMPTS else "failed")
@@ -162,8 +173,8 @@ async def _dispatch_batch() -> None:
         return
     await asyncio.gather(
         *(
-            _send_one(target_id, phone, criteria, attempt_count)
-            for target_id, phone, criteria, attempt_count in claimed
+            _send_one(target_id, phone, criteria, attempt_count, phone_number_id)
+            for target_id, phone, criteria, attempt_count, phone_number_id in claimed
         )
     )
 

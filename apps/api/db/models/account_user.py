@@ -25,6 +25,9 @@ class AccountUser(Base):
     # directly by the token they present.
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # E.164 mobile number the login token is SMS'd to on provisioning (see
+    # routers/auth.py's provision_org + channels/voice/plivo_client.send_sms).
+    mobile: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # `default=` (Python-side, applied before INSERT) alongside `server_default`
     # (Postgres DDL) — SQLite's DDL default text isn't reliably coerced back to
     # a real bool on read (the literal 'false' round-trips as a truthy

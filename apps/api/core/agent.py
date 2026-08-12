@@ -30,6 +30,7 @@ from apps.api.core.prompts import (
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.conversation import Conversation
+from apps.api.db.models.org import Org
 from apps.api.redis_client import get_redis_pool
 
 logger = structlog.get_logger(__name__)
@@ -63,16 +64,19 @@ ESCALATION_FALLBACK = (
 Channel = Literal["voice", "whatsapp"]
 
 
-def _system_prompt_for(channel: Channel) -> str:
-    """Compose the base prompt with the per-channel append block.
+async def _system_prompt_for(db: AsyncSession, org_id: UUID, channel: Channel) -> str:
+    """Compose the org's script (or the platform default) with the
+    per-channel append block.
 
     Strips both sides because ``prompts.py`` uses triple-quoted blocks that
     carry leading/trailing newlines — without this the joined system message
     ends up with stray blank lines that nudge the model toward overly formal
     output.
     """
+    org = await db.get(Org, org_id)
+    base = org.script if org is not None and org.script else OUTBOUND_CALL_PROMPT
     append = VOICE_APPEND if channel == "voice" else WHATSAPP_APPEND
-    return f"{OUTBOUND_CALL_PROMPT.strip()}\n\n{append.strip()}"
+    return f"{base.strip()}\n\n{append.strip()}"
 
 
 async def _is_kill_switch_active() -> bool:
@@ -200,6 +204,7 @@ class AgentCore:
         channel: Channel,
         input_text: str,
         campaign_target_id: UUID | None = None,
+        org_id: UUID | None = None,
     ) -> str:
         """Process one conversational turn and return the assistant reply.
 
@@ -214,17 +219,17 @@ class AgentCore:
                 — lets qualify_lead find the CampaignTarget row to update,
                 mirroring how the voice realtime bridge threads the same id
                 through _dispatch_realtime_tool.
+            org_id: The org this turn belongs to, resolved by the caller
+                (e.g. channels/whatsapp/adapter.py looks it up from the
+                inbound message's WABA phone_number_id). Falls back to the
+                platform default org when the caller doesn't have one to
+                give — the CLI and older callers rely on this default.
 
         Returns:
             The assistant's reply as a plain string. The caller is responsible
             for transporting that string back over the channel.
         """
-        # TODO: hardcoded to the platform default org — unlike the voice path
-        # (CallState.org_id, resolved per-call from the answer_url), nothing
-        # here yet maps an inbound WhatsApp message to the org whose WABA
-        # number received it. Every WhatsApp-originated lead/appointment/
-        # escalation lands in the default org until that resolution exists.
-        org_id = UUID(settings.default_org_id)
+        org_id = org_id or UUID(settings.default_org_id)
 
         # Kill switch — operators can pause via dashboard. Check BEFORE any
         # spend on the LLM so a paused agent costs nothing.
@@ -246,7 +251,7 @@ class AgentCore:
 
         history = await load_last_n(db, user_id)
 
-        system_prompt = _system_prompt_for(channel)
+        system_prompt = await _system_prompt_for(db, org_id, channel)
         if history:
             # We already have this user's history loaded — skip the redundant
             # lookup_customer round-trip the model would otherwise make on

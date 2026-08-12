@@ -43,11 +43,16 @@ def is_configured() -> bool:
 
 
 async def initiate_call(
-    to_e164: str, answer_url: str, hangup_url: str | None = None
+    to_e164: str,
+    answer_url: str,
+    hangup_url: str | None = None,
+    from_number: str | None = None,
 ) -> dict[str, Any]:
     """Place an outbound call via ``POST /Account/{id}/Call/``.
 
-    Plivo dials ``to_e164`` from the configured Plivo number; when the callee
+    Plivo dials ``to_e164`` from ``from_number`` (falling back to the
+    platform-wide ``settings.plivo_phone_number`` when the caller doesn't
+    have — or the org hasn't set — a dedicated number); when the callee
     answers, Plivo fetches ``answer_url`` for the Plivo XML describing what to
     do. Returns the raw JSON response (contains ``request_uuid``). Raises
     ``httpx.HTTPStatusError`` on a non-2xx response.
@@ -59,7 +64,7 @@ async def initiate_call(
     """
     url = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}/Call/"
     payload: dict[str, Any] = {
-        "from": settings.plivo_phone_number,
+        "from": from_number or settings.plivo_phone_number,
         "to": to_e164,
         "answer_url": answer_url,
         "answer_method": "POST",
@@ -90,6 +95,25 @@ async def initiate_call(
         request_uuid=data.get("request_uuid"),
     )
     return data
+
+
+async def owns_number(digits: str) -> bool:
+    """True if ``digits`` (a number, `+`-less) is a number in this Plivo
+    account — used by ``channels/voice/number_provider.py::detect_provider``
+    to figure out which provider an admin-entered calling number belongs to.
+    Treats any request failure (including a plain 404 "not found") as "no".
+    """
+    if not (settings.plivo_auth_id and settings.plivo_auth_token) or not digits:
+        return False
+    url = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}/Number/{digits}/"
+    try:
+        r = await _http.get(
+            url, auth=(settings.plivo_auth_id or "", settings.plivo_auth_token or "")
+        )
+        return r.status_code == 200
+    except httpx.HTTPError as exc:
+        logger.warning("plivo_owns_number_check_failed", number=digits, error=str(exc))
+        return False
 
 
 async def start_recording(call_uuid: str, callback_url: str) -> None:
@@ -143,6 +167,41 @@ async def hangup_call(call_uuid: str) -> None:
         logger.info("plivo_call_hungup", call_uuid=call_uuid)
     except httpx.HTTPError as exc:
         logger.warning("plivo_hangup_failed", call_uuid=call_uuid, error=str(exc))
+
+
+async def send_sms(to_e164: str, text: str) -> dict[str, Any]:
+    """Send an SMS via ``POST /Account/{id}/Message/``.
+
+    Uses the same Plivo number/credentials as outbound calling — no separate
+    SMS number needed as long as ``plivo_phone_number`` has SMS capability
+    enabled in the Plivo console. Raises ``httpx.HTTPStatusError`` on a
+    non-2xx response.
+    """
+    url = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}/Message/"
+    payload: dict[str, Any] = {
+        "src": settings.plivo_phone_number,
+        "dst": to_e164,
+        "text": text,
+    }
+    try:
+        r = await _http.post(
+            url,
+            json=payload,
+            auth=(settings.plivo_auth_id or "", settings.plivo_auth_token or ""),
+        )
+        r.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "plivo_send_sms_failed",
+            to=to_e164,
+            error=str(exc),
+            status=getattr(getattr(exc, "response", None), "status_code", None),
+        )
+        raise
+
+    data: dict[str, Any] = r.json()
+    logger.info("plivo_send_sms_ok", to=to_e164, message_uuid=data.get("message_uuid"))
+    return data
 
 
 _INBOUND_APP_NAME = "veerox-voice-app"

@@ -1,11 +1,11 @@
 ﻿"use client";
 
 import { useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { BarChart3, Download, Megaphone } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
-import { ReportsTrendChart } from "@/components/reports/trend-chart";
 import { CampaignsConversionTable } from "@/components/reports/campaigns-conversion-table";
 import {
   Button,
@@ -25,6 +25,11 @@ import {
 import { downloadCsv } from "@/lib/download-csv";
 import { useReportsCampaigns, useReportsTimeseries } from "@/lib/hooks";
 import { formatShortDate, formatUsd } from "@/lib/format";
+
+const ReportsTrendChart = dynamic(
+  () => import("@/components/reports/trend-chart").then((m) => m.ReportsTrendChart),
+  { ssr: false, loading: () => <Skeleton className="h-72 w-full" /> },
+);
 
 const DATE_RANGES = [
   { label: "Last 7 days", days: 7 },

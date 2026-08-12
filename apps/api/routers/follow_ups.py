@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from apps.api.core.tools import _default_org_id
 from apps.api.db.models import FollowUpRule, FollowUpTask
-from apps.api.deps import DbDep, verify_admin_or_session
+from apps.api.deps import DbDep, enforce_plan_feature, verify_admin_or_session
 from apps.api.schemas.follow_up import (
     FollowUpRuleCreate,
     FollowUpRuleOut,
@@ -21,6 +21,7 @@ router = APIRouter(tags=["follow-ups"], dependencies=[Depends(verify_admin_or_se
 @router.get("/follow-up-rules", response_model=list[FollowUpRuleOut])
 async def list_follow_up_rules(db: DbDep) -> list[FollowUpRule]:
     org_id = _default_org_id()
+    await enforce_plan_feature(db, org_id, "automated_followups")
     stmt = (
         select(FollowUpRule)
         .where(FollowUpRule.org_id == org_id)
@@ -32,8 +33,10 @@ async def list_follow_up_rules(db: DbDep) -> list[FollowUpRule]:
 
 @router.post("/follow-up-rules", response_model=FollowUpRuleOut, status_code=201)
 async def create_follow_up_rule(payload: FollowUpRuleCreate, db: DbDep) -> FollowUpRule:
+    org_id = _default_org_id()
+    await enforce_plan_feature(db, org_id, "automated_followups")
     rule = FollowUpRule(
-        org_id=_default_org_id(),
+        org_id=org_id,
         name=payload.name,
         trigger_type=payload.trigger_type,
         trigger_config=payload.trigger_config,
@@ -49,6 +52,7 @@ async def create_follow_up_rule(payload: FollowUpRuleCreate, db: DbDep) -> Follo
 
 @router.patch("/follow-up-rules/{rule_id}", response_model=FollowUpRuleOut)
 async def update_follow_up_rule(rule_id: UUID, payload: FollowUpRuleUpdateIn, db: DbDep) -> FollowUpRule:
+    await enforce_plan_feature(db, _default_org_id(), "automated_followups")
     rule = await db.get(FollowUpRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Follow-up rule not found")
@@ -67,6 +71,7 @@ async def list_follow_up_tasks(
     offset: int = Query(0, ge=0),
 ) -> list[FollowUpTask]:
     org_id = _default_org_id()
+    await enforce_plan_feature(db, org_id, "automated_followups")
     stmt = (
         select(FollowUpTask)
         .where(FollowUpTask.org_id == org_id)
@@ -81,6 +86,7 @@ async def list_follow_up_tasks(
 
 @router.post("/follow-up-tasks/{task_id}/cancel", response_model=FollowUpTaskOut)
 async def cancel_follow_up_task(task_id: UUID, db: DbDep) -> FollowUpTask:
+    await enforce_plan_feature(db, _default_org_id(), "automated_followups")
     task = await db.get(FollowUpTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Follow-up task not found")

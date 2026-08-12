@@ -1,16 +1,24 @@
 "use client";
 
 import { useState } from "react";
-import { Phone, MessageSquare } from "lucide-react";
+import { Phone, MessageSquare, Sparkles, Share2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { SettingsView } from "@/components/settings/settings-view";
+import { HelpDeskScriptPanel, SocialLinksPanel } from "@/components/billing/platform-settings-panel";
 import { useAuth } from "@/lib/auth-context";
 
-type Tab = "calling" | "whatsapp";
+type Tab = "calling" | "whatsapp" | "helpdesk" | "social";
 
 const TABS: { key: Tab; label: string; icon: typeof Phone }[] = [
   { key: "calling", label: "AI Calling", icon: Phone },
   { key: "whatsapp", label: "AI WhatsApp", icon: MessageSquare },
+];
+
+// Platform-wide, not per-org — same PlatformAdminDep gate as the Billing
+// page's plan catalog/settings editor (apps/api/routers/billing.py).
+const PLATFORM_TABS: { key: Tab; label: string; icon: typeof Phone }[] = [
+  { key: "helpdesk", label: "Help Desk Bot", icon: Sparkles },
+  { key: "social", label: "Social Links", icon: Share2 },
 ];
 
 /**
@@ -22,10 +30,11 @@ const TABS: { key: Tab; label: string; icon: typeof Phone }[] = [
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>("calling");
   const { user } = useAuth();
+  const tabs = user?.is_superuser ? [...TABS, ...PLATFORM_TABS] : TABS;
 
   return (
     <div className="mx-auto max-w-5xl">
-      <PageHeader title="Settings" description="Connection status, prompts, and tools for each agent channel." />
+      <PageHeader title="Settings" description="The script each agent channel follows." />
 
       {user && (
         <div className="mb-6 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900">
@@ -53,7 +62,7 @@ export default function SettingsPage() {
       )}
 
       <div className="mb-6 inline-flex gap-1 rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-900">
-        {TABS.map(({ key, label, icon: Icon }) => (
+        {tabs.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             type="button"
@@ -70,20 +79,37 @@ export default function SettingsPage() {
         ))}
       </div>
 
-      {tab === "calling" ? (
+      {tab === "calling" && (
         <SettingsView
           title="Calling Settings"
-          description="Connection status, active prompts, and registered tools for the AI Calling agent."
-          promptKeys={["base", "voice_append"]}
+          description="The script your AI Calling agent follows."
           channel="calling"
         />
-      ) : (
+      )}
+      {tab === "whatsapp" && (
         <SettingsView
           title="WhatsApp Settings"
-          description="Connection status, active prompts, and registered tools for the WhatsApp agent."
-          promptKeys={["base", "whatsapp_append"]}
+          description="The script your WhatsApp agent follows."
           channel="whatsapp"
         />
+      )}
+      {tab === "helpdesk" && user?.is_superuser && (
+        <div className="mx-auto max-w-3xl">
+          <PageHeader
+            title="Help Desk Bot"
+            description="Platform-wide chatbot script every client org's help widget follows."
+          />
+          <HelpDeskScriptPanel />
+        </div>
+      )}
+      {tab === "social" && user?.is_superuser && (
+        <div className="mx-auto max-w-3xl">
+          <PageHeader
+            title="Social Links"
+            description="Shown to every client org (e.g. in the sidebar)."
+          />
+          <SocialLinksPanel />
+        </div>
       )}
     </div>
   );

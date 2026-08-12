@@ -6,6 +6,37 @@ import { useTheme } from "next-themes";
 import { Building2, ChevronRight, Menu, Moon, Sun } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useWhatsAppSettings } from "@/lib/hooks";
+import { useSocialLinks } from "@/lib/hooks/useSocialLinks";
+import { SOCIAL_META } from "@/lib/social-links";
+
+function SocialLinksRow() {
+  const { data } = useSocialLinks();
+  const entries = Object.entries(data?.social_links ?? {}).filter(([, url]) => url);
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="hidden items-center gap-1 border-r border-slate-200 pr-3 md:flex dark:border-slate-700">
+      {entries.map(([key, url]) => {
+        const meta = SOCIAL_META[key];
+        if (!meta) return null;
+        const { Icon, label } = meta;
+        return (
+          <a
+            key={key}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={label}
+            title={label}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-white/[0.06] dark:hover:text-slate-200"
+          >
+            <Icon size={15} aria-hidden />
+          </a>
+        );
+      })}
+    </div>
+  );
+}
 
 const SEGMENT_LABELS: Record<string, string> = {
   whatsapp: "WhatsApp",
@@ -89,6 +120,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
       </div>
 
       <div className="flex shrink-0 items-center gap-3">
+        <SocialLinksRow />
         {user && (
           <div
             className="hidden items-center gap-2 rounded-full border border-slate-200 bg-slate-100 px-3 py-1 md:flex dark:border-slate-700 dark:bg-slate-900"

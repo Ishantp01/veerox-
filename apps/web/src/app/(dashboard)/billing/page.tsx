@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { PlanAdminTable } from "@/components/billing/plan-admin-table";
+import { PlatformSettingsPanel } from "@/components/billing/platform-settings-panel";
 import { ChoosePlanCards } from "@/components/billing/choose-plan-cards";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Skeleton } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
@@ -100,11 +101,6 @@ export default function BillingPage() {
                       <p className="text-xl font-bold text-slate-900 dark:text-slate-100">
                         {data.plan?.name ?? "No plan assigned"}
                       </p>
-                      {data.plan && (
-                        <p className="text-sm text-slate-500 dark:text-slate-400">
-                          {data.seat_count} / {data.plan.limits.max_seats ?? "∞"} seats used
-                        </p>
-                      )}
                       {data.current_period_end && (
                         <p
                           className={`mt-1 text-xs ${needsRenewal ? "font-medium text-red-600 dark:text-red-400" : "text-slate-500 dark:text-slate-400"}`}
@@ -134,6 +130,17 @@ export default function BillingPage() {
                       <CardTitle>Usage this month</CardTitle>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-4">
+                      {data.plan && (
+                        <UsageBar
+                          label="Team members"
+                          metric={{
+                            used: data.seat_count,
+                            limit: typeof data.plan.limits.max_seats === "number"
+                              ? data.plan.limits.max_seats
+                              : null,
+                          }}
+                        />
+                      )}
                       <UsageBar label="Call minutes" metric={usage.data.call_minutes} unit="min" />
                       <UsageBar label="WhatsApp messages" metric={usage.data.whatsapp_messages} />
                     </CardContent>
@@ -151,7 +158,12 @@ export default function BillingPage() {
               </>
             )}
 
-            {user?.is_superuser && <PlanAdminTable />}
+            {user?.is_superuser && (
+              <>
+                <PlanAdminTable />
+                <PlatformSettingsPanel />
+              </>
+            )}
           </div>
         )}
       </QueryBoundary>

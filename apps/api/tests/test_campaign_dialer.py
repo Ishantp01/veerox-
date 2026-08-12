@@ -153,10 +153,12 @@ async def test_claim_targets_claims_pending_voice_campaign(
     claimed = await campaign_dialer._claim_targets()
 
     assert len(claimed) == 1
-    target_id, phone, attempt_count = claimed[0]
+    target_id, phone, attempt_count, plivo_from, twilio_from = claimed[0]
     assert target_id == str(target.id)
     assert phone == target.phone
     assert attempt_count == 1
+    assert plivo_from is None
+    assert twilio_from is None
 
 
 async def test_claim_targets_stops_at_concurrency_limit(

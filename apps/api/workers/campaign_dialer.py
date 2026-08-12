@@ -19,12 +19,13 @@ import httpx
 import structlog
 from sqlalchemy import func, select, update
 
-from apps.api.channels.voice import plivo_client as voice_plivo
+from apps.api.channels.voice import failover as voice_failover
 from apps.api.config import settings
 from apps.api.core.agent import _is_kill_switch_active
 from apps.api.core.usage import get_monthly_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
+from apps.api.db.models.org import Org
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
@@ -110,14 +111,18 @@ async def _count_calls_in_flight(db) -> int:
     return (await db.execute(stmt)).scalar_one()
 
 
-async def _claim_targets() -> list[tuple[str, str, int]]:
+async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None]]:
     """Atomically claim up to the remaining concurrency budget's worth of the
     oldest pending targets of running campaigns.
 
-    Returns ``[(target_id, phone, attempt_count), ...]`` as strings/int so
-    the caller can place the calls outside this short-lived session. Empty
-    if there's nothing to dial right now or ``max_concurrent_calls`` voice
-    calls are already in flight.
+    Returns ``[(target_id, phone, attempt_count, plivo_from, twilio_from), ...]``
+    as strings/int so the caller can place the calls outside this
+    short-lived session. ``plivo_from``/``twilio_from`` are the owning org's
+    dedicated number on that provider (see ``Org.plivo_phone_number`` /
+    ``Org.twilio_phone_number`` — mutually exclusive), or ``None`` to fall
+    back to that provider's platform default. Empty if there's nothing to
+    dial right now or ``max_concurrent_calls`` voice calls are already in
+    flight.
 
     Targets belonging to an org that's over its plan's
     ``max_call_minutes_per_month`` are skipped (left ``pending``, not
@@ -134,8 +139,11 @@ async def _claim_targets() -> list[tuple[str, str, int]]:
         # Over-fetch beyond `capacity` since some candidates may belong to an
         # over-limit org and get skipped rather than claimed.
         stmt = (
-            select(CampaignTarget, CallCampaign.org_id)
+            select(
+                CampaignTarget, CallCampaign.org_id, Org.plivo_phone_number, Org.twilio_phone_number
+            )
             .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
+            .join(Org, Org.id == CallCampaign.org_id)
             .where(
                 CampaignTarget.status == "pending",
                 CallCampaign.status == "running",
@@ -148,7 +156,7 @@ async def _claim_targets() -> list[tuple[str, str, int]]:
 
         org_over_limit: dict[UUID, bool] = {}
         claimed = []
-        for target, org_id in rows:
+        for target, org_id, org_plivo_number, org_twilio_number in rows:
             if len(claimed) >= capacity:
                 break
             if org_id not in org_over_limit:
@@ -161,7 +169,11 @@ async def _claim_targets() -> list[tuple[str, str, int]]:
             target.status = "calling"
             target.attempt_count += 1
             target.called_at = datetime.now(UTC)
-            claimed.append((str(target.id), target.phone, target.attempt_count))
+            plivo_from = f"+{org_plivo_number}" if org_plivo_number else None
+            twilio_from = f"+{org_twilio_number}" if org_twilio_number else None
+            claimed.append(
+                (str(target.id), target.phone, target.attempt_count, plivo_from, twilio_from)
+            )
         if claimed:
             await db.commit()
         return claimed
@@ -204,7 +216,13 @@ async def handle_call_ended(target_id: str) -> None:
         logger.info("campaign_dialer_call_ended", target_id=target_id, new_status=target.status)
 
 
-async def _dial_one(target_id: str, phone: str, attempt_count: int) -> None:
+async def _dial_one(
+    target_id: str,
+    phone: str,
+    attempt_count: int,
+    plivo_from: str | None,
+    twilio_from: str | None,
+) -> None:
     answer_url = (
         f"{settings.public_base_url.rstrip('/')}/voice/answer?campaign_target_id={target_id}"
     )
@@ -213,7 +231,7 @@ async def _dial_one(target_id: str, phone: str, attempt_count: int) -> None:
         f"?campaign_target_id={target_id}"
     )
 
-    if not voice_plivo.is_configured():
+    if not voice_failover.is_configured():
         # Local-dev fallback, same convention as POST /admin/outbound/call:
         # leave the target "calling" (simulating a placed call) rather than
         # failing it outright, so the dialer's concurrency gate and the
@@ -223,7 +241,18 @@ async def _dial_one(target_id: str, phone: str, attempt_count: int) -> None:
         return
 
     try:
-        await voice_plivo.initiate_call(phone, answer_url, hangup_url=hangup_url)
+        _, provider = await voice_failover.initiate_call(
+            phone,
+            answer_url,
+            hangup_url=hangup_url,
+            plivo_from_number=plivo_from,
+            twilio_from_number=twilio_from,
+        )
+        # Only worth flagging when Twilio wasn't this org's own dedicated
+        # provider (i.e. it wasn't picked on purpose) — see
+        # failover.initiate_call's provider-ordering docstring.
+        if provider == "twilio" and not twilio_from:
+            logger.warning("campaign_dialer_fell_back_to_twilio", target_id=target_id)
     except httpx.HTTPError:
         logger.warning("campaign_dialer_initiate_call_failed", target_id=target_id)
         await _mark_target(target_id, "pending" if attempt_count < _MAX_ATTEMPTS else "failed")
@@ -234,7 +263,10 @@ async def _dial_batch() -> None:
     if not claimed:
         return
     await asyncio.gather(
-        *(_dial_one(target_id, phone, attempt_count) for target_id, phone, attempt_count in claimed)
+        *(
+            _dial_one(target_id, phone, attempt_count, plivo_from, twilio_from)
+            for target_id, phone, attempt_count, plivo_from, twilio_from in claimed
+        )
     )
 
 

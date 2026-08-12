@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,10 +21,22 @@ ADMIN_HEADERS = {"X-Admin-Token": settings.admin_token}
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _stub_plivo_sms(monkeypatch: pytest.MonkeyPatch) -> None:
+    """provision_org SMS's the login token via the real Plivo API — stub it
+    so these tests never make a live network call."""
+    from apps.api.routers import auth as auth_module
+
+    async def _fake_send_sms(to_e164: str, text: str) -> tuple[dict, str]:
+        return {"message_uuid": "fake"}, "plivo"
+
+    monkeypatch.setattr(auth_module.voice_failover, "send_sms", _fake_send_sms)
+
+
 async def test_provision_org_leaves_org_without_a_plan(client: AsyncClient) -> None:
     provision_response = await client.post(
         "/auth/provision-org",
-        json={"org_name": "New Co", "email": "founder2@newco.com"},
+        json={"org_name": "New Co", "email": "founder2@newco.com", "mobile": "+919876543210"},
         headers=ADMIN_HEADERS,
     )
     assert provision_response.status_code == 201

@@ -20,9 +20,11 @@ const EMPTY = {
   code: "",
   name: "",
   priceRupees: "",
+  maxSeats: "",
   maxCampaigns: "",
   maxCallMinutesPerMonth: "",
   maxWhatsappMessagesPerMonth: "",
+  automatedFollowups: false,
 };
 
 export function NewPlanDialog() {
@@ -39,9 +41,11 @@ export function NewPlanDialog() {
         name: form.name.trim(),
         price_cents_monthly: Math.round(Number(form.priceRupees || 0) * 100),
         limits: {
+          max_seats: Number(form.maxSeats || 0),
           max_campaigns: Number(form.maxCampaigns || 0),
           max_call_minutes_per_month: Number(form.maxCallMinutesPerMonth || 0),
           max_whatsapp_messages_per_month: Number(form.maxWhatsappMessagesPerMonth || 0),
+          automated_followups: form.automatedFollowups,
         },
       },
       {
@@ -101,7 +105,18 @@ export function NewPlanDialog() {
                 placeholder="4900"
               />
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="plan-seats">Team members</Label>
+                <Input
+                  id="plan-seats"
+                  type="number"
+                  min={0}
+                  value={form.maxSeats}
+                  onChange={(e) => setForm((f) => ({ ...f, maxSeats: e.target.value }))}
+                  placeholder="5"
+                />
+              </div>
               <div>
                 <Label htmlFor="plan-campaigns">Max campaigns</Label>
                 <Input
@@ -112,6 +127,8 @@ export function NewPlanDialog() {
                   onChange={(e) => setForm((f) => ({ ...f, maxCampaigns: e.target.value }))}
                 />
               </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="plan-call-minutes">Call min/mo</Label>
                 <Input
@@ -135,6 +152,16 @@ export function NewPlanDialog() {
                 />
               </div>
             </div>
+            <label htmlFor="plan-automated-followups" className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+              <input
+                id="plan-automated-followups"
+                type="checkbox"
+                checked={form.automatedFollowups}
+                onChange={(e) => setForm((f) => ({ ...f, automatedFollowups: e.target.checked }))}
+                className="h-4 w-4 rounded border-slate-300 text-primary-500 dark:border-slate-700"
+              />
+              Includes automated follow-ups
+            </label>
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

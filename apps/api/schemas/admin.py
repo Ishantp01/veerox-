@@ -53,6 +53,44 @@ class PromptsOut(BaseModel):
     whatsapp_append: str
 
 
+class ScriptOut(BaseModel):
+    script: str
+    is_default: bool
+
+
+class ScriptIn(BaseModel):
+    # Empty/whitespace-only clears the org's override and reverts to the
+    # platform default script.
+    script: str | None = Field(None, description="Org's custom script. Empty/omit to reset to the default.")
+
+
+class OrgNumbersOut(BaseModel):
+    whatsapp_phone_number_id: str | None
+    # Only ever one of these two is set — whichever provider's account was
+    # found to own the calling number (see
+    # channels/voice/number_provider.py::detect_provider).
+    plivo_phone_number: str | None
+    twilio_phone_number: str | None = None
+
+
+class OrgNumbersIn(BaseModel):
+    # Empty/omit clears the corresponding number, falling back to the
+    # platform default org for messages/calls on it (see
+    # channels/whatsapp/adapter.py::_resolve_org_id and
+    # channels/voice/webhook.py::_resolve_org_by_number).
+    whatsapp_phone_number_id: str | None = Field(
+        None, description="This org's WhatsApp Business phone_number_id, from the Meta dashboard."
+    )
+    # Named after Plivo for historical reasons, but accepts EITHER a Plivo or
+    # a Twilio number — the server looks it up in both accounts and stores it
+    # under whichever one actually owns it (see
+    # channels/voice/number_provider.py::detect_provider and
+    # routers/admin.py::update_org_numbers).
+    plivo_phone_number: str | None = Field(
+        None, description="This org's dedicated calling number (Plivo or Twilio), e.g. +14155551234."
+    )
+
+
 class OutboundWhatsappOut(BaseModel):
     status: str
     phone: str

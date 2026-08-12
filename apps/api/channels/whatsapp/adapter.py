@@ -25,6 +25,7 @@ from apps.api.core.agent import agent_core
 from apps.api.core.transcribe import transcribe
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
+from apps.api.db.models.org import Org
 from apps.api.db.models.user import User
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.redis_client import get_redis_pool, record_error
@@ -111,6 +112,36 @@ def _extract_message(payload: dict[str, Any]) -> InboundMessage | None:
                 media_mime=media_mime,
             )
     return None
+
+
+def _extract_phone_number_id(payload: dict[str, Any]) -> str | None:
+    """The WABA number (Meta's `metadata.phone_number_id`) this message
+    arrived on — present on every inbound envelope alongside `messages[]`,
+    used by `_resolve_org_id` to attribute the message to the right org."""
+    for entry in payload.get("entry") or []:
+        for change in entry.get("changes") or []:
+            phone_number_id = ((change.get("value") or {}).get("metadata") or {}).get(
+                "phone_number_id"
+            )
+            if phone_number_id:
+                return str(phone_number_id)
+    return None
+
+
+async def _resolve_org_id(db: AsyncSession, phone_number_id: str | None) -> UUID:
+    """The org that owns this WABA number, else the platform default.
+
+    A number with no matching org (not yet provisioned, or Meta test number
+    on the platform's own default WABA) is expected during onboarding — logs
+    rather than raises so the message still gets a reply.
+    """
+    if phone_number_id:
+        stmt = select(Org.id).where(Org.whatsapp_phone_number_id == phone_number_id)
+        org_id = (await db.execute(stmt)).scalar_one_or_none()
+        if org_id is not None:
+            return org_id
+        logger.info("whatsapp_org_lookup_miss", phone_number_id=phone_number_id)
+    return UUID(settings.default_org_id)
 
 
 # Keep strong references to fire-and-forget tasks so the event loop doesn't
@@ -221,15 +252,18 @@ async def process_inbound(payload: dict[str, Any]) -> None:
             logger.info("whatsapp_inbound_duplicate_skipped", wa_message_id=msg.id)
             return
 
+        phone_number_id = _extract_phone_number_id(payload)
+
         # Read receipt + typing indicator straight away, off the critical
         # path — the user sees "typing…" while the agent works. mark_read
-        # swallows its own errors, so fire-and-forget is safe.
-        _fire_and_forget(wa_client.mark_read(msg.id, typing=True))
-
-        org_id = UUID(settings.default_org_id)
+        # swallows its own errors, so fire-and-forget is safe. Sent from the
+        # same number the message arrived on, which is this org's own
+        # dedicated number when it has one (see _resolve_org_id below).
+        _fire_and_forget(wa_client.mark_read(msg.id, typing=True, phone_number_id=phone_number_id))
 
         started = time.monotonic()
         async with AsyncSessionLocal() as db:
+            org_id = await _resolve_org_id(db, phone_number_id)
             user = await _get_or_create_user(db, org_id, msg.from_phone)
             campaign_target_id = await _find_open_campaign_target(db, msg.from_phone)
             # Commit the user row before the (potentially long) LLM call so a
@@ -246,13 +280,15 @@ async def process_inbound(payload: dict[str, Any]) -> None:
                 channel="whatsapp",
                 input_text=text,
                 campaign_target_id=campaign_target_id,
+                org_id=org_id,
             )
             agent_done = time.monotonic()
 
         # send_text can raise — we let it bubble into the outer except so
         # structlog and Sentry capture the failure. (The read receipt was
-        # already fired above, before the agent ran.)
-        await wa_client.send_text(msg.from_phone, reply)
+        # already fired above, before the agent ran.) Replies go out from
+        # the same number the message came in on.
+        await wa_client.send_text(msg.from_phone, reply, phone_number_id=phone_number_id)
         send_done = time.monotonic()
 
         timings = {

@@ -32,6 +32,7 @@ from apps.api.deps import (
     CurrentUserDep,
     DbDep,
     RedisDep,
+    enforce_plan_limit,
     require_role,
 )
 from apps.api.schemas.team import (
@@ -57,6 +58,7 @@ def _member_out(account_user: AccountUser, membership: OrgMembership) -> TeamMem
         is_active=account_user.is_active,
         invited_at=membership.invited_at,
         joined_at=membership.joined_at,
+        is_owner=membership.invited_by_id is None,
     )
 
 
@@ -118,6 +120,22 @@ async def invite_member(
     role = payload.role
     if role not in ORG_MEMBERSHIP_ROLES:
         raise HTTPException(status_code=400, detail=f"role must be one of {ORG_MEMBERSHIP_ROLES}")
+
+    # The org owner (provisioned via /auth/provision-org, invited_by_id is
+    # null) doesn't count against max_seats — the limit is how many
+    # teammates the owner can invite, not the org's total headcount.
+    invited_member_count = await db.execute(
+        select(func.count())
+        .select_from(OrgMembership)
+        .where(OrgMembership.org_id == org.org_id, OrgMembership.invited_by_id.is_not(None))
+    )
+    await enforce_plan_limit(
+        db,
+        org.org_id,
+        "max_seats",
+        invited_member_count.scalar_one(),
+        message="You've reached your plan's team member limit. Upgrade your plan to add more.",
+    )
 
     existing_result = await db.execute(select(AccountUser).where(AccountUser.email == payload.email))
     account_user = existing_result.scalar_one_or_none()

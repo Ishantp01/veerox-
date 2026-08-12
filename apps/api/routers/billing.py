@@ -46,6 +46,7 @@ from apps.api.db.models.billing_payment import BillingPayment
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
 from apps.api.db.models.plan import Plan
+from apps.api.db.models.platform_settings import PlatformSettings
 from apps.api.deps import CurrentOrg, CurrentOrgDep, DbDep, RedisDep, require_role, verify_platform_admin
 from apps.api.schemas.billing import (
     BillingStatusOut,
@@ -55,9 +56,12 @@ from apps.api.schemas.billing import (
     OrgAdminOut,
     PlanAdminOut,
     PlanCreateIn,
+    PlatformSettingsOut,
+    PlatformSettingsUpdateIn,
     RegenerateAdminTokenOut,
     PlanOut,
     PlanUpdateIn,
+    SocialLinksOut,
     UsageMetricOut,
     VerifyPaymentIn,
 )
@@ -271,6 +275,55 @@ async def delete_plan(code: str, db: DbDep, _admin: PlatformAdminDep) -> None:
     await db.commit()
 
 
+async def _get_platform_settings(db: DbDep) -> PlatformSettings:
+    record = await db.get(PlatformSettings, 1)
+    if record is None:
+        # Defensive fallback in case the seed row from the migration is
+        # somehow missing — creates it on first read instead of 500ing.
+        record = PlatformSettings(id=1, help_desk_script=None, social_links={})
+        db.add(record)
+        await db.commit()
+        await db.refresh(record)
+    return record
+
+
+@router.get("/platform-settings", response_model=PlatformSettingsOut)
+async def get_platform_settings(db: DbDep, _admin: PlatformAdminDep) -> PlatformSettingsOut:
+    """Platform-wide help-desk script + social links, for the admin editor
+    on the Billing page (visible next to the Plan catalog)."""
+    record = await _get_platform_settings(db)
+    return PlatformSettingsOut(
+        help_desk_script=record.help_desk_script, social_links=record.social_links
+    )
+
+
+@router.patch("/platform-settings", response_model=PlatformSettingsOut)
+async def update_platform_settings(
+    payload: PlatformSettingsUpdateIn, db: DbDep, _admin: PlatformAdminDep
+) -> PlatformSettingsOut:
+    record = await _get_platform_settings(db)
+    fields = payload.model_dump(exclude_unset=True)
+    if "help_desk_script" in fields:
+        value = fields["help_desk_script"]
+        record.help_desk_script = value.strip() if value and value.strip() else None
+    if "social_links" in fields:
+        record.social_links = {k: v.strip() for k, v in (fields["social_links"] or {}).items() if v and v.strip()}
+    await db.commit()
+    await db.refresh(record)
+    return PlatformSettingsOut(
+        help_desk_script=record.help_desk_script, social_links=record.social_links
+    )
+
+
+@router.get("/social-links", response_model=SocialLinksOut)
+async def get_social_links(org: CurrentOrgDep, db: DbDep) -> SocialLinksOut:
+    """Read-only social links for client dashboards — any authenticated org
+    member (not just admins) can see these."""
+    _ = org  # CurrentOrgDep only used to require *some* valid session
+    record = await _get_platform_settings(db)
+    return SocialLinksOut(social_links=record.social_links)
+
+
 @router.get("/available-plans", response_model=list[PlanOut])
 async def list_available_plans(org: CurrentOrgDep, db: DbDep) -> list[PlanOut]:
     """The real, admin-managed plan catalog — active plans only, no
@@ -300,10 +353,15 @@ async def get_billing_status(org: CurrentOrgDep, db: DbDep) -> BillingStatusOut:
     # subquery for the count) instead of three separate queries — DB here
     # is a remote Neon instance (see .env), so every extra round trip this
     # endpoint fires (loaded on every dashboard page) is real latency.
+    # Matches routers/team.py's max_seats enforcement: the org owner
+    # (provisioned via /auth/provision-org, invited_by_id is null) doesn't
+    # count as a used seat — only teammates actually invited do. Counting
+    # the owner here would make this "used" figure disagree with what
+    # actually blocks a new invite.
     seat_count_subq = (
         select(func.count())
         .select_from(OrgMembership)
-        .where(OrgMembership.org_id == Org.id)
+        .where(OrgMembership.org_id == Org.id, OrgMembership.invited_by_id.is_not(None))
         .correlate(Org)
         .scalar_subquery()
     )

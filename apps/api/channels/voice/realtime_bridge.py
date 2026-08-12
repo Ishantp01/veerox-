@@ -1,17 +1,23 @@
-"""Plivo <-> OpenAI Realtime audio bridge (the voice channel's hot path).
+"""Plivo/Twilio <-> OpenAI Realtime audio bridge (the voice channel's hot path).
 
-Plivo opens a bidirectional WebSocket to ``/voice/stream`` (see
-``channels/voice/webhook.py``) and streams the caller's audio as base64 mu-law
-(8 kHz). This endpoint opens a second WebSocket to the OpenAI Realtime API and
-runs two concurrent pumps:
+Plivo or Twilio (see channels/voice/failover.py) opens a bidirectional
+WebSocket to ``/voice/stream`` (see ``channels/voice/webhook.py``) and
+streams the caller's audio as base64 mu-law (8 kHz). This endpoint opens a
+second WebSocket to the OpenAI Realtime API and runs two concurrent pumps:
 
-  * Plivo  -> OpenAI : caller audio -> ``input_audio_buffer.append``
-  * OpenAI -> Plivo  : model audio -> ``playAudio``, plus barge-in, tool
-                       calls, and transcript persistence (see ``voice.adapter``).
+  * caller -> OpenAI : caller audio -> ``input_audio_buffer.append``
+  * OpenAI -> caller : model audio -> a provider-specific play event, plus
+                       barge-in, tool calls, and transcript persistence
+                       (see ``voice.adapter``, which owns the per-provider
+                       message-shape differences).
 
-Audio is mu-law 8 kHz on BOTH legs (Plivo ``contentType=audio/x-mulaw;rate=8000``
-and OpenAI ``g711_ulaw``) so no resampling is required — the format-mismatch
-pitfall in longrunning/operations/pitfalls.md is avoided by construction.
+Audio is mu-law 8 kHz on all three legs (Plivo ``contentType=audio/x-mulaw;
+rate=8000``, Twilio's default Media Streams codec, and OpenAI ``g711_ulaw``)
+so no resampling is required — the format-mismatch pitfall in
+longrunning/operations/pitfalls.md is avoided by construction.
+
+Twilio side is unverified against a real account — see
+channels/voice/twilio_client.py's module docstring.
 """
 
 from __future__ import annotations
@@ -28,11 +34,13 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from apps.api.channels.voice import adapter as voice_adapter
 from apps.api.channels.voice import plivo_client as voice_plivo
+from apps.api.channels.voice import twilio_client as voice_twilio
 from apps.api.config import settings
 from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND, campaign_qualification_prompt
 from apps.api.core.usage import get_monthly_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
+from apps.api.db.models.org import Org
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
@@ -64,17 +72,25 @@ async def _resolve_org_id(campaign_target_id: UUID | None, raw_org_id: str | Non
     return UUID(raw_org_id) if raw_org_id else None
 
 
-async def _system_instructions(campaign_target_id: UUID | None) -> str:
+async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | None) -> str:
     """Pick the campaign-scoped qualification script when this call was
-    placed by the campaign dialer, else fall back to the fixed appointment-
-    booking script used by the single-number Dial page."""
+    placed by the campaign dialer, else the calling org's own script
+    override, else the fixed appointment-booking script used by the
+    single-number Dial page."""
     if campaign_target_id is not None:
         async with AsyncSessionLocal() as db:
             target = await db.get(CampaignTarget, campaign_target_id)
             campaign = await db.get(CallCampaign, target.campaign_id) if target else None
         if campaign is not None:
             return f"{campaign_qualification_prompt(campaign.criteria).strip()}\n\n{VOICE_APPEND.strip()}"
-    return f"{OUTBOUND_CALL_PROMPT.strip()}\n\n{VOICE_APPEND.strip()}"
+
+    base = OUTBOUND_CALL_PROMPT
+    if org_id is not None:
+        async with AsyncSessionLocal() as db:
+            org = await db.get(Org, org_id)
+        if org is not None and org.script:
+            base = org.script
+    return f"{base.strip()}\n\n{VOICE_APPEND.strip()}"
 
 
 def _session_update_event(instructions: str) -> dict[str, Any]:
@@ -110,7 +126,7 @@ _USAGE_CHECK_INTERVAL_SECS = 20
 
 
 async def _watch_usage_limit(
-    org_id: UUID, call_started_at: datetime, oai: Any, call_uuid: str, log: Any
+    org_id: UUID, call_started_at: datetime, oai: Any, call_uuid: str, provider: str, log: Any
 ) -> None:
     """Poll the org's plan usage while this call is live and force-hang-up
     the instant it crosses ``max_call_minutes_per_month``.
@@ -154,7 +170,10 @@ async def _watch_usage_limit(
                 await asyncio.sleep(4)
             except Exception:  # noqa: BLE001
                 pass
-            await voice_plivo.hangup_call(call_uuid)
+            if provider == "twilio":
+                await voice_twilio.hangup_call(call_uuid)
+            else:
+                await voice_plivo.hangup_call(call_uuid)
             return
 
 
@@ -164,10 +183,11 @@ async def voice_stream(ws: WebSocket) -> None:
     await ws.accept()
     caller = ws.query_params.get("from", "unknown")
     call_uuid = ws.query_params.get("call_uuid", "")
+    provider = ws.query_params.get("provider", "plivo")
     raw_campaign_target_id = ws.query_params.get("campaign_target_id")
     campaign_target_id = UUID(raw_campaign_target_id) if raw_campaign_target_id else None
     org_id = await _resolve_org_id(campaign_target_id, ws.query_params.get("org_id"))
-    log = logger.bind(caller=caller, call_uuid=call_uuid)
+    log = logger.bind(caller=caller, call_uuid=call_uuid, provider=provider)
     log.info("voice_stream_connected")
 
     conversation_id: Any = None
@@ -179,6 +199,7 @@ async def voice_stream(ws: WebSocket) -> None:
             user_id=user_id,
             conversation_id=conversation_id,
             org_id=org_id or UUID(settings.default_org_id),
+            provider=provider,
             campaign_target_id=campaign_target_id,
         )
         if campaign_target_id is not None:
@@ -186,7 +207,7 @@ async def voice_stream(ws: WebSocket) -> None:
             # (campaign_dialer.handle_call_ended) not to re-dial this person
             # just because qualify_lead didn't fire before they hung up.
             await voice_adapter.attach_campaign_conversation(campaign_target_id, conversation_id)
-        instructions = await _system_instructions(campaign_target_id)
+        instructions = await _system_instructions(campaign_target_id, org_id)
 
         # No OpenAI-Beta header on the GA endpoint — sending it alongside a GA
         # model name causes the connection to be rejected outright.
@@ -213,7 +234,7 @@ async def voice_stream(ws: WebSocket) -> None:
             )
             log.info("openai_realtime_connected")
 
-            async def pump_plivo_to_openai() -> None:
+            async def pump_call_to_openai() -> None:
                 try:
                     while True:
                         raw = await ws.receive_text()
@@ -231,22 +252,33 @@ async def voice_stream(ws: WebSocket) -> None:
                                     )
                                 )
                         elif event == "start":
-                            sid = (msg.get("start") or {}).get("streamId") or msg.get(
-                                "streamId", ""
+                            start = msg.get("start") or {}
+                            # streamId (Plivo) / streamSid (Twilio) — Twilio
+                            # requires this on every outbound media/clear
+                            # message (see adapter.py's _send_media).
+                            sid = (
+                                start.get("streamId")
+                                or start.get("streamSid")
+                                or msg.get("streamId")
+                                or msg.get("streamSid")
+                                or ""
                             )
-                            state.plivo_stream_id = sid
-                            log.info("plivo_stream_start", stream_id=sid)
+                            state.stream_id = sid
+                            log.info("call_stream_start", stream_id=sid)
+                        elif event == "connected":
+                            # Twilio sends this before "start" — nothing to do.
+                            pass
                         elif event == "stop":
-                            log.info("plivo_stream_stop")
+                            log.info("call_stream_stop")
                             break
                 except WebSocketDisconnect:
-                    log.info("plivo_ws_disconnected")
+                    log.info("call_ws_disconnected")
                 except Exception as exc:  # noqa: BLE001
-                    log.warning("pump_plivo_error", error=str(exc))
+                    log.warning("pump_call_error", error=str(exc))
                 finally:
                     await oai.close()
 
-            async def pump_openai_to_plivo() -> None:
+            async def pump_openai_to_call() -> None:
                 try:
                     async for raw in oai:
                         event = json.loads(raw)
@@ -260,13 +292,15 @@ async def voice_stream(ws: WebSocket) -> None:
 
             call_started_at = datetime.now(UTC)
             tasks = [
-                asyncio.create_task(pump_plivo_to_openai()),
-                asyncio.create_task(pump_openai_to_plivo()),
+                asyncio.create_task(pump_call_to_openai()),
+                asyncio.create_task(pump_openai_to_call()),
             ]
             if call_uuid and state.org_id:
                 tasks.append(
                     asyncio.create_task(
-                        _watch_usage_limit(state.org_id, call_started_at, oai, call_uuid, log)
+                        _watch_usage_limit(
+                            state.org_id, call_started_at, oai, call_uuid, provider, log
+                        )
                     )
                 )
             _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

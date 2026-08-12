@@ -8,7 +8,7 @@ import {
 } from "@/lib/hooks/useBilling";
 import { openRazorpayCheckout } from "@/lib/razorpay";
 import { useQueryClient } from "@tanstack/react-query";
-import { Check } from "lucide-react";
+import { Check, X } from "lucide-react";
 import { useState } from "react";
 
 function formatPriceLabel(cents: number): string {
@@ -19,27 +19,35 @@ function formatPriceLabel(cents: number): string {
 // not listed here (a key added to the catalog later) still shows up via the
 // fallback below, just with its raw key humanised.
 const LIMIT_LABELS: Record<string, string> = {
+  max_seats: "team members",
   max_campaigns: "campaigns",
   max_call_minutes_per_month: "call minutes / month",
   max_whatsapp_messages_per_month: "WhatsApp messages / month",
+  automated_followups: "automated follow-ups",
 };
 
 function formatLimitValue(value: unknown): string {
   if (value === null || value === undefined) return "Unlimited";
   if (typeof value === "number") return value.toLocaleString("en-IN");
-  if (typeof value === "boolean") return value ? "Included" : "Not included";
+  if (typeof value === "boolean") return "";
   return String(value);
 }
 
-function planFeatures(limits: Record<string, unknown>): { key: string; text: string }[] {
+function planFeatures(
+  limits: Record<string, unknown>
+): { key: string; text: string; included: boolean }[] {
   const ordered = [
     ...Object.keys(LIMIT_LABELS).filter((k) => k in limits),
     ...Object.keys(limits).filter((k) => !(k in LIMIT_LABELS)),
   ];
-  return ordered.map((key) => ({
-    key,
-    text: `${formatLimitValue(limits[key])} ${LIMIT_LABELS[key] ?? key.replace(/_/g, " ")}`,
-  }));
+  return ordered.map((key) => {
+    const value = limits[key];
+    const label = LIMIT_LABELS[key] ?? key.replace(/_/g, " ");
+    // Boolean feature flags (e.g. automated_followups) read as a plain
+    // label — "Automated follow-ups" / struck-through — not "true campaigns".
+    const text = typeof value === "boolean" ? label : `${formatLimitValue(value)} ${label}`;
+    return { key, text, included: value !== false };
+  });
 }
 
 /**
@@ -153,12 +161,17 @@ export function ChoosePlanCards({
               </p>
               <ul className="flex flex-col gap-1.5 text-sm text-slate-600 dark:text-slate-400">
                 {planFeatures(plan.limits).map((feature) => (
-                  <li key={feature.key} className="flex items-start gap-2">
-                    <Check
-                      size={14}
-                      aria-hidden
-                      className="mt-0.5 shrink-0 text-primary-500"
-                    />
+                  <li
+                    key={feature.key}
+                    className={`flex items-start gap-2 ${
+                      feature.included ? "" : "text-slate-400 dark:text-slate-600"
+                    }`}
+                  >
+                    {feature.included ? (
+                      <Check size={14} aria-hidden className="mt-0.5 shrink-0 text-primary-500" />
+                    ) : (
+                      <X size={14} aria-hidden className="mt-0.5 shrink-0 text-slate-300 dark:text-slate-700" />
+                    )}
                     <span>{feature.text}</span>
                   </li>
                 ))}

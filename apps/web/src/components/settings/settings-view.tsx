@@ -1,13 +1,12 @@
-﻿"use client";
+"use client";
 
-import { useState, type ReactNode } from "react";
-import { Bot, ChevronRight, Plug, Wrench } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Bot, ChevronRight } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
-import { Badge, Card, CardContent, CardHeader, Skeleton } from "@/components/ui";
-import { usePrompts, useTools, useWhatsAppSettings, useCallingSettings } from "@/lib/hooks";
-import type { CallingSettings, Prompts, Tool, WhatsAppSettings } from "@/lib/types";
+import { Button, Card, CardContent, CardHeader, Skeleton, Textarea } from "@/components/ui";
+import { useScript, useUpdateScript } from "@/lib/hooks";
 
 interface CollapsibleSectionProps {
   title: string;
@@ -50,181 +49,121 @@ function CollapsibleSection({
   );
 }
 
-function CodeBlock({ children }: { children: ReactNode }) {
-  return (
-    <pre className="overflow-x-auto rounded-xl border border-slate-700 bg-slate-900 p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-slate-100">
-      {children}
-    </pre>
-  );
-}
+function ScriptEditor() {
+  const script = useScript();
+  const updateScript = useUpdateScript();
+  const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(false);
 
-function PromptsBlocks({
-  prompts,
-  promptKeys,
-}: {
-  prompts: Prompts;
-  promptKeys: Array<keyof Prompts>;
-}) {
+  useEffect(() => {
+    if (script.data) setDraft(script.data.script);
+  }, [script.data]);
+
+  const dirty = script.data !== undefined && draft !== script.data.script;
+
   return (
-    <div className="flex flex-col gap-4">
-      {promptKeys.map((key) => (
-        <div key={key}>
-          <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-400">
-            {key}
+    <QueryBoundary
+      isLoading={script.isLoading}
+      isError={script.isError}
+      error={script.error}
+      onRetry={() => script.refetch()}
+      loadingFallback={<Skeleton className="h-48 w-full rounded-xl" />}
+    >
+      {script.data && (
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            This is what the AI follows on both WhatsApp and calls. It can still answer
+            questions outside this script — this just sets the flow it returns to.
+            {script.data.is_default && " Currently using the platform default shown below."}
           </p>
-          <CodeBlock>{prompts[key] || "—"}</CodeBlock>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ToolsBlocks({ tools }: { tools: Tool[] }) {
-  return (
-    <div className="flex flex-col gap-4">
-      {tools.map((tool, idx) => {
-        const name =
-          tool.function?.name ??
-          (typeof tool.name === "string" ? tool.name : `tool_${idx}`);
-        return (
-          <div key={`${name}_${idx}`}>
-            <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-primary-500">
-              {name}
-            </p>
-            <CodeBlock>{JSON.stringify(tool, null, 2)}</CodeBlock>
+          <Textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            readOnly={!editing}
+            rows={18}
+            className={`font-mono text-xs ${!editing ? "cursor-default bg-slate-50 dark:bg-slate-800/50" : ""}`}
+          />
+          <div className="flex items-center gap-2">
+            {!editing ? (
+              <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  disabled={!dirty}
+                  loading={updateScript.isPending}
+                  onClick={() => {
+                    updateScript.mutate(draft);
+                    setEditing(false);
+                  }}
+                >
+                  Save script
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={script.data.is_default || updateScript.isPending}
+                  onClick={() => {
+                    updateScript.mutate(null);
+                    setEditing(false);
+                  }}
+                >
+                  Reset to default
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={updateScript.isPending}
+                  onClick={() => {
+                    setDraft(script.data!.script);
+                    setEditing(false);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </>
+            )}
+            {updateScript.isError && (
+              <span className="text-xs text-red-500">{updateScript.error.message}</span>
+            )}
           </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function ConfiguredBadge({ ok }: { ok: boolean }) {
-  return ok ? <Badge variant="success">Configured</Badge> : <Badge variant="danger">Not set</Badge>;
-}
-
-function StatusRow({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-4 border-b border-slate-100 py-2.5 last:border-0 dark:border-slate-800">
-      <span className="text-sm text-slate-600 dark:text-slate-400">{label}</span>
-      <span className="text-right text-sm font-medium break-all text-slate-800 dark:text-slate-200">{value}</span>
-    </div>
-  );
-}
-
-function WhatsAppConnectionStatus({ settings }: { settings: WhatsAppSettings }) {
-  return (
-    <div className="flex flex-col">
-      <StatusRow label="Access token" value={<ConfiguredBadge ok={settings.access_token_configured} />} />
-      <StatusRow label="Phone number ID" value={settings.phone_number_id ?? "—"} />
-      <StatusRow
-        label="Business account ID"
-        value={settings.whatsapp_business_account_id ?? "—"}
-      />
-      <StatusRow label="App ID" value={<ConfiguredBadge ok={settings.app_id_configured} />} />
-      <StatusRow label="App secret" value={<ConfiguredBadge ok={settings.app_secret_configured} />} />
-      <StatusRow
-        label="Webhook verify token"
-        value={<ConfiguredBadge ok={settings.verify_token_configured} />}
-      />
-      <StatusRow label="Graph API version" value={settings.graph_api_version} />
-      <StatusRow label="Webhook callback URL" value={settings.webhook_url} />
-    </div>
-  );
-}
-
-function CallingConnectionStatus({ settings }: { settings: CallingSettings }) {
-  return (
-    <div className="flex flex-col">
-      <StatusRow label="Auth ID" value={<ConfiguredBadge ok={settings.auth_id_configured} />} />
-      <StatusRow label="Auth token" value={<ConfiguredBadge ok={settings.auth_token_configured} />} />
-      <StatusRow label="Phone number" value={settings.phone_number ?? "—"} />
-      <StatusRow label="Answer webhook URL" value={settings.answer_webhook_url} />
-    </div>
+        </div>
+      )}
+    </QueryBoundary>
   );
 }
 
 export interface SettingsViewProps {
   title: string;
   description: string;
-  /** Which prompt blocks to show, in order — e.g. ["base", "whatsapp_append"]. */
-  promptKeys: Array<keyof Prompts>;
-  /** Which channel's connection status to show above the prompts/tools. */
+  /** Which channel this page is for — selects which number field to show. */
   channel: "whatsapp" | "calling";
 }
 
 /**
- * Read-only connection status + prompts + tools view. Used by the
- * per-channel /whatsapp/settings and /calling/settings pages — `channel`
- * selects which channel's config status to fetch, `promptKeys` selects
- * which prompt blocks are relevant.
+ * Editable script + number view for the per-channel /whatsapp/settings and
+ * /calling/settings pages. The script is shared by both channels (see
+ * core/agent.py::_system_prompt_for and
+ * channels/voice/realtime_bridge.py::_system_instructions); the number is
+ * channel-specific and determines which org an inbound message/call on it
+ * resolves to (channels/whatsapp/adapter.py, channels/voice/webhook.py).
  */
-export function SettingsView({ title, description, promptKeys, channel }: SettingsViewProps) {
-  const prompts = usePrompts();
-  const tools = useTools();
-  const whatsappSettings = useWhatsAppSettings();
-  const callingSettings = useCallingSettings();
-  const connection = channel === "whatsapp" ? whatsappSettings : callingSettings;
-
-  const loadingFallback = <Skeleton className="h-24 w-full rounded-xl" />;
-
+export function SettingsView({ title, description }: SettingsViewProps) {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader title={title} description={description} />
 
       <div className="flex flex-col gap-5">
         <CollapsibleSection
-          title="Connection Status"
-          icon={<Plug size={15} aria-hidden className="text-slate-400" />}
+          title="Script"
+          icon={<Bot size={15} aria-hidden className="text-slate-400" />}
           defaultOpen
         >
-          <QueryBoundary
-            isLoading={connection.isLoading}
-            isError={connection.isError}
-            error={connection.error}
-            onRetry={() => connection.refetch()}
-            loadingFallback={loadingFallback}
-          >
-            {channel === "whatsapp" && whatsappSettings.data && (
-              <WhatsAppConnectionStatus settings={whatsappSettings.data} />
-            )}
-            {channel === "calling" && callingSettings.data && (
-              <CallingConnectionStatus settings={callingSettings.data} />
-            )}
-          </QueryBoundary>
+          <ScriptEditor />
         </CollapsibleSection>
 
-        <CollapsibleSection
-          title="Active Prompts"
-          icon={<Bot size={15} aria-hidden className="text-slate-400" />}
-        >
-          <QueryBoundary
-            isLoading={prompts.isLoading}
-            isError={prompts.isError}
-            error={prompts.error}
-            onRetry={() => prompts.refetch()}
-            loadingFallback={loadingFallback}
-          >
-            {prompts.data && <PromptsBlocks prompts={prompts.data} promptKeys={promptKeys} />}
-          </QueryBoundary>
-        </CollapsibleSection>
-
-        <CollapsibleSection
-          title="Registered Tools"
-          icon={<Wrench size={15} aria-hidden className="text-slate-400" />}
-        >
-          <QueryBoundary
-            isLoading={tools.isLoading}
-            isError={tools.isError}
-            error={tools.error}
-            isEmpty={(tools.data?.length ?? 0) === 0}
-            onRetry={() => tools.refetch()}
-            loadingFallback={loadingFallback}
-            emptyFallback={<p className="text-sm text-slate-500">No tools registered.</p>}
-          >
-            {tools.data && <ToolsBlocks tools={tools.data} />}
-          </QueryBoundary>
-        </CollapsibleSection>
       </div>
     </div>
   );

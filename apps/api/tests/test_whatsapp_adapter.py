@@ -119,15 +119,18 @@ async def test_text_message_triggers_agent_and_send(
         channel: str,
         input_text: str,
         campaign_target_id: uuid.UUID | None = None,
+        org_id: uuid.UUID | None = None,
     ) -> str:
         handle_calls.append({"user_id": user_id, "channel": channel, "text": input_text})
         return "hello back"
 
-    async def fake_send_text(to: str, body: str) -> dict[str, Any]:
+    async def fake_send_text(
+        to: str, body: str, phone_number_id: str | None = None
+    ) -> dict[str, Any]:
         send_calls.append((to, body))
         return {"messages": [{"id": "wamid.out"}]}
 
-    async def fake_mark_read(msg_id: str, typing: bool = False) -> None:
+    async def fake_mark_read(msg_id: str, typing: bool = False, phone_number_id: str | None = None) -> None:
         mark_calls.append(msg_id)
 
     # Patch where the adapter looks them up (it imports the names from the
@@ -163,15 +166,18 @@ async def test_duplicate_message_id_is_skipped_on_second_delivery(
         channel: str,
         input_text: str,
         campaign_target_id: uuid.UUID | None = None,
+        org_id: uuid.UUID | None = None,
     ) -> str:
         handle_calls.append(input_text)
         return "echo: " + input_text
 
-    async def fake_send_text(to: str, body: str) -> dict[str, Any]:
+    async def fake_send_text(
+        to: str, body: str, phone_number_id: str | None = None
+    ) -> dict[str, Any]:
         send_calls.append((to, body))
         return {"messages": [{"id": "wamid.out"}]}
 
-    async def fake_mark_read(_: str, typing: bool = False) -> None:
+    async def fake_mark_read(_: str, typing: bool = False, phone_number_id: str | None = None) -> None:
         return None
 
     monkeypatch.setattr(adapter_module.agent_core, "handle_turn", fake_handle_turn)
