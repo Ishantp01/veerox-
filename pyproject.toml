@@ -27,6 +27,7 @@ dependencies = [
     "argon2-cffi",
     "razorpay",
     "email-validator",
+    "tzdata",
 ]
 
 [dependency-groups]

@@ -20,16 +20,21 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import httpx
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.channels.voice import failover as voice_failover
+from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.appointment import Appointment
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.lead import Lead
+from apps.api.db.models.org import Org
 from apps.api.db.models.user import User
 from apps.api.redis_client import get_redis_pool
 
@@ -75,6 +80,16 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "time": {
                         "type": "string",
                         "description": "Requested appointment time (HH:MM, 24-hour).",
+                    },
+                    "timezone": {
+                        "type": "string",
+                        "description": (
+                            "IANA timezone name (e.g. 'America/New_York', 'Europe/London') "
+                            "that date/time above are in. Defaults to IST (Asia/Kolkata) — "
+                            "only set this if the caller explicitly asks to book in a "
+                            "different timezone. This only affects this one booking, not "
+                            "any default going forward."
+                        ),
                     },
                     "notes": {
                         "type": "string",
@@ -159,6 +174,64 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_whatsapp_message",
+            "description": (
+                "Send a WhatsApp text message to the caller — use this when someone on a "
+                "call (or in WhatsApp chat) asks to receive information (pricing, links, "
+                "confirmations, etc.) in writing over WhatsApp. If they don't give a "
+                "different number, it goes to their own number automatically."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The message text to send over WhatsApp.",
+                    },
+                    "phone": {
+                        "type": "string",
+                        "description": (
+                            "Phone number to send to (E.164 preferred). Omit to use the "
+                            "current caller's own number."
+                        ),
+                    },
+                },
+                "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "initiate_ai_call",
+            "description": (
+                "Place an outbound AI voice call to the caller — use this when someone "
+                "chatting over WhatsApp asks to be called instead of continuing over text. "
+                "If they don't give a different number, it calls their own number "
+                "automatically. Not usable while already on a voice call."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phone": {
+                        "type": "string",
+                        "description": (
+                            "Phone number to call (E.164 preferred). Omit to use the "
+                            "current caller's own number."
+                        ),
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief reason for the call, for context/logging.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 
@@ -166,6 +239,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 _HANDOFF_QUEUE_KEY = "human_handoff_queue"
 _LEAD_DEDUPE_PREFIX = "veerox:lead_dedupe:"
 _LEAD_DEDUPE_TTL_SECS = 10 * 60  # 10 minutes per spec §2.3
+
+# All bookings are interpreted in IST unless the caller explicitly asks for a
+# different timezone on that specific booking (see book_appointment's
+# ``timezone`` arg) — the org has no configured locale of its own, so this is
+# the fixed default rather than something derived from Org/User rows.
+DEFAULT_BOOKING_TIMEZONE = "Asia/Kolkata"
 
 
 def _default_org_id() -> UUID:
@@ -282,6 +361,7 @@ async def book_appointment(
     db: AsyncSession,
     date: str,
     time: str,
+    timezone: str | None = None,
     notes: str | None = None,
     user_id: UUID | None = None,
     org_id: UUID | None = None,
@@ -303,9 +383,15 @@ async def book_appointment(
     called, invisible to every other org's dashboard.
 
     ``date``/``time`` come from the LLM per the tool schema above — ISO 8601
-    date, HH:MM 24-hour time — and are combined into a UTC ``scheduled_at``.
-    Malformed values fail the booking outright rather than silently landing
-    on the CRM with no calendar entry.
+    date, HH:MM 24-hour time. ``timezone`` is the IANA zone that pair should
+    be read in; it defaults to IST (``DEFAULT_BOOKING_TIMEZONE``) and only
+    ever applies to this one booking — there's no per-org/per-user override
+    stored anywhere, by design (the caller says "book it for 3pm Berlin
+    time" once, not "change my timezone"). The local wall-clock time is
+    resolved in that zone, then converted to UTC for storage — ``Appointment
+    .scheduled_at`` stays UTC regardless of what zone the caller booked in.
+    Malformed date/time/timezone values fail the booking outright rather
+    than silently landing on the CRM with no calendar entry.
     """
     if user_id is None:
         return {"status": "error", "reason": "missing_user_id"}
@@ -314,14 +400,31 @@ async def book_appointment(
     booking_user_id = user_id
     booking_user = await db.get(User, booking_user_id)
 
+    tz_name = timezone or DEFAULT_BOOKING_TIMEZONE
     try:
-        scheduled_at = datetime.fromisoformat(f"{date}T{time}").replace(tzinfo=UTC)
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return {"status": "error", "reason": "invalid_timezone"}
+
+    try:
+        local_dt = datetime.fromisoformat(f"{date}T{time}").replace(tzinfo=tz)
     except ValueError:
         return {"status": "error", "reason": "invalid_date_or_time"}
+    scheduled_at = local_dt.astimezone(UTC)
+
+    if scheduled_at <= datetime.now(UTC):
+        # Caught here rather than left to the LLM's judgment — the model has
+        # no reliable sense of "now" on its own and will otherwise happily
+        # book a plausible-sounding past date/time straight onto the
+        # calendar. Returned as a normal tool error so the agent's next turn
+        # can ask the caller for a different, future time instead of the
+        # booking silently landing in the past.
+        return {"status": "error", "reason": "date_in_past"}
 
     metadata: dict[str, Any] = {
         "date": date,
         "time": time,
+        "timezone": tz_name,
         "notes": notes,
         "booked_at": datetime.now(UTC).isoformat(),
     }
@@ -354,6 +457,7 @@ async def book_appointment(
         user_id=str(booking_user_id),
         date=date,
         time=time,
+        timezone=tz_name,
     )
     return {
         "status": "ok",
@@ -361,6 +465,7 @@ async def book_appointment(
         "appointment_id": str(appointment.id),
         "date": date,
         "time": time,
+        "timezone": tz_name,
     }
 
 
@@ -533,6 +638,113 @@ async def lookup_customer(
     }
 
 
+async def send_whatsapp_message(
+    db: AsyncSession,
+    message: str,
+    phone: str | None = None,
+    user_id: UUID | None = None,
+    org_id: UUID | None = None,
+    channel: str | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Send a free-form WhatsApp text to the caller, from either channel.
+
+    Lets the AI act on "send that to me on WhatsApp" mid-call, and lets a
+    WhatsApp conversation send a message to a *different* number the caller
+    names. ``phone`` is optional: when omitted, falls back to the current
+    caller's own number (resolved via ``user_id``) — the common case.
+
+    Only free-form text, not templates — this is a chat-initiated send, not
+    the 24h-window bypass. Outside the customer-service window Meta rejects
+    it (error 131047); that surfaces as ``status="error"`` here so the model
+    can tell the caller a template/human follow-up is needed instead.
+    """
+    org_id = org_id or _default_org_id()
+
+    target_phone = phone
+    if not target_phone and user_id is not None:
+        caller = await db.get(User, user_id)
+        target_phone = caller.phone if caller else None
+
+    if not target_phone:
+        return {"status": "error", "reason": "no_phone_number_available"}
+
+    normalized = _normalize_phone(target_phone)
+    org = await db.get(Org, org_id)
+    phone_number_id = org.whatsapp_phone_number_id if org else None
+
+    try:
+        await wa_client.send_text(normalized, message, phone_number_id=phone_number_id)
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "send_whatsapp_message_tool_failed",
+            phone=normalized,
+            error=str(exc),
+        )
+        return {"status": "error", "reason": "whatsapp_send_failed"}
+
+    logger.info("send_whatsapp_message_tool_ok", phone=normalized, org_id=str(org_id))
+    return {"status": "ok", "phone": normalized}
+
+
+async def initiate_ai_call(
+    db: AsyncSession,
+    phone: str | None = None,
+    reason: str | None = None,
+    user_id: UUID | None = None,
+    org_id: UUID | None = None,
+    channel: str | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Place an outbound AI voice call to the caller, from a WhatsApp chat.
+
+    Refuses on the voice channel itself (already on a call). Reuses the same
+    Plivo/Twilio failover ``routers/admin.py``'s ``outbound_call`` endpoint
+    uses, dialing from the org's own number when it has one.
+    """
+    if channel == "voice":
+        return {"status": "error", "reason": "already_on_a_call"}
+
+    org_id = org_id or _default_org_id()
+
+    target_phone = phone
+    if not target_phone and user_id is not None:
+        caller = await db.get(User, user_id)
+        target_phone = caller.phone if caller else None
+
+    if not target_phone:
+        return {"status": "error", "reason": "no_phone_number_available"}
+
+    if not voice_failover.is_configured():
+        return {"status": "error", "reason": "calling_not_configured"}
+
+    normalized = _normalize_phone(target_phone)
+    org = await db.get(Org, org_id)
+    plivo_from = f"+{org.plivo_phone_number}" if org and org.plivo_phone_number else None
+    twilio_from = f"+{org.twilio_phone_number}" if org and org.twilio_phone_number else None
+
+    answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer?org_id={org_id}"
+    try:
+        _result, provider = await voice_failover.initiate_call(
+            normalized,
+            answer_url,
+            plivo_from_number=plivo_from,
+            twilio_from_number=twilio_from,
+        )
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "initiate_ai_call_tool_failed",
+            phone=normalized,
+            error=str(exc),
+        )
+        return {"status": "error", "reason": "call_failed"}
+
+    logger.info(
+        "initiate_ai_call_tool_ok", phone=normalized, org_id=str(org_id), provider=provider
+    )
+    return {"status": "ok", "phone": normalized, "provider": provider}
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table — looked up by the agent loop. Handlers expect ``db`` first
 # and accept ``user_id`` as an optional kwarg the agent may inject.
@@ -547,4 +759,6 @@ DISPATCH_TABLE: dict[str, ToolHandler] = {
     "transfer_to_human": transfer_to_human,
     "qualify_lead": qualify_lead,
     "lookup_customer": lookup_customer,
+    "send_whatsapp_message": send_whatsapp_message,
+    "initiate_ai_call": initiate_ai_call,
 }

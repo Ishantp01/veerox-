@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
+
+# Kept in sync with core/tools.py's DEFAULT_BOOKING_TIMEZONE — this is the
+# zone callers' dates/times are assumed to be in unless they explicitly ask
+# for a different one on a given booking.
+_DEFAULT_TZ = ZoneInfo("Asia/Kolkata")
+
 BASE_SYSTEM_PROMPT = """
 You are Veerox, an AI sales and support agent. You are helpful, concise, and professional.
 Your job is to assist callers with inquiries, capture leads, book appointments, and escalate
@@ -9,11 +17,19 @@ to a human agent when needed. Always be polite and solution-oriented.
 VOICE_APPEND = """
 You are speaking over a phone call. Keep your responses short and conversational.
 Avoid bullet points, markdown, or lists. Speak naturally as if talking to someone.
+
+If the caller asks you to send them something in writing - pricing, a link, a confirmation,
+anything - call send_whatsapp_message rather than trying to read it all out loud. It defaults
+to their own number, so you don't need to ask for it unless they want it sent elsewhere.
 """
 
 WHATSAPP_APPEND = """
 You are responding over WhatsApp. You may use short paragraphs and occasional line breaks
 for readability, but keep responses concise. Avoid overly long messages.
+
+If the user asks to be called instead of continuing over text, call initiate_ai_call. It
+defaults to their own number, so you don't need to ask for it unless they want a different
+number called.
 
 If the user asks something outside your normal role above (general knowledge, casual
 conversation, unrelated topics), don't refuse or say it's outside your scope - just answer
@@ -26,6 +42,35 @@ The conversation history above already belongs to this user — they are a retur
 in this session. Do not call lookup_customer for them again; you already have what it would
 return. Only call it if they explicitly ask you to check a different phone number.
 """
+
+def current_datetime_block() -> str:
+    """Ground the model in the real current date/time (UTC).
+
+    The model has no reliable sense of "now" from its training data alone —
+    left unstated, it guesses, and that guess can land on an arbitrary,
+    wrong date instead of today. Every relative booking request
+    ("tomorrow", "in 15 minutes", "next Tuesday") depends on this being
+    present in the prompt; without it, ``book_appointment``'s
+    ``date_in_past`` guard is the only thing catching bad guesses, and only
+    when the guess happens to land in the past rather than just being wrong.
+    Shared by both the text/WhatsApp path (``core/agent.py``) and the voice
+    Realtime path (``channels/voice/realtime_bridge.py``) so a caller can't
+    get a different "today" depending on which channel they use.
+    """
+    now_utc = datetime.now(UTC)
+    now_ist = now_utc.astimezone(_DEFAULT_TZ)
+    return (
+        f"Current date and time: {now_ist.strftime('%A, %B %d, %Y')} at "
+        f"{now_ist.strftime('%H:%M')} IST (UTC: {now_utc.isoformat()}). Use this as your "
+        "sole source of truth for \"today\", \"tomorrow\", \"in N minutes\", or any "
+        "other relative date/time the caller gives you — never guess or rely on "
+        "your own training data for the current date. Bookings default to IST: "
+        "when calling book_appointment, treat the caller's date/time as IST and leave "
+        "the timezone argument unset UNLESS they explicitly ask for a different "
+        "timezone for that specific booking, in which case pass that IANA timezone "
+        "name instead — it only applies to that one booking, not a lasting preference."
+    )
+
 
 def campaign_qualification_prompt(criteria: str) -> str:
     """Build the system prompt for an outbound campaign qualification call.

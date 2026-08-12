@@ -26,6 +26,7 @@ from apps.api.core.prompts import (
     OUTBOUND_CALL_PROMPT,
     VOICE_APPEND,
     WHATSAPP_APPEND,
+    current_datetime_block,
 )
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
 from apps.api.db.models.campaign_target import CampaignTarget
@@ -66,7 +67,7 @@ Channel = Literal["voice", "whatsapp"]
 
 async def _system_prompt_for(db: AsyncSession, org_id: UUID, channel: Channel) -> str:
     """Compose the org's script (or the platform default) with the
-    per-channel append block.
+    per-channel append block and the current-date/time grounding block.
 
     Strips both sides because ``prompts.py`` uses triple-quoted blocks that
     carry leading/trailing newlines — without this the joined system message
@@ -76,7 +77,7 @@ async def _system_prompt_for(db: AsyncSession, org_id: UUID, channel: Channel) -
     org = await db.get(Org, org_id)
     base = org.script if org is not None and org.script else OUTBOUND_CALL_PROMPT
     append = VOICE_APPEND if channel == "voice" else WHATSAPP_APPEND
-    return f"{base.strip()}\n\n{append.strip()}"
+    return f"{base.strip()}\n\n{current_datetime_block()}\n\n{append.strip()}"
 
 
 async def _is_kill_switch_active() -> bool:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -143,10 +144,11 @@ async def test_book_appointment_persists_channel_when_provided(
     db_session.add(user)
     await db_session.commit()
 
+    future = datetime.now(UTC) + timedelta(days=7)
     result = await book_appointment(
         db_session,
         user_id=user.id,
-        date="2026-08-01",
+        date=future.date().isoformat(),
         time="10:00",
         channel="voice",
     )
@@ -160,7 +162,33 @@ async def test_book_appointment_persists_channel_when_provided(
     appointment = (
         await db_session.execute(select(Appointment).where(Appointment.lead_id == row.id))
     ).scalars().one()
-    assert appointment.scheduled_at.replace(tzinfo=None).isoformat() == "2026-08-01T10:00:00"
+    expected = f"{future.date().isoformat()}T10:00:00"
+    assert appointment.scheduled_at.replace(tzinfo=None).isoformat() == expected
+
+
+async def test_book_appointment_rejects_past_date(
+    db_session: AsyncSession, fake_redis: _FakeRedis
+) -> None:
+    """A past date/time must be rejected rather than silently booked — the
+    LLM has no reliable sense of "now" on its own (see core/tools.py's
+    book_appointment)."""
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000099", name="Caller")
+    db_session.add(user)
+    await db_session.commit()
+
+    past = datetime.now(UTC) - timedelta(days=1)
+    result = await book_appointment(
+        db_session,
+        user_id=user.id,
+        date=past.date().isoformat(),
+        time="10:00",
+        channel="whatsapp",
+    )
+
+    assert result == {"status": "error", "reason": "date_in_past"}
+    count = (await db_session.execute(select(Lead).where(Lead.intent == "booking"))).scalars().all()
+    assert count == []
 
 
 async def test_transfer_to_human_enqueues_and_writes_lead(

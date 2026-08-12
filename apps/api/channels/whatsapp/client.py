@@ -45,6 +45,28 @@ def _auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {settings.meta_access_token}"}
 
 
+def _meta_error_detail(exc: httpx.HTTPError) -> dict[str, Any] | None:
+    """Pull Meta's structured error body (code, message, error_data) off a
+    failed response, when there is one.
+
+    ``str(exc)`` alone (what every send function logged before this) only
+    gives the HTTP status line, e.g. "400 Bad Request" - it discards the
+    JSON body where Meta actually explains *why* (invalid/unapproved
+    template, expired token, disallowed re-engagement, mismatched
+    component structure, ...). Without this, every failed send showed up in
+    logs as an opaque "Failed" with no way to tell those cases apart.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    return error if isinstance(error, dict) else None
+
+
 async def send_text(to_e164: str, body: str, phone_number_id: str | None = None) -> dict[str, Any]:
     """Send a plain-text WhatsApp message via the Graph API.
 
@@ -71,6 +93,7 @@ async def send_text(to_e164: str, body: str, phone_number_id: str | None = None)
             to=to_e164,
             error=str(exc),
             status=getattr(getattr(exc, "response", None), "status_code", None),
+            meta_error=_meta_error_detail(exc),
         )
         raise
 
@@ -133,6 +156,7 @@ async def send_template(
             template=template_name,
             error=str(exc),
             status=getattr(getattr(exc, "response", None), "status_code", None),
+            meta_error=_meta_error_detail(exc),
         )
         raise
 

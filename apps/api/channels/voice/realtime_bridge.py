@@ -36,7 +36,12 @@ from apps.api.channels.voice import adapter as voice_adapter
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.voice import twilio_client as voice_twilio
 from apps.api.config import settings
-from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND, campaign_qualification_prompt
+from apps.api.core.prompts import (
+    OUTBOUND_CALL_PROMPT,
+    VOICE_APPEND,
+    campaign_qualification_prompt,
+    current_datetime_block,
+)
 from apps.api.core.usage import get_monthly_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
@@ -82,7 +87,10 @@ async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | N
             target = await db.get(CampaignTarget, campaign_target_id)
             campaign = await db.get(CallCampaign, target.campaign_id) if target else None
         if campaign is not None:
-            return f"{campaign_qualification_prompt(campaign.criteria).strip()}\n\n{VOICE_APPEND.strip()}"
+            return (
+                f"{campaign_qualification_prompt(campaign.criteria).strip()}\n\n"
+                f"{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
+            )
 
     base = OUTBOUND_CALL_PROMPT
     if org_id is not None:
@@ -90,7 +98,7 @@ async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | N
             org = await db.get(Org, org_id)
         if org is not None and org.script:
             base = org.script
-    return f"{base.strip()}\n\n{VOICE_APPEND.strip()}"
+    return f"{base.strip()}\n\n{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
 
 
 def _session_update_event(instructions: str) -> dict[str, Any]:
