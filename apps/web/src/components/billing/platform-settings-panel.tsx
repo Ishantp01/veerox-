@@ -57,9 +57,9 @@ export function HelpDeskScriptPanel() {
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          System prompt for the in-app help-desk widget every org's team members can open. It's
-          global — there is no per-org override. Leave blank to use the built-in default (scoped
-          to Veerox product questions only).
+          System prompt for the in-app help-desk widget every org&apos;s team members can open.
+          It&apos;s global — there is no per-org override. Leave blank to use the built-in default
+          (scoped to Veerox product questions only).
         </p>
         <Textarea
           value={scriptDraft}
