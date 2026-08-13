@@ -8,6 +8,7 @@ swallow or escalate.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -65,6 +66,38 @@ def _meta_error_detail(exc: httpx.HTTPError) -> dict[str, Any] | None:
         return None
     error = body.get("error") if isinstance(body, dict) else None
     return error if isinstance(error, dict) else None
+
+
+# Meta error codes we can explain better than Meta's own wording does, in
+# one short, plain-language sentence each — no jargon, no error codes.
+_ERROR_CODE_HINTS: dict[int, str] = {
+    131047: "This contact hasn't messaged you recently — use a Template instead of free text.",
+    131058: "The hello_world sample template can't be sent to real contacts — pick a different template.",
+    132001: "This template isn't set up in WhatsApp Manager yet — create and approve it there first.",
+    131026: "This number can't receive WhatsApp messages.",
+    133010: "This WhatsApp number isn't set up yet.",
+}
+
+
+def friendly_error_message(meta_error: dict[str, Any] | None) -> str:
+    """Turn a Meta Graph API error into one short, plain-language sentence.
+
+    Prefers a known, human-worded explanation for common error codes; falls
+    back to Meta's own message (its "(#code) " prefix stripped) when the
+    code isn't one we recognise.
+    """
+    if not meta_error:
+        return "Message couldn't be sent."
+
+    code = meta_error.get("code")
+    hint = _ERROR_CODE_HINTS.get(code) if isinstance(code, int) else None
+    if hint:
+        return hint
+
+    return (
+        re.sub(r"^\(#\d+\)\s*", "", meta_error.get("message", "")).strip()
+        or "Message couldn't be sent."
+    )
 
 
 async def send_text(to_e164: str, body: str, phone_number_id: str | None = None) -> dict[str, Any]:
@@ -168,6 +201,29 @@ async def send_template(
         wa_message_id=_extract_outbound_id(data),
     )
     return data
+
+
+async def list_templates() -> list[dict[str, Any]]:
+    """Fetch this WABA's message templates with their live Meta review status.
+
+    Used to show real approval status (``PENDING`` / ``APPROVED`` /
+    ``REJECTED``) next to the locally-saved template rows, which otherwise
+    have no status field of their own — creating a row in our DB is just a
+    local metadata cache, it never touches Meta (see ``routers/templates.py``).
+    """
+    url = (
+        f"{_GRAPH_BASE}/{settings.meta_graph_api_version}"
+        f"/{settings.meta_whatsapp_business_account_id}/message_templates"
+    )
+    params = {"fields": "name,language,status,category", "limit": 200}
+    try:
+        r = await _http.get(url, params=params, headers=_auth_headers())
+        r.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning("whatsapp_list_templates_failed", error=str(exc))
+        raise
+    data: dict[str, Any] = r.json()
+    return list(data.get("data", []))
 
 
 async def download_media(media_id: str) -> bytes:

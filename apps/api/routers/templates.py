@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import structlog
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 
+from apps.api.channels.whatsapp import client as wa_client
 from apps.api.core.tools import _default_org_id
 from apps.api.db.models import WhatsAppTemplate
 from apps.api.deps import DbDep, verify_admin_or_session
 from apps.api.schemas.template import TemplateCreate, TemplateOut, TemplateUpdateIn
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["templates"], dependencies=[Depends(verify_admin_or_session)])
 
@@ -17,7 +22,7 @@ router = APIRouter(tags=["templates"], dependencies=[Depends(verify_admin_or_ses
 async def list_templates(
     db: DbDep,
     active: bool | None = Query(None),
-) -> list[WhatsAppTemplate]:
+) -> list[TemplateOut]:
     org_id = _default_org_id()
     stmt = (
         select(WhatsAppTemplate)
@@ -27,7 +32,26 @@ async def list_templates(
     if active is not None:
         stmt = stmt.where(WhatsAppTemplate.active == active)
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    templates = list(result.scalars().all())
+
+    # Best-effort: match each saved row to its live Meta review status by
+    # name+language. A failure here (Meta down, bad creds) shouldn't break
+    # the page — rows just render with no status badge.
+    status_by_key: dict[tuple[str, str], str] = {}
+    try:
+        for t in await wa_client.list_templates():
+            name, language = t.get("name"), t.get("language")
+            if name and language:
+                status_by_key[(name, language)] = t.get("status", "")
+    except httpx.HTTPError as exc:
+        logger.warning("whatsapp_templates_status_fetch_failed", error=str(exc))
+
+    return [
+        TemplateOut.model_validate(t).model_copy(
+            update={"meta_status": status_by_key.get((t.name, t.language))}
+        )
+        for t in templates
+    ]
 
 
 @router.post("/whatsapp-templates", response_model=TemplateOut, status_code=201)

@@ -198,6 +198,24 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                             "current caller's own number."
                         ),
                     },
+                    "appointment_date": {
+                        "type": "string",
+                        "description": (
+                            "Only when this message is confirming an appointment you just "
+                            "booked with book_appointment: the appointment's date, e.g. "
+                            "'Aug 13, 2026'. Lets delivery fall back to an approved template "
+                            "if the caller has no open WhatsApp session with us (the normal "
+                            "case for a phone call) — omit for any other kind of message."
+                        ),
+                    },
+                    "appointment_time": {
+                        "type": "string",
+                        "description": (
+                            "Only when confirming an appointment: the appointment's time "
+                            "with timezone, e.g. '5:35 PM IST'. Pass together with "
+                            "appointment_date, never alone."
+                        ),
+                    },
                 },
                 "required": ["message"],
             },
@@ -638,6 +656,23 @@ async def lookup_customer(
     }
 
 
+def _meta_error_code(exc: httpx.HTTPStatusError) -> int | None:
+    try:
+        body = exc.response.json()
+    except ValueError:
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    return error.get("code") if isinstance(error, dict) else None
+
+
+# Meta error 131047: "Re-engagement message" — the recipient has no open
+# 24h customer-service session (the common case for a call-initiated send,
+# since a phone call never opens one), so free-form text is rejected.
+_REENGAGEMENT_ERROR_CODE = 131047
+
+_APPOINTMENT_TEMPLATE_NAME = "appointment_confirmation"
+
+
 async def send_whatsapp_message(
     db: AsyncSession,
     message: str,
@@ -645,6 +680,8 @@ async def send_whatsapp_message(
     user_id: UUID | None = None,
     org_id: UUID | None = None,
     channel: str | None = None,
+    appointment_date: str | None = None,
+    appointment_time: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     """Send a free-form WhatsApp text to the caller, from either channel.
@@ -654,16 +691,25 @@ async def send_whatsapp_message(
     names. ``phone`` is optional: when omitted, falls back to the current
     caller's own number (resolved via ``user_id``) — the common case.
 
-    Only free-form text, not templates — this is a chat-initiated send, not
-    the 24h-window bypass. Outside the customer-service window Meta rejects
-    it (error 131047); that surfaces as ``status="error"`` here so the model
-    can tell the caller a template/human follow-up is needed instead.
+    Free-form text only works inside Meta's 24h customer-service window
+    (the recipient must have messaged us recently). A call never opens that
+    window, so a voice caller's first WhatsApp send is normally *outside*
+    it and Meta rejects it with error 131047 ("re-engagement message"). When
+    that happens and the caller supplied ``appointment_date``/
+    ``appointment_time`` (i.e. this is a booking confirmation), we retry via
+    the pre-approved ``appointment_confirmation`` template, which — being
+    Meta-approved — is allowed to reach someone with no open session. Any
+    other free-form send outside the window still surfaces as
+    ``status="error"`` so the model can tell the caller a human follow-up is
+    needed instead.
     """
     org_id = org_id or _default_org_id()
 
     target_phone = phone
-    if not target_phone and user_id is not None:
+    caller: User | None = None
+    if user_id is not None:
         caller = await db.get(User, user_id)
+    if not target_phone:
         target_phone = caller.phone if caller else None
 
     if not target_phone:
@@ -675,6 +721,40 @@ async def send_whatsapp_message(
 
     try:
         await wa_client.send_text(normalized, message, phone_number_id=phone_number_id)
+    except httpx.HTTPStatusError as exc:
+        if (
+            _meta_error_code(exc) == _REENGAGEMENT_ERROR_CODE
+            and appointment_date
+            and appointment_time
+        ):
+            try:
+                await wa_client.send_template(
+                    normalized,
+                    _APPOINTMENT_TEMPLATE_NAME,
+                    body_params=[caller.name if caller and caller.name else "there", appointment_date, appointment_time],
+                    phone_number_id=phone_number_id,
+                )
+            except httpx.HTTPError as exc2:
+                logger.warning(
+                    "send_whatsapp_message_template_fallback_failed",
+                    phone=normalized,
+                    error=str(exc2),
+                )
+                return {"status": "error", "reason": "whatsapp_send_failed"}
+            logger.info(
+                "send_whatsapp_message_tool_ok",
+                phone=normalized,
+                org_id=str(org_id),
+                via="template",
+            )
+            return {"status": "ok", "phone": normalized, "via": "template"}
+
+        logger.warning(
+            "send_whatsapp_message_tool_failed",
+            phone=normalized,
+            error=str(exc),
+        )
+        return {"status": "error", "reason": "whatsapp_send_failed"}
     except httpx.HTTPError as exc:
         logger.warning(
             "send_whatsapp_message_tool_failed",
@@ -683,7 +763,7 @@ async def send_whatsapp_message(
         )
         return {"status": "error", "reason": "whatsapp_send_failed"}
 
-    logger.info("send_whatsapp_message_tool_ok", phone=normalized, org_id=str(org_id))
+    logger.info("send_whatsapp_message_tool_ok", phone=normalized, org_id=str(org_id), via="text")
     return {"status": "ok", "phone": normalized}
 
 

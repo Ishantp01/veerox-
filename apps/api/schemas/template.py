@@ -27,6 +27,10 @@ class TemplateOut(BaseModel):
     body_preview: str | None
     active: bool
     created_at: datetime
+    # Live Meta review status (PENDING/APPROVED/REJECTED), matched by name+
+    # language against the WABA's message_templates. None when Meta's API
+    # couldn't be reached or no matching template was found there.
+    meta_status: str | None = None
 
 
 class TemplateUpdateIn(BaseModel):

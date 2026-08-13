@@ -4,6 +4,8 @@ import { FileText, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import {
+  Badge,
+  type BadgeVariant,
   Button,
   Card,
   CardContent,
@@ -16,6 +18,27 @@ import {
 } from "@/components/ui";
 import { NewTemplateDialog } from "@/components/whatsapp/new-template-dialog";
 import { useDeleteTemplate, useTemplates, useUpdateTemplate } from "@/lib/hooks";
+
+const STATUS_VARIANT: Record<string, BadgeVariant> = {
+  APPROVED: "success",
+  PENDING: "live",
+  REJECTED: "danger",
+};
+
+function StatusBadge({ status }: { status: string | null }) {
+  if (!status) {
+    return (
+      <Badge variant="neutral" icon={null}>
+        Not on Meta
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant={STATUS_VARIANT[status] ?? "neutral"} icon={null}>
+      {status.charAt(0) + status.slice(1).toLowerCase()}
+    </Badge>
+  );
+}
 
 export default function TemplatesPage() {
   const templates = useTemplates();
@@ -41,7 +64,7 @@ export default function TemplatesPage() {
             loadingFallback={
               <table className="w-full border-collapse text-sm">
                 <tbody>
-                  <SkeletonRows rows={3} cols={6} />
+                  <SkeletonRows rows={3} cols={7} />
                 </tbody>
               </table>
             }
@@ -62,6 +85,7 @@ export default function TemplatesPage() {
                     <TableHeader>Language</TableHeader>
                     <TableHeader>Category</TableHeader>
                     <TableHeader>Params</TableHeader>
+                    <TableHeader>Status</TableHeader>
                     <TableHeader>Active</TableHeader>
                     <TableHeader>Actions</TableHeader>
                   </TableRow>
@@ -82,6 +106,9 @@ export default function TemplatesPage() {
                         {template.param_labels.length === 0
                           ? "None"
                           : template.param_labels.join(", ")}
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge status={template.meta_status} />
                       </TableCell>
                       <TableCell>
                         <Button

@@ -150,6 +150,7 @@ async def test_book_appointment_persists_channel_when_provided(
         user_id=user.id,
         date=future.date().isoformat(),
         time="10:00",
+        timezone="UTC",
         channel="voice",
     )
 

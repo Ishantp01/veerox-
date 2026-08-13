@@ -1487,10 +1487,10 @@ async def outbound_whatsapp(
         )
         # Surface Meta's actual reason (unapproved/renamed template, language
         # mismatch, expired token, 24h-window violation, ...) instead of a
-        # bare "WhatsApp send failed" that gives the admin nothing to act on.
-        detail = "WhatsApp send failed"
-        if meta_error and meta_error.get("message"):
-            detail = f"WhatsApp send failed: {meta_error['message']}"
+        # bare "WhatsApp send failed" that gives the admin nothing to act on -
+        # and translate it into something actionable, not just Meta's own
+        # cryptic wording.
+        detail = wa_client.friendly_error_message(meta_error)
         raise HTTPException(status_code=502, detail=detail) from exc
 
     wa_message_id: str | None = None

@@ -139,6 +139,10 @@ export interface Template {
   body_preview: string | null;
   active: boolean;
   created_at: string;
+  /** Live Meta review status (PENDING/APPROVED/REJECTED), matched by
+   * name+language against the WABA's templates. Null if Meta couldn't be
+   * reached or no matching template exists there yet. */
+  meta_status: string | null;
 }
 
 export interface FollowUpTask {
