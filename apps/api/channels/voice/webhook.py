@@ -136,7 +136,6 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
     in the request.
     """
     params = await _call_params(request)
-    caller = params.get("From") or params.get("from") or "unknown"
     is_twilio = "CallSid" in params and "CallUUID" not in params
     call_uuid = params.get("CallUUID") or params.get("call_uuid") or params.get("CallSid") or ""
     # Set by the campaign dialer on the answer_url it gives the provider (the
@@ -148,6 +147,18 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
     # their org from the campaign itself instead — see
     # realtime_bridge._resolve_org_id).
     org_id = request.query_params.get("org_id")
+    # For a call we placed ourselves (single admin call or campaign dialer —
+    # either sets org_id/campaign_target_id on the answer_url), the provider's
+    # ``From`` is our own Plivo/Twilio number and ``To`` is the actual person
+    # we called — using ``From`` here would resolve every such caller to our
+    # own business number (wrong User, wrong phone for any later WhatsApp
+    # send). A genuine inbound call has neither set, and ``From`` there really
+    # is the caller.
+    is_outbound = bool(org_id or campaign_target_id)
+    if is_outbound:
+        caller = params.get("To") or params.get("to") or "unknown"
+    else:
+        caller = params.get("From") or params.get("from") or "unknown"
     if not org_id and not campaign_target_id:
         # A real inbound call — nothing in the URL says which org, so look up
         # the dialed number's owner instead. Falls back to the platform

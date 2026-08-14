@@ -480,32 +480,33 @@ async def book_appointment(
 
     # Auto-notify the caller on WhatsApp so the booking is confirmed even on
     # channels (voice) where the agent's spoken reply is the only other
-    # confirmation. Best-effort: a failed send must not undo the booking
-    # that already committed above.
-    confirmation_message = f"Your appointment is confirmed for {date} at {time} ({tz_name})."
-    if notes:
-        confirmation_message += f"\nNotes: {notes}"
-    try:
-        confirmation = await send_whatsapp_message(
-            db,
-            message=confirmation_message,
-            user_id=booking_user_id,
-            org_id=org_id,
-            channel=channel,
-            appointment_date=date,
-            appointment_time=time,
-        )
-        if confirmation.get("status") != "ok":
-            logger.warning(
-                "book_appointment_confirmation_send_failed",
-                appointment_id=str(appointment.id),
-                reason=confirmation.get("reason"),
+    # confirmation. Sent straight via the pre-approved appointment_confirmation
+    # template (not plain text) so it reaches the person even when we've
+    # never messaged them before and no 24h session is open — the common
+    # case for a call-initiated booking. Best-effort: a failed send must not
+    # undo the booking that already committed above.
+    target_phone = booking_user.phone if booking_user else None
+    if target_phone:
+        org = await db.get(Org, org_id)
+        phone_number_id = org.whatsapp_phone_number_id if org else None
+        try:
+            await wa_client.send_template(
+                _normalize_phone(target_phone),
+                _APPOINTMENT_TEMPLATE_NAME,
+                body_params=[booking_user.name if booking_user and booking_user.name else "there", date, time],
+                phone_number_id=phone_number_id,
             )
-    except Exception:
+        except httpx.HTTPError:
+            logger.warning(
+                "book_appointment_confirmation_send_error",
+                appointment_id=str(appointment.id),
+                exc_info=True,
+            )
+    else:
         logger.warning(
-            "book_appointment_confirmation_send_error",
+            "book_appointment_confirmation_send_failed",
             appointment_id=str(appointment.id),
-            exc_info=True,
+            reason="no_phone_number_available",
         )
 
     return {
