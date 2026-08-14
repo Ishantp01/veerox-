@@ -149,7 +149,7 @@ export function DialogContent({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 lg:left-64"
       onMouseDown={(e) => {
         // Close only when the backdrop itself is clicked (not the panel).
         if (e.target === e.currentTarget) setOpen(false);

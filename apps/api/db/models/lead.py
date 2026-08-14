@@ -55,10 +55,12 @@ class Lead(Base):
     # never get one set, and that's fine, they just don't count toward
     # pipeline/revenue totals.
     deal_value: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    # Indexed: admin.py's list_leads sorts on this for every page load.
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+        index=True,
     )
 
     contact: Mapped["Contact | None"] = relationship(back_populates="leads")  # noqa: F821

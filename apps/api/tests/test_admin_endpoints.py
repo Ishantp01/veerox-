@@ -37,6 +37,10 @@ class _FakeRedis:
     async def get(self, key: str) -> str | None:
         return self.kv.get(key)
 
+    async def set(self, key: str, value: str, *, ex: int | None = None) -> bool:
+        self.kv[key] = value
+        return True
+
     async def lrange(self, key: str, start: int, end: int) -> list[str]:
         return self.lists.get(key, [])
 

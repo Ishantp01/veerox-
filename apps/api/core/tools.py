@@ -477,6 +477,37 @@ async def book_appointment(
         time=time,
         timezone=tz_name,
     )
+
+    # Auto-notify the caller on WhatsApp so the booking is confirmed even on
+    # channels (voice) where the agent's spoken reply is the only other
+    # confirmation. Best-effort: a failed send must not undo the booking
+    # that already committed above.
+    confirmation_message = f"Your appointment is confirmed for {date} at {time} ({tz_name})."
+    if notes:
+        confirmation_message += f"\nNotes: {notes}"
+    try:
+        confirmation = await send_whatsapp_message(
+            db,
+            message=confirmation_message,
+            user_id=booking_user_id,
+            org_id=org_id,
+            channel=channel,
+            appointment_date=date,
+            appointment_time=time,
+        )
+        if confirmation.get("status") != "ok":
+            logger.warning(
+                "book_appointment_confirmation_send_failed",
+                appointment_id=str(appointment.id),
+                reason=confirmation.get("reason"),
+            )
+    except Exception:
+        logger.warning(
+            "book_appointment_confirmation_send_error",
+            appointment_id=str(appointment.id),
+            exc_info=True,
+        )
+
     return {
         "status": "ok",
         "lead_id": str(lead.id),

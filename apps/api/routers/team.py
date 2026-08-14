@@ -88,6 +88,14 @@ async def export_members_xlsx(org: OrgMemberDep, db: DbDep) -> StreamingResponse
     sheet.title = "Team"
     sheet.append(["name", "email", "role", "active", "invited_at", "joined_at"])
     for account_user, membership in result.all():
+        # The org owner (the account that bought the plan) isn't a "team
+        # member" — GET /team/members' own JSON response leaves it in, but
+        # the dashboard's Team page filters it out of the list it renders
+        # (team/page.tsx: `!m.is_owner`); this export should match what the
+        # page actually shows rather than leaking the owner's row into the
+        # downloaded file.
+        if membership.invited_by_id is None:
+            continue
         sheet.append(
             [
                 account_user.full_name or "",

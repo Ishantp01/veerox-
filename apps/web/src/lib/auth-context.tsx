@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { AUTH_MODE_KEY, SESSION_TOKEN_KEY } from "@/lib/api";
 import { fetchMe, logoutRequest, type MeInfo, type SessionInfo } from "@/lib/hooks/useAuthApi";
 
@@ -31,6 +32,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [user, setUser] = useState<MeInfo | null>(null);
 
@@ -83,6 +85,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback((session: SessionInfo) => {
+    // Any cached query (billing status, leads, ...) belongs to whichever
+    // account was previously signed in on this browser — e.g. a prior org's
+    // `billing.data.plan` sitting in the react-query cache would let the
+    // dashboard layout briefly render before its refetch corrects to this
+    // org's actual (planless) status, flashing the dashboard for a couple
+    // seconds before bouncing to /choose-plan. Clearing on every login
+    // guarantees every query starts genuinely loading under the new identity.
+    queryClient.clear();
     localStorage.setItem(SESSION_TOKEN_KEY, session.token);
     localStorage.setItem(AUTH_MODE_KEY, "session");
     setUser({
@@ -95,26 +105,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       is_superuser: session.is_superuser,
     });
     setStatus("authenticated");
-  }, []);
+  }, [queryClient]);
 
   const loginAdmin = useCallback(async (token: string) => {
+    queryClient.clear();
     localStorage.setItem(SESSION_TOKEN_KEY, token);
     localStorage.setItem(AUTH_MODE_KEY, "admin");
     const me = await fetchMe();
     setUser(me);
     setStatus("authenticated");
-  }, []);
+  }, [queryClient]);
 
   const logout = useCallback(() => {
     // Best-effort server-side session invalidation — clearing local state
     // and redirecting proceeds regardless of whether this succeeds.
     logoutRequest().catch(() => {});
+    queryClient.clear();
     localStorage.removeItem(SESSION_TOKEN_KEY);
     localStorage.removeItem(AUTH_MODE_KEY);
     setUser(null);
     setStatus("unauthenticated");
     router.push("/login");
-  }, [router]);
+  }, [router, queryClient]);
 
   const value = useMemo(
     () => ({ status, isAuthenticated: status === "authenticated", user, login, loginAdmin, logout }),

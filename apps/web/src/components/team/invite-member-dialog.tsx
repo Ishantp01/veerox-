@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Plus } from "lucide-react";
+import { z } from "zod";
 import {
   Button,
   Dialog,
@@ -19,6 +20,19 @@ import { useInviteMember, type InviteMemberResult } from "@/lib/hooks/useTeam";
 
 const EMPTY = { email: "", fullName: "", role: "member" };
 
+const inviteSchema = z.object({
+  email: z.string().trim().email(),
+  fullName: z
+    .string()
+    .trim()
+    .max(200, "Name is too long")
+    .regex(/^[A-Za-z\s'.-]*$/, "Name should only contain letters")
+    .optional(),
+  role: z.string().trim().min(1),
+});
+
+type InviteFieldErrors = Partial<Record<"email" | "fullName" | "role", string>>;
+
 /**
  * Admin self-service invite — the org's own equivalent of
  * NewOrgDialog, scoped to the caller's org instead of the whole platform
@@ -29,12 +43,24 @@ const EMPTY = { email: "", fullName: "", role: "member" };
 export function InviteMemberDialog({ disabled = false }: { disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
+  const [fieldErrors, setFieldErrors] = useState<InviteFieldErrors>({});
   const [result, setResult] = useState<InviteMemberResult | null>(null);
   const inviteMember = useInviteMember();
   const { toast } = useToast();
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    const parsed = inviteSchema.safeParse(form);
+    if (!parsed.success) {
+      const errors: InviteFieldErrors = {};
+      for (const issue of parsed.error.issues) {
+        const key = issue.path[0] as keyof InviteFieldErrors;
+        if (!errors[key]) errors[key] = issue.message;
+      }
+      setFieldErrors(errors);
+      return;
+    }
+    setFieldErrors({});
     inviteMember.mutate(
       {
         email: form.email.trim(),
@@ -64,6 +90,7 @@ export function InviteMemberDialog({ disabled = false }: { disabled?: boolean })
     setOpen(next);
     if (!next) {
       setForm(EMPTY);
+      setFieldErrors({});
       setResult(null);
       inviteMember.reset();
     }
@@ -139,7 +166,7 @@ export function InviteMemberDialog({ disabled = false }: { disabled?: boolean })
             </DialogFooter>
           </>
         ) : (
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} noValidate>
             <DialogBody className="flex flex-col gap-4">
               <div>
                 <Label htmlFor="member-email">Email *</Label>
@@ -150,7 +177,14 @@ export function InviteMemberDialog({ disabled = false }: { disabled?: boolean })
                   value={form.email}
                   onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
                   placeholder="teammate@company.com"
+                  aria-invalid={fieldErrors.email ? true : undefined}
+                  aria-describedby={fieldErrors.email ? "member-email-error" : undefined}
                 />
+                {fieldErrors.email && (
+                  <p id="member-email-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.email}
+                  </p>
+                )}
               </div>
               <div>
                 <Label htmlFor="member-name">Name</Label>
@@ -159,7 +193,14 @@ export function InviteMemberDialog({ disabled = false }: { disabled?: boolean })
                   value={form.fullName}
                   onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))}
                   placeholder="Optional"
+                  aria-invalid={fieldErrors.fullName ? true : undefined}
+                  aria-describedby={fieldErrors.fullName ? "member-name-error" : undefined}
                 />
+                {fieldErrors.fullName && (
+                  <p id="member-name-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.fullName}
+                  </p>
+                )}
               </div>
               <div>
                 <Label htmlFor="member-role">Role</Label>

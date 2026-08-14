@@ -73,3 +73,12 @@ desktop.ini
 # Documentation / Reports (auto-generated)
 kirofix.md
 COMPREHENSIVE_AUDIT_REPORT.md
+
+# READMEs and Office documents (Word/Excel) — not meant for version control
+README.md
+readme.md
+*.doc
+*.docx
+*.xls
+*.xlsx
+~$*

@@ -1,13 +1,24 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
-import { Building2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Building2, Download } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
-import { Badge, EmptyState, SkeletonRows, Table, TableCell, TableHeader, TableRow } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  EmptyState,
+  SkeletonRows,
+  Table,
+  TableCell,
+  TableHeader,
+  TableRow,
+  useToast,
+} from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
 import { useAdminOrgs } from "@/lib/hooks/useAdminOrgs";
+import { downloadCsv } from "@/lib/download-csv";
 import { NewOrgDialog } from "@/components/organizations/new-org-dialog";
 import { RegenerateTokenDialog } from "@/components/organizations/regenerate-token-dialog";
 
@@ -31,6 +42,8 @@ export default function OrganizationsPage() {
   const router = useRouter();
   const { data, isLoading, isError, error, refetch } = useAdminOrgs();
   const orgs = data ?? [];
+  const { toast } = useToast();
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (status === "authenticated" && !user?.is_superuser) {
@@ -40,12 +53,37 @@ export default function OrganizationsPage() {
 
   if (!user?.is_superuser) return null;
 
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const stamp = new Date().toISOString().slice(0, 10);
+      await downloadCsv("/billing/orgs.xlsx", `organizations-${stamp}.xlsx`);
+      toast({ title: "Export started", description: "Your Excel download is ready.", variant: "success" });
+    } catch (err: unknown) {
+      toast({
+        title: "Export failed",
+        description: err instanceof Error ? err.message : "Could not export organizations.",
+        variant: "error",
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-6xl">
       <PageHeader
         title="Organizations"
         description="Every organization on the platform — visible only to platform admins."
-        action={<NewOrgDialog />}
+        action={
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={handleExport} loading={exporting}>
+              {!exporting && <Download size={14} aria-hidden />}
+              Export
+            </Button>
+            <NewOrgDialog />
+          </div>
+        }
       />
 
       <QueryBoundary

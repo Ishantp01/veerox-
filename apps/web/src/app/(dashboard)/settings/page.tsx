@@ -1,25 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { Phone, MessageSquare, Sparkles, Share2 } from "lucide-react";
+import { Phone, MessageSquare } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { SettingsView } from "@/components/settings/settings-view";
-import { HelpDeskScriptPanel, SocialLinksPanel } from "@/components/billing/platform-settings-panel";
 import { useAuth } from "@/lib/auth-context";
 
-type Tab = "calling" | "whatsapp" | "helpdesk" | "social";
+type Tab = "calling" | "whatsapp";
 
 const TABS: { key: Tab; label: string; icon: typeof Phone }[] = [
   { key: "calling", label: "AI Calling", icon: Phone },
   { key: "whatsapp", label: "AI WhatsApp", icon: MessageSquare },
 ];
 
-// Platform-wide, not per-org — same PlatformAdminDep gate as the Billing
-// page's plan catalog/settings editor (apps/api/routers/billing.py).
-const PLATFORM_TABS: { key: Tab; label: string; icon: typeof Phone }[] = [
-  { key: "helpdesk", label: "Help Desk Bot", icon: Sparkles },
-  { key: "social", label: "Social Links", icon: Share2 },
-];
+// The superuser-only "Help Desk Bot" and "Social Links" tabs (PLATFORM_TABS)
+// were removed from here — see removefeature.md to re-add.
 
 /**
  * Sidebar-level Settings entry point. Merges the two per-channel settings
@@ -30,7 +25,6 @@ const PLATFORM_TABS: { key: Tab; label: string; icon: typeof Phone }[] = [
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>("calling");
   const { user } = useAuth();
-  const tabs = user?.is_superuser ? [...TABS, ...PLATFORM_TABS] : TABS;
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -62,7 +56,7 @@ export default function SettingsPage() {
       )}
 
       <div className="mb-6 inline-flex gap-1 rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-900">
-        {tabs.map(({ key, label, icon: Icon }) => (
+        {TABS.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             type="button"
@@ -92,24 +86,6 @@ export default function SettingsPage() {
           description="The script your WhatsApp agent follows."
           channel="whatsapp"
         />
-      )}
-      {tab === "helpdesk" && user?.is_superuser && (
-        <div className="mx-auto max-w-3xl">
-          <PageHeader
-            title="Help Desk Bot"
-            description="Platform-wide chatbot script every client org's help widget follows."
-          />
-          <HelpDeskScriptPanel />
-        </div>
-      )}
-      {tab === "social" && user?.is_superuser && (
-        <div className="mx-auto max-w-3xl">
-          <PageHeader
-            title="Social Links"
-            description="Shown to every client org (e.g. in the sidebar)."
-          />
-          <SocialLinksPanel />
-        </div>
       )}
     </div>
   );

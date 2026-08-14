@@ -5,11 +5,11 @@ import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { PlanAdminTable } from "@/components/billing/plan-admin-table";
-import { PlatformSettingsPanel } from "@/components/billing/platform-settings-panel";
 import { ChoosePlanCards } from "@/components/billing/choose-plan-cards";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Skeleton } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
 import { useBillingStatus, useBillingUsage, type UsageMetric } from "@/lib/hooks/useBilling";
+import { useCampaigns } from "@/lib/hooks/useCampaigns";
 
 const STATUS_BADGE: Record<string, "success" | "danger" | "neutral"> = {
   active: "success",
@@ -44,6 +44,7 @@ function UsageBar({ label, metric, unit }: { label: string; metric: UsageMetric;
 export default function BillingPage() {
   const { data, isLoading, isError, error, refetch } = useBillingStatus();
   const usage = useBillingUsage();
+  const campaigns = useCampaigns();
   const { user } = useAuth();
   const router = useRouter();
 
@@ -86,10 +87,12 @@ export default function BillingPage() {
               </Card>
             ) : (
               <>
-                <Card>
+                <Card className="overflow-hidden">
                   <CardHeader className="flex flex-row items-center justify-between">
-                    <CardTitle className="flex items-center gap-2">
-                      <CreditCard size={16} aria-hidden />
+                    <CardTitle className="flex items-center gap-2.5">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-400 to-primary-600 text-white shadow-glow">
+                        <CreditCard size={15} aria-hidden />
+                      </span>
                       Current plan
                     </CardTitle>
                     <Badge variant={STATUS_BADGE[data.billing_status] ?? "neutral"}>
@@ -98,7 +101,7 @@ export default function BillingPage() {
                   </CardHeader>
                   <CardContent className="flex flex-col gap-4">
                     <div>
-                      <p className="text-xl font-bold text-slate-900 dark:text-slate-100">
+                      <p className="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
                         {data.plan?.name ?? "No plan assigned"}
                       </p>
                       {data.current_period_end && (
@@ -143,6 +146,18 @@ export default function BillingPage() {
                       )}
                       <UsageBar label="Call minutes" metric={usage.data.call_minutes} unit="min" />
                       <UsageBar label="WhatsApp messages" metric={usage.data.whatsapp_messages} />
+                      {data.plan && campaigns.data && (
+                        <UsageBar
+                          label="Campaigns"
+                          metric={{
+                            used: campaigns.data.length,
+                            limit:
+                              typeof data.plan.limits.max_campaigns === "number"
+                                ? data.plan.limits.max_campaigns
+                                : null,
+                          }}
+                        />
+                      )}
                     </CardContent>
                   </Card>
                 )}
@@ -161,7 +176,7 @@ export default function BillingPage() {
             {user?.is_superuser && (
               <>
                 <PlanAdminTable />
-                <PlatformSettingsPanel />
+                {/* HelpDeskScriptPanel and SocialLinksPanel removed from here — see removefeature.md to re-add. */}
               </>
             )}
           </div>

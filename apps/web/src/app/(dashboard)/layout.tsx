@@ -3,15 +3,14 @@
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { DashboardShell } from "@/components/layout/dashboard-shell";
-import { HelpDeskWidget } from "@/components/helpdesk/help-desk-widget";
 import { Spinner } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
 import { useBillingStatus } from "@/lib/hooks/useBilling";
 
 function FullScreenLoader() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
-      <Spinner size={28} label="Loading" />
+    <div className="flex min-h-screen items-center justify-center bg-canvas-950 bg-mesh-dark">
+      <Spinner size={28} label="Loading" className="text-white" />
     </div>
   );
 }
@@ -116,7 +115,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <DashboardShell>
       {children}
-      <HelpDeskWidget />
+      {/* Help Desk chatbot widget removed from here — see removefeature.md to re-add. */}
     </DashboardShell>
   );
 }

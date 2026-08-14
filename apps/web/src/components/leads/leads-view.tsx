@@ -23,10 +23,18 @@ interface ImportLeadsResult {
 
 const INTENT_SEARCH_DEBOUNCE_MS = 300;
 
-// "Unqualified" ~= status "New" and "Qualified" is already a status option,
-// so only these two qualification stages add anything new to the combined
-// status/qualification filter dropdown below.
-const EXTRA_QUALIFICATION_FILTER_OPTIONS: LeadQualificationStatus[] = ["in_review", "disqualified"];
+// status and qualification_status are independently editable (the lead
+// table's Qualification dropdown writes qualification_status only, never
+// touching status — see lead-table.tsx) — a lead marked "Qualified" there
+// commonly still has status "new"/"contacted". So "qualification_status:
+// qualified" is NOT redundant with the "status: qualified" option above it,
+// despite sharing a label — omitting it (as this used to) meant leads
+// qualified via that workflow had no way to be filtered for at all.
+const EXTRA_QUALIFICATION_FILTER_OPTIONS: LeadQualificationStatus[] = [
+  "qualified",
+  "in_review",
+  "disqualified",
+];
 
 async function downloadLeadsCsv(channel?: "voice" | "whatsapp", search?: string): Promise<void> {
   const params = new URLSearchParams();
@@ -228,7 +236,7 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
               ))}
               {EXTRA_QUALIFICATION_FILTER_OPTIONS.map((s) => (
                 <option key={s} value={`qual:${s}`}>
-                  {LEAD_QUALIFICATION_LABELS[s]}
+                  Qualification: {LEAD_QUALIFICATION_LABELS[s]}
                 </option>
               ))}
             </Select>

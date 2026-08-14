@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
+import { z } from "zod";
 import {
   Button,
   Dialog,
@@ -17,6 +18,17 @@ import {
 } from "@/components/ui";
 import { useCreateTemplate } from "@/lib/hooks";
 
+const templateSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .regex(/^[a-z0-9_]+$/, "Lowercase letters, numbers, and underscores only"),
+  language: z.string().trim().min(1, "Language code is required"),
+  bodyPreview: z.string().trim().max(2000, "Body preview is too long").optional(),
+});
+
+type TemplateFieldErrors = Partial<Record<"name" | "language" | "bodyPreview", string>>;
+
 export function NewTemplateDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -24,6 +36,7 @@ export function NewTemplateDialog() {
   const [category, setCategory] = useState("");
   const [bodyPreview, setBodyPreview] = useState("");
   const [paramLabels, setParamLabels] = useState<string[]>([]);
+  const [fieldErrors, setFieldErrors] = useState<TemplateFieldErrors>({});
   const createTemplate = useCreateTemplate();
   const { toast } = useToast();
 
@@ -33,10 +46,22 @@ export function NewTemplateDialog() {
     setCategory("");
     setBodyPreview("");
     setParamLabels([]);
+    setFieldErrors({});
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    const parsed = templateSchema.safeParse({ name, language, bodyPreview });
+    if (!parsed.success) {
+      const errors: TemplateFieldErrors = {};
+      for (const issue of parsed.error.issues) {
+        const key = issue.path[0] as keyof TemplateFieldErrors;
+        if (!errors[key]) errors[key] = issue.message;
+      }
+      setFieldErrors(errors);
+      return;
+    }
+    setFieldErrors({});
     createTemplate.mutate(
       {
         name,
@@ -67,7 +92,7 @@ export function NewTemplateDialog() {
       </DialogTrigger>
       <DialogContent>
         <DialogTitle>New WhatsApp template</DialogTitle>
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} noValidate>
           <DialogBody className="flex flex-col gap-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
@@ -81,7 +106,14 @@ export function NewTemplateDialog() {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="order_confirmation"
+                  aria-invalid={fieldErrors.name ? true : undefined}
+                  aria-describedby={fieldErrors.name ? "template-name-error" : undefined}
                 />
+                {fieldErrors.name && (
+                  <p id="template-name-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.name}
+                  </p>
+                )}
                 <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
                   Must exactly match the name approved in WhatsApp Manager.
                 </p>
@@ -97,7 +129,14 @@ export function NewTemplateDialog() {
                   value={language}
                   onChange={(e) => setLanguage(e.target.value)}
                   placeholder="en_US"
+                  aria-invalid={fieldErrors.language ? true : undefined}
+                  aria-describedby={fieldErrors.language ? "template-language-error" : undefined}
                 />
+                {fieldErrors.language && (
+                  <p id="template-language-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.language}
+                  </p>
+                )}
               </div>
             </div>
             <div>
@@ -164,7 +203,14 @@ export function NewTemplateDialog() {
                 value={bodyPreview}
                 onChange={(e) => setBodyPreview(e.target.value)}
                 placeholder="Paste the approved template body here for reference."
+                aria-invalid={fieldErrors.bodyPreview ? true : undefined}
+                aria-describedby={fieldErrors.bodyPreview ? "template-body-preview-error" : undefined}
               />
+              {fieldErrors.bodyPreview && (
+                <p id="template-body-preview-error" className="mt-1.5 text-xs text-red-600">
+                  {fieldErrors.bodyPreview}
+                </p>
+              )}
             </div>
           </DialogBody>
           <DialogFooter>

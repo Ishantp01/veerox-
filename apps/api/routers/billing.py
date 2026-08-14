@@ -24,14 +24,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, cast
 from uuid import UUID
 
+import openpyxl
 import razorpay
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from razorpay.errors import SignatureVerificationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -178,6 +181,40 @@ async def list_orgs(db: DbDep, _admin: PlatformAdminDep) -> list[OrgAdminOut]:
             )
         )
     return out
+
+
+@router.get("/orgs.xlsx")
+async def export_orgs_xlsx(db: DbDep, _admin: PlatformAdminDep) -> StreamingResponse:
+    """Same data as GET /billing/orgs, as a downloadable .xlsx workbook —
+    backs the Organizations page's export button."""
+    orgs = await list_orgs(db, _admin)
+
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Organizations"
+    sheet.append(["organization", "admin_email", "plan", "billing_status", "team_members", "created_at"])
+    for org in orgs:
+        sheet.append(
+            [
+                org.name,
+                org.admin_email or "",
+                org.plan_code or "No plan",
+                org.billing_status,
+                org.seat_count,
+                org.created_at,
+            ]
+        )
+
+    buf = io.BytesIO()
+    workbook.save(buf)
+    buf.seek(0)
+
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d")
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="organizations-{stamp}.xlsx"'},
+    )
 
 
 @router.post("/orgs/{org_id}/regenerate-admin-token", response_model=RegenerateAdminTokenOut)

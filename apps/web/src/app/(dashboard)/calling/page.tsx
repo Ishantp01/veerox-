@@ -42,6 +42,7 @@ export default function CallingDialPage() {
   } = useForm<DialForm>({
     resolver: zodResolver(dialSchema),
     defaultValues: { to_phone: "+91" },
+    mode: "onChange",
   });
 
   const onSubmit = handleSubmit((values) => {
@@ -105,6 +106,7 @@ export default function CallingDialPage() {
                   inputMode="tel"
                   placeholder="+919876543210"
                   autoComplete="tel"
+                  maxLength={16}
                   className="font-mono"
                   aria-invalid={errors.to_phone ? true : undefined}
                   aria-describedby={

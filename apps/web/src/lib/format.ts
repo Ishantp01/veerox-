@@ -68,3 +68,18 @@ export function formatDuration(seconds: number | null | undefined): string {
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
+
+/** Follow-up rule delay (fractional hours) → "Xh Ym" / "Xm Ys" / "Ys". Returns "—" for null. */
+export function formatDelayHours(hours: number | null | undefined): string {
+  if (hours == null || Number.isNaN(hours)) return "—";
+  const totalSeconds = Math.round(hours * 3600);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  if (totalSeconds < 3600) {
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  }
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}

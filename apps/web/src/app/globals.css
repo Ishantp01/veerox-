@@ -13,6 +13,15 @@ body {
   margin: 0;
   padding: 0;
   height: 100%;
+  /* The dashboard shell (DashboardShell) is a fixed h-screen box that does
+     all scrolling internally (main's own overflow-y-auto) — <body> itself
+     is never meant to scroll. Without this, a stray off-screen element from
+     any library (e.g. Recharts leaves a #recharts_measurement_span at
+     top: -20000px while measuring label text, and doesn't always clean it
+     up) can expand body's scrollable area, letting the whole page scroll
+     independently of the app's own layout and exposing blank canvas below
+     the shell. */
+  overflow: hidden;
 }
 
 body {

@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { CreditCard } from "lucide-react";
 import { ChoosePlanCards } from "@/components/billing/choose-plan-cards";
+import { Spinner } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
 import { useBillingStatus } from "@/lib/hooks/useBilling";
 
@@ -35,16 +36,26 @@ export default function ChoosePlanPage() {
     }
   }, [status, user, billing.data, needsPlan, router]);
 
-  if (status !== "authenticated" || billing.isLoading || !needsPlan) return null;
+  // Auth/billing status is still resolving, or we're mid-redirect (plan
+  // already assigned / signing out) — a brief spinner instead of a blank
+  // canvas, since this gate can be the very first thing a fresh org sees.
+  if (status !== "authenticated" || billing.isLoading || !needsPlan) {
+    return (
+      <div className="flex flex-col items-center gap-3 text-slate-400">
+        <Spinner size={22} />
+        <p className="text-sm">Loading your account…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full max-w-3xl">
       <div className="flex flex-col items-center mb-8 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 text-white mb-4 shadow-glow-lg">
-          <CreditCard size={22} aria-hidden />
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 text-white mb-4 shadow-glow-lg">
+          <CreditCard size={24} aria-hidden />
         </div>
-        <h1 className="text-2xl font-extrabold text-white tracking-tight">Choose a plan to continue</h1>
-        <p className="text-sm text-slate-400 mt-2 max-w-md">
+        <h1 className="text-3xl font-extrabold text-white tracking-tight">Choose a plan to continue</h1>
+        <p className="text-sm text-slate-400 mt-2.5 max-w-md">
           Pick any plan (the free tier works too) to unlock the dashboard — you can change or renew
           this later from Billing.
         </p>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
@@ -93,6 +94,7 @@ router = APIRouter(
 KILL_SWITCH_KEY = "veerox:kill_switch"
 HUMAN_HANDOFF_QUEUE = "human_handoff_queue"
 
+
 # Cost constants used by usd_spend_today. These mirror the planned values from
 # implementation-plan.md §5.6 and intentionally live here rather than in
 # apps/api/core/costs.py because that file is owned by worker 1 and may not
@@ -117,68 +119,81 @@ async def get_stats(
     normal customer, platform-wide only for the platform admin — see
     `resolve_analytics_scope_org_id`, where `scope_org_id is None` is what
     "count every org" means.
+
+    NOT cached, deliberately: the dashboard explicitly invalidates and
+    refetches this query right after actions like placing a call or sending
+    WhatsApp (useOutbound.ts) specifically to show the just-updated count —
+    a server-side cache here would silently defeat that invalidation and
+    make the dashboard look broken ("I did the thing but the number didn't
+    change") for the length of the cache window. A round trip is worth
+    paying for correctness here.
     """
     today_start = _today_start_utc()
 
     def scoped(stmt, model):  # noqa: ANN001, ANN202 — SQLAlchemy Select generics
         return stmt if scope_org_id is None else stmt.where(model.org_id == scope_org_id)
 
-    # Below: each table gets exactly one round trip regardless of how many
-    # counters are pulled from it (conditional SUM/CASE in place of separate
-    # queries) — DB is a remote Neon instance (see .env), so every extra
-    # round trip is real latency on a page loaded on every dashboard visit.
     def _count_if(condition):  # noqa: ANN001, ANN202 — SQLAlchemy boolean expr
         return func.sum(case((condition, 1), else_=0))
 
-    users_today_result = await db.execute(
-        scoped(
-            select(func.count()).select_from(User).where(User.created_at >= today_start),
-            User,
-        )
-    )
-    users_today = users_today_result.scalar_one()
+    def _scalar(stmt, model):  # noqa: ANN001, ANN202 — SQLAlchemy Select generics
+        return scoped(stmt, model).scalar_subquery()
 
-    calls_today_result = await db.execute(
-        scoped(
+    # All 9 counters folded into ONE round trip via scalar subqueries, rather
+    # than 4 separate awaited queries (one per table) — DB is a remote Neon
+    # instance (see .env), so every extra round trip is real latency on a
+    # page loaded on every dashboard visit. Postgres plans/executes these
+    # subqueries together; only the network round trip is what we're saving.
+    combined_stmt = select(
+        _scalar(
+            select(func.count()).select_from(User).where(User.created_at >= today_start), User
+        ).label("users_today"),
+        _scalar(
             select(func.count())
             .select_from(Conversation)
             .where(Conversation.channel == "voice", Conversation.started_at >= today_start),
             Conversation,
-        )
-    )
-    calls_today = calls_today_result.scalar_one()
-
-    message_stats_result = await db.execute(
-        scoped(
-            select(
-                func.coalesce(_count_if(Message.channel == "whatsapp"), 0),
-                func.coalesce(func.sum(Message.tokens_in), 0),
-                func.coalesce(func.sum(Message.tokens_out), 0),
-                func.coalesce(func.sum(Message.audio_secs), 0.0),
-            ).where(Message.created_at >= today_start),
+        ).label("calls_today"),
+        _scalar(
+            select(func.coalesce(_count_if(Message.channel == "whatsapp"), 0)).where(
+                Message.created_at >= today_start
+            ),
             Message,
-        )
-    )
-    whatsapp_messages_today, tokens_in_sum, tokens_out_sum, audio_secs_sum = (
-        message_stats_result.one()
-    )
-    usd_spend_today = (
-        float(tokens_in_sum) * _INPUT_USD_PER_TOKEN
-        + float(tokens_out_sum) * _OUTPUT_USD_PER_TOKEN
-        + float(audio_secs_sum) * _REALTIME_AUDIO_USD_PER_SECOND
-    )
-
-    lead_stats_result = await db.execute(
-        scoped(
-            select(
-                func.count(),
-                func.coalesce(_count_if(Lead.channel == "voice"), 0),
-                func.coalesce(_count_if(Lead.channel == "whatsapp"), 0),
-            ).where(Lead.created_at >= today_start),
+        ).label("whatsapp_messages_today"),
+        _scalar(
+            select(func.coalesce(func.sum(Message.tokens_in), 0)).where(
+                Message.created_at >= today_start
+            ),
+            Message,
+        ).label("tokens_in_sum"),
+        _scalar(
+            select(func.coalesce(func.sum(Message.tokens_out), 0)).where(
+                Message.created_at >= today_start
+            ),
+            Message,
+        ).label("tokens_out_sum"),
+        _scalar(
+            select(func.coalesce(func.sum(Message.audio_secs), 0.0)).where(
+                Message.created_at >= today_start
+            ),
+            Message,
+        ).label("audio_secs_sum"),
+        _scalar(
+            select(func.count()).select_from(Lead).where(Lead.created_at >= today_start), Lead
+        ).label("leads_today"),
+        _scalar(
+            select(func.coalesce(_count_if(Lead.channel == "voice"), 0)).where(
+                Lead.created_at >= today_start
+            ),
             Lead,
-        )
+        ).label("leads_today_voice"),
+        _scalar(
+            select(func.coalesce(_count_if(Lead.channel == "whatsapp"), 0)).where(
+                Lead.created_at >= today_start
+            ),
+            Lead,
+        ).label("leads_today_whatsapp"),
     )
-    leads_today, leads_today_voice, leads_today_whatsapp = lead_stats_result.one()
 
     # error_count_today — Redis counter keyed by today's UTC date. Written by
     # apps.api.redis_client.record_error(), called from each channel/worker's
@@ -186,15 +201,38 @@ async def get_stats(
     # dialer tick). It's a single platform-wide counter with no org
     # dimension, so it's only meaningful — and only reported — for the
     # platform admin; a customer org would otherwise see error counts driven
-    # by other tenants' traffic.
-    error_count_today = 0
-    if scope_org_id is None:
+    # by other tenants' traffic. Runs concurrently with the DB round trip
+    # above — separate connection, nothing shared to serialize on.
+    async def _load_error_count() -> int:
+        if scope_org_id is not None:
+            return 0
         today_key = ERROR_COUNTER_KEY_FMT.format(date=datetime.now(UTC).date().isoformat())
         raw_err = await redis.get(today_key)
         try:
-            error_count_today = int(raw_err) if raw_err is not None else 0
+            return int(raw_err) if raw_err is not None else 0
         except (TypeError, ValueError):
-            error_count_today = 0
+            return 0
+
+    combined_result, error_count_today = await asyncio.gather(
+        db.execute(combined_stmt), _load_error_count()
+    )
+    (
+        users_today,
+        calls_today,
+        whatsapp_messages_today,
+        tokens_in_sum,
+        tokens_out_sum,
+        audio_secs_sum,
+        leads_today,
+        leads_today_voice,
+        leads_today_whatsapp,
+    ) = combined_result.one()
+
+    usd_spend_today = (
+        float(tokens_in_sum) * _INPUT_USD_PER_TOKEN
+        + float(tokens_out_sum) * _OUTPUT_USD_PER_TOKEN
+        + float(audio_secs_sum) * _REALTIME_AUDIO_USD_PER_SECOND
+    )
 
     return {
         "users_today": users_today,
@@ -250,7 +288,11 @@ async def get_reports_timeseries(
     # One round trip per table instead of one per counter (conditional SUM in
     # place of a separate query for each breakdown) — DB is a remote Neon
     # instance (see .env), so every extra query here is real page-load
-    # latency on the Reports page.
+    # latency on the Reports page. NOTE: these 3 queries can't safely run
+    # concurrently via asyncio.gather — they'd need to share this request's
+    # single `db` session, which isn't safe for concurrent statements, and
+    # opening separate AsyncSessionLocal() sessions here bypasses the test
+    # suite's DB fixture override (broke test_reports_endpoints.py — reverted).
     def _count_if(condition):  # noqa: ANN001, ANN202 — SQLAlchemy boolean expr
         return func.sum(case((condition, 1), else_=0))
 
@@ -359,6 +401,62 @@ async def get_reports_campaigns(
             )
         )
     return rows
+
+
+@router.get("/reports/export.xlsx")
+async def export_reports_xlsx(
+    db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+    days: int = Query(30, ge=1, le=365),
+) -> StreamingResponse:
+    """The Reports page's "Download report" button — a workbook with the
+    same two tables the page shows (daily trend, campaign conversion),
+    scoped to the same `days` window, as a sales-ops-friendly alternative to
+    reading the dashboard on screen. Reuses the JSON endpoints' own query
+    logic directly rather than duplicating it."""
+    timeseries = await get_reports_timeseries(db, scope_org_id, x_admin_token, days)
+    campaign_rows = await get_reports_campaigns(db, org, x_admin_token)
+
+    workbook = openpyxl.Workbook()
+    trend_sheet = workbook.active
+    trend_sheet.title = "Daily trend"
+    trend_sheet.append(["Date", "Calls", "WhatsApp", "Qualified", "Spend (USD)"])
+    for point in timeseries:
+        trend_sheet.append(
+            [point.date, point.calls, point.whatsapp_messages, point.qualified_count, point.usd_spend]
+        )
+
+    campaign_sheet = workbook.create_sheet("Campaign conversion")
+    campaign_sheet.append(
+        ["Name", "Channel", "Status", "Pending", "Calling", "Completed", "Failed", "Qualified", "Qualification rate"]
+    )
+    for row in campaign_rows:
+        campaign_sheet.append(
+            [
+                row.name,
+                row.channel,
+                row.status,
+                row.counts.pending,
+                row.counts.calling,
+                row.counts.completed,
+                row.counts.failed,
+                row.counts.qualified,
+                row.qualification_rate if row.qualification_rate is not None else "",
+            ]
+        )
+
+    buf = io.BytesIO()
+    workbook.save(buf)
+    buf.seek(0)
+
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d")
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="report-{stamp}.xlsx"'},
+    )
 
 
 @router.get("/conversations")
@@ -624,22 +722,17 @@ async def update_lead(
     return LeadOut.model_validate(lead)
 
 
-@router.get("/leads.csv")
-async def export_leads_csv(
-    db: DbDep,
-    scope_org_id: AnalyticsScopeDep,
-    x_admin_token: str | None = Header(None),
-    intent: str | None = Query(None),
-    channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
-    status: str | None = Query(None, pattern=_LEAD_STATUS_PATTERN),
-    tag: str | None = Query(None, description="Filter by a single tag"),
-    search: str | None = Query(None, description="Match against intent or tags"),
-    limit: int = Query(1000, ge=1, le=10000),
-    offset: int = Query(0, ge=0),
-) -> StreamingResponse:
-    """Same data as GET /admin/leads but rendered as CSV for download —
-    including the same org scoping, so an export can't pull rows the list
-    view wouldn't show."""
+def _leads_export_stmt(
+    scope_org_id: UUID | None,
+    intent: str | None,
+    channel: str | None,
+    status: str | None,
+    qualification_status: str | None,
+    tag: str | None,
+    search: str | None,
+    limit: int,
+    offset: int,
+):
     stmt = select(Lead).order_by(Lead.created_at.desc()).limit(limit).offset(offset)
     if scope_org_id is not None:
         stmt = stmt.where(Lead.org_id == scope_org_id)
@@ -649,34 +742,120 @@ async def export_leads_csv(
         stmt = stmt.where(Lead.channel == channel)
     if status:
         stmt = stmt.where(Lead.status == status)
+    if qualification_status:
+        stmt = stmt.where(Lead.qualification_status == qualification_status)
     if tag:
         stmt = stmt.where(_lead_tag_clause(tag))
     if search:
         stmt = stmt.where(_lead_search_clause(search))
+    return stmt
+
+
+_LEADS_EXPORT_HEADER = [
+    "id",
+    "name",
+    "phone",
+    "intent",
+    "tags",
+    "channel",
+    "status",
+    "qualification_status",
+    "qualification_score",
+    "created_at",
+]
+
+
+def _lead_export_row(lead: Lead) -> list[str]:
+    return [
+        str(lead.id),
+        lead.name or "",
+        lead.phone or "",
+        lead.intent or "",
+        ",".join(lead.tags) if lead.tags else "",
+        lead.channel or "",
+        lead.status or "",
+        lead.qualification_status or "",
+        str(lead.qualification_score) if lead.qualification_score is not None else "",
+        lead.created_at.isoformat() if lead.created_at else "",
+    ]
+
+
+@router.get("/leads.csv")
+async def export_leads_csv(
+    db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    x_admin_token: str | None = Header(None),
+    intent: str | None = Query(None),
+    channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
+    status: str | None = Query(None, pattern=_LEAD_STATUS_PATTERN),
+    qualification_status: str | None = Query(None, pattern=_LEAD_QUALIFICATION_STATUS_PATTERN),
+    tag: str | None = Query(None, description="Filter by a single tag"),
+    search: str | None = Query(None, description="Match against intent or tags"),
+    limit: int = Query(1000, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+) -> StreamingResponse:
+    """Same data as GET /admin/leads but rendered as CSV for download —
+    including the same org scoping, so an export can't pull rows the list
+    view wouldn't show."""
+    stmt = _leads_export_stmt(
+        scope_org_id, intent, channel, status, qualification_status, tag, search, limit, offset
+    )
     leads = (await db.execute(stmt)).scalars().all()
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["id", "name", "phone", "intent", "tags", "channel", "status", "created_at"])
+    writer.writerow(_LEADS_EXPORT_HEADER)
     for lead in leads:
-        writer.writerow(
-            [
-                str(lead.id),
-                lead.name or "",
-                lead.phone or "",
-                lead.intent or "",
-                ",".join(lead.tags) if lead.tags else "",
-                lead.channel or "",
-                lead.status or "",
-                lead.created_at.isoformat() if lead.created_at else "",
-            ]
-        )
+        writer.writerow(_lead_export_row(lead))
     buf.seek(0)
 
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="leads.csv"'},
+    )
+
+
+@router.get("/leads.xlsx")
+async def export_leads_xlsx(
+    db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    x_admin_token: str | None = Header(None),
+    intent: str | None = Query(None),
+    channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
+    status: str | None = Query(None, pattern=_LEAD_STATUS_PATTERN),
+    qualification_status: str | None = Query(None, pattern=_LEAD_QUALIFICATION_STATUS_PATTERN),
+    tag: str | None = Query(None, description="Filter by a single tag"),
+    search: str | None = Query(None, description="Match against intent or tags"),
+    limit: int = Query(1000, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+) -> StreamingResponse:
+    """Same data/filters as GET /admin/leads.csv, as an .xlsx workbook —
+    e.g. `?qualification_status=qualified` for the Reports page's "Export
+    qualified leads" button."""
+    stmt = _leads_export_stmt(
+        scope_org_id, intent, channel, status, qualification_status, tag, search, limit, offset
+    )
+    leads = (await db.execute(stmt)).scalars().all()
+
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Leads"
+    sheet.append(_LEADS_EXPORT_HEADER)
+    for lead in leads:
+        sheet.append(_lead_export_row(lead))
+    for cell in sheet["C"][1:]:  # phone column — keep leading "+"/zeros as text
+        cell.number_format = "@"
+
+    buf = io.BytesIO()
+    workbook.save(buf)
+    buf.seek(0)
+
+    filename = "qualified-leads.xlsx" if qualification_status == "qualified" else "leads.xlsx"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -870,40 +1049,46 @@ async def _campaign_counts(db: DbDep, campaign_id: UUID) -> CampaignCounts:
 async def _campaign_counts_bulk(
     db: DbDep, campaign_ids: Sequence[UUID]
 ) -> dict[UUID, CampaignCounts]:
-    """Batched counts for multiple campaigns in 2 queries total instead of
-    2 queries per campaign — used by list/report endpoints that render a
-    row per campaign."""
+    """Batched counts for multiple campaigns in 1 round trip total instead of
+    one query per campaign (or even 2 for all of them) — used by list/report
+    endpoints that render a row per campaign. Status tallies and the
+    qualified count both come off the same ``campaign_targets`` rows, so a
+    single grouped query with conditional SUMs gets both instead of two
+    separate round trips to the same table (DB is a remote Neon instance —
+    see ``get_stats`` above for the same pattern)."""
     if not campaign_ids:
         return {}
-    status_stmt = (
-        select(CampaignTarget.campaign_id, CampaignTarget.status, func.count())
-        .where(CampaignTarget.campaign_id.in_(campaign_ids))
-        .group_by(CampaignTarget.campaign_id, CampaignTarget.status)
-    )
-    tallies: dict[UUID, dict[str, int]] = {cid: {} for cid in campaign_ids}
-    for cid, status, count in (await db.execute(status_stmt)).all():
-        tallies[cid][status] = count
 
-    qualified_stmt = (
-        select(CampaignTarget.campaign_id, func.count())
-        .where(
-            CampaignTarget.campaign_id.in_(campaign_ids),
-            CampaignTarget.qualified.is_(True),
+    def _count_if(condition):  # noqa: ANN001, ANN202 — SQLAlchemy boolean expr
+        return func.coalesce(func.sum(case((condition, 1), else_=0)), 0)
+
+    combined_stmt = (
+        select(
+            CampaignTarget.campaign_id,
+            _count_if(CampaignTarget.status == "pending"),
+            _count_if(CampaignTarget.status == "calling"),
+            _count_if(CampaignTarget.status == "completed"),
+            _count_if(CampaignTarget.status == "failed"),
+            _count_if(CampaignTarget.qualified.is_(True)),
         )
+        .where(CampaignTarget.campaign_id.in_(campaign_ids))
         .group_by(CampaignTarget.campaign_id)
     )
-    qualified_by_id = dict((await db.execute(qualified_stmt)).all())
-
-    return {
-        cid: CampaignCounts(
-            pending=tallies[cid].get("pending", 0),
-            calling=tallies[cid].get("calling", 0),
-            completed=tallies[cid].get("completed", 0),
-            failed=tallies[cid].get("failed", 0),
-            qualified=qualified_by_id.get(cid, 0),
-        )
+    counts_by_id = {
+        cid: CampaignCounts(pending=0, calling=0, completed=0, failed=0, qualified=0)
         for cid in campaign_ids
     }
+    for cid, pending, calling, completed, failed, qualified in (
+        await db.execute(combined_stmt)
+    ).all():
+        counts_by_id[cid] = CampaignCounts(
+            pending=pending,
+            calling=calling,
+            completed=completed,
+            failed=failed,
+            qualified=qualified,
+        )
+    return counts_by_id
 
 
 def _campaign_out(campaign: CallCampaign, counts: CampaignCounts) -> CampaignOut:
@@ -1029,17 +1214,44 @@ async def list_campaigns(
     x_admin_token: str | None = Header(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
 ) -> list[CampaignOut]:
+    """List campaigns with their target-status counts in a single round
+    trip — the counts come along as correlated subqueries on the same
+    SELECT instead of a separate query afterward (DB is a remote Neon
+    instance; see ``get_stats`` above for the same pattern applied to the
+    dashboard stats tile)."""
     org_id = org
+
+    def _target_count(condition):  # noqa: ANN001, ANN202 — SQLAlchemy boolean expr
+        return (
+            select(func.coalesce(func.sum(case((condition, 1), else_=0)), 0))
+            .where(CampaignTarget.campaign_id == CallCampaign.id)
+            .correlate(CallCampaign)
+            .scalar_subquery()
+        )
+
     stmt = (
-        select(CallCampaign)
+        select(
+            CallCampaign,
+            _target_count(CampaignTarget.status == "pending"),
+            _target_count(CampaignTarget.status == "calling"),
+            _target_count(CampaignTarget.status == "completed"),
+            _target_count(CampaignTarget.status == "failed"),
+            _target_count(CampaignTarget.qualified.is_(True)),
+        )
         .where(CallCampaign.org_id == org_id)
         .order_by(CallCampaign.created_at.desc())
     )
     if channel:
         stmt = stmt.where(CallCampaign.channel == channel)
-    campaigns = (await db.execute(stmt)).scalars().all()
-    counts_by_id = await _campaign_counts_bulk(db, [c.id for c in campaigns])
-    return [_campaign_out(c, counts_by_id[c.id]) for c in campaigns]
+
+    rows = (await db.execute(stmt)).all()
+    return [
+        _campaign_out(
+            campaign,
+            CampaignCounts(pending=pending, calling=calling, completed=completed, failed=failed, qualified=qualified),
+        )
+        for campaign, pending, calling, completed, failed, qualified in rows
+    ]
 
 
 _SAMPLE_CAMPAIGN_ROWS = [

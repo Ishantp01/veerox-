@@ -13,15 +13,19 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    org_id: Mapped[UUID] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False)
+    org_id: Mapped[UUID] = mapped_column(
+        ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Indexed: admin.py's list_conversations sorts on this for every page load.
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+        index=True,
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Plivo's Call UUID for voice conversations — lets the recording-finished

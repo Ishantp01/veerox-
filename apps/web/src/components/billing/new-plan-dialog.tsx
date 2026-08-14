@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Plus } from "lucide-react";
+import { z } from "zod";
 import {
   Button,
   Dialog,
@@ -27,24 +28,48 @@ const EMPTY = {
   automatedFollowups: false,
 };
 
+const planSchema = z.object({
+  code: z.string().trim().min(1, "Code is required"),
+  name: z.string().trim().min(1, "Name is required"),
+  priceRupees: z.coerce.number().nonnegative("Price must be zero or greater"),
+  maxSeats: z.coerce.number().nonnegative("Must be zero or greater"),
+  maxCampaigns: z.coerce.number().nonnegative("Must be zero or greater"),
+  maxCallMinutesPerMonth: z.coerce.number().nonnegative("Must be zero or greater"),
+  maxWhatsappMessagesPerMonth: z.coerce.number().nonnegative("Must be zero or greater"),
+});
+
+type PlanFieldErrors = Partial<Record<keyof typeof planSchema.shape, string>>;
+
 export function NewPlanDialog() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
+  const [fieldErrors, setFieldErrors] = useState<PlanFieldErrors>({});
   const createPlan = useCreatePlan();
   const { toast } = useToast();
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    const parsed = planSchema.safeParse(form);
+    if (!parsed.success) {
+      const errors: PlanFieldErrors = {};
+      for (const issue of parsed.error.issues) {
+        const key = issue.path[0] as keyof PlanFieldErrors;
+        if (!errors[key]) errors[key] = issue.message;
+      }
+      setFieldErrors(errors);
+      return;
+    }
+    setFieldErrors({});
     createPlan.mutate(
       {
-        code: form.code.trim(),
-        name: form.name.trim(),
-        price_cents_monthly: Math.round(Number(form.priceRupees || 0) * 100),
+        code: parsed.data.code,
+        name: parsed.data.name,
+        price_cents_monthly: Math.round(parsed.data.priceRupees * 100),
         limits: {
-          max_seats: Number(form.maxSeats || 0),
-          max_campaigns: Number(form.maxCampaigns || 0),
-          max_call_minutes_per_month: Number(form.maxCallMinutesPerMonth || 0),
-          max_whatsapp_messages_per_month: Number(form.maxWhatsappMessagesPerMonth || 0),
+          max_seats: parsed.data.maxSeats,
+          max_campaigns: parsed.data.maxCampaigns,
+          max_call_minutes_per_month: parsed.data.maxCallMinutesPerMonth,
+          max_whatsapp_messages_per_month: parsed.data.maxWhatsappMessagesPerMonth,
           automated_followups: form.automatedFollowups,
         },
       },
@@ -52,6 +77,7 @@ export function NewPlanDialog() {
         onSuccess: () => {
           toast({ title: "Plan created", variant: "success" });
           setForm(EMPTY);
+          setFieldErrors({});
           setOpen(false);
         },
         onError: (err) =>
@@ -70,9 +96,12 @@ export function NewPlanDialog() {
       </DialogTrigger>
       <DialogContent>
         <DialogTitle>New plan</DialogTitle>
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} noValidate>
           <DialogBody className="flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-4">
+            <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+              Plan details
+            </p>
+            <div className="-mt-2 grid grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="plan-code">Code *</Label>
                 <Input
@@ -81,7 +110,14 @@ export function NewPlanDialog() {
                   value={form.code}
                   onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
                   placeholder="enterprise"
+                  aria-invalid={fieldErrors.code ? true : undefined}
+                  aria-describedby={fieldErrors.code ? "plan-code-error" : undefined}
                 />
+                {fieldErrors.code && (
+                  <p id="plan-code-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.code}
+                  </p>
+                )}
               </div>
               <div>
                 <Label htmlFor="plan-name">Name *</Label>
@@ -91,7 +127,14 @@ export function NewPlanDialog() {
                   value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   placeholder="Enterprise"
+                  aria-invalid={fieldErrors.name ? true : undefined}
+                  aria-describedby={fieldErrors.name ? "plan-name-error" : undefined}
                 />
+                {fieldErrors.name && (
+                  <p id="plan-name-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.name}
+                  </p>
+                )}
               </div>
             </div>
             <div>
@@ -103,8 +146,18 @@ export function NewPlanDialog() {
                 value={form.priceRupees}
                 onChange={(e) => setForm((f) => ({ ...f, priceRupees: e.target.value }))}
                 placeholder="4900"
+                aria-invalid={fieldErrors.priceRupees ? true : undefined}
+                aria-describedby={fieldErrors.priceRupees ? "plan-price-error" : undefined}
               />
+              {fieldErrors.priceRupees && (
+                <p id="plan-price-error" className="mt-1.5 text-xs text-red-600">
+                  {fieldErrors.priceRupees}
+                </p>
+              )}
             </div>
+            <p className="-mb-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+              Limits
+            </p>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="plan-seats">Team members</Label>
@@ -115,7 +168,14 @@ export function NewPlanDialog() {
                   value={form.maxSeats}
                   onChange={(e) => setForm((f) => ({ ...f, maxSeats: e.target.value }))}
                   placeholder="5"
+                  aria-invalid={fieldErrors.maxSeats ? true : undefined}
+                  aria-describedby={fieldErrors.maxSeats ? "plan-seats-error" : undefined}
                 />
+                {fieldErrors.maxSeats && (
+                  <p id="plan-seats-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.maxSeats}
+                  </p>
+                )}
               </div>
               <div>
                 <Label htmlFor="plan-campaigns">Max campaigns</Label>
@@ -125,7 +185,14 @@ export function NewPlanDialog() {
                   min={0}
                   value={form.maxCampaigns}
                   onChange={(e) => setForm((f) => ({ ...f, maxCampaigns: e.target.value }))}
+                  aria-invalid={fieldErrors.maxCampaigns ? true : undefined}
+                  aria-describedby={fieldErrors.maxCampaigns ? "plan-campaigns-error" : undefined}
                 />
+                {fieldErrors.maxCampaigns && (
+                  <p id="plan-campaigns-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.maxCampaigns}
+                  </p>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -137,7 +204,14 @@ export function NewPlanDialog() {
                   min={0}
                   value={form.maxCallMinutesPerMonth}
                   onChange={(e) => setForm((f) => ({ ...f, maxCallMinutesPerMonth: e.target.value }))}
+                  aria-invalid={fieldErrors.maxCallMinutesPerMonth ? true : undefined}
+                  aria-describedby={fieldErrors.maxCallMinutesPerMonth ? "plan-call-minutes-error" : undefined}
                 />
+                {fieldErrors.maxCallMinutesPerMonth && (
+                  <p id="plan-call-minutes-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.maxCallMinutesPerMonth}
+                  </p>
+                )}
               </div>
               <div>
                 <Label htmlFor="plan-whatsapp">WhatsApp msgs/mo</Label>
@@ -149,10 +223,22 @@ export function NewPlanDialog() {
                   onChange={(e) =>
                     setForm((f) => ({ ...f, maxWhatsappMessagesPerMonth: e.target.value }))
                   }
+                  aria-invalid={fieldErrors.maxWhatsappMessagesPerMonth ? true : undefined}
+                  aria-describedby={
+                    fieldErrors.maxWhatsappMessagesPerMonth ? "plan-whatsapp-error" : undefined
+                  }
                 />
+                {fieldErrors.maxWhatsappMessagesPerMonth && (
+                  <p id="plan-whatsapp-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.maxWhatsappMessagesPerMonth}
+                  </p>
+                )}
               </div>
             </div>
-            <label htmlFor="plan-automated-followups" className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+            <label
+              htmlFor="plan-automated-followups"
+              className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-sm font-medium text-slate-700 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-300"
+            >
               <input
                 id="plan-automated-followups"
                 type="checkbox"

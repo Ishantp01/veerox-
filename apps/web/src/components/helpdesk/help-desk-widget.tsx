@@ -2,9 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, GripVertical, Send, Sparkles, User, X } from "lucide-react";
+import { z } from "zod";
 
 import { useHelpDeskChat } from "@/lib/hooks/useHelpDesk";
 import type { HelpDeskMessage } from "@/lib/types";
+
+const draftSchema = z.string().trim().min(1).max(4000);
 
 const GREETING: HelpDeskMessage = {
   role: "assistant",
@@ -177,8 +180,10 @@ export function HelpDeskWidget() {
   }, [open]);
 
   function submit(text: string) {
-    const value = text.trim();
-    if (!value || chat.isPending) return;
+    if (chat.isPending) return;
+    const parsed = draftSchema.safeParse(text);
+    if (!parsed.success) return;
+    const value = parsed.data;
 
     const history = messages;
     setMessages((prev) => [...prev, { role: "user", content: value }]);

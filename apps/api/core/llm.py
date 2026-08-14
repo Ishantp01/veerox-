@@ -59,7 +59,10 @@ _client: AsyncOpenAI | None = None
 def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
-        _client = AsyncOpenAI(api_key=settings.openai_api_key)
+        # Bounded so a stalled request fails fast into the existing retry
+        # path (APITimeoutError subclasses APIConnectionError, already
+        # retryable) instead of hanging the turn on the SDK's 600s default.
+        _client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=20.0)
     return _client
 
 
@@ -91,6 +94,7 @@ async def chat_completion(
     tools: list[dict[str, Any]] | None = None,
     model: str | None = None,
     temperature: float = 0.4,
+    max_tokens: int = 600,
 ) -> ChatResult:
     """Run one chat-completion turn and return a provider-agnostic result.
 
@@ -101,6 +105,12 @@ async def chat_completion(
         model: Override for ``settings.openai_chat_model``.
         temperature: Sampling temperature; defaults to 0.4 for sales/support
             tone consistency.
+        max_tokens: Hard ceiling on generated tokens. Chat-completion latency
+            is dominated by token generation time, not prompt size — without
+            a cap, an occasional rambling reply (both prompts already ask for
+            "short and conversational") can run several times longer than a
+            typical turn with nothing to stop it. 600 comfortably covers a
+            normal voice/WhatsApp reply while bounding the worst case.
 
     Returns:
         A ``ChatResult`` with text (if any), parallel tool calls (if any),
@@ -112,6 +122,7 @@ async def chat_completion(
         "model": effective_model,
         "messages": messages,
         "temperature": temperature,
+        "max_tokens": max_tokens,
     }
     if tools:
         request["tools"] = tools

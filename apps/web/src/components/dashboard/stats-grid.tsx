@@ -70,13 +70,19 @@ export function StatsGrid({ variant }: StatsGridProps) {
       loadingFallback={<DashboardSkeleton count={cardCount} />}
     >
       {stats.data && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:items-start">
-          <div className="flex flex-col gap-6 lg:col-span-2">
+        // Two-column split from md (not lg) up — waiting for lg (1024px)
+        // left this stacked as one long single column on plenty of real
+        // laptop widths (a 1024px+ physical screen at >100% OS display
+        // scaling reports a narrower CSS viewport than that), roughly
+        // doubling the page's scroll height for no visual reason once it
+        // has the room for two columns.
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-3 md:items-start">
+          <div className="flex flex-col gap-6 md:col-span-2">
             <StatsTrendChart variant={variant} />
             <div
               className={cn(
                 "grid grid-cols-1 gap-4 sm:grid-cols-2",
-                cardCount === 5 ? "lg:grid-cols-3 xl:grid-cols-5" : "lg:grid-cols-4",
+                cardCount === 5 ? "md:grid-cols-3 xl:grid-cols-5" : "md:grid-cols-4",
               )}
             >
               {variant === "all" && (

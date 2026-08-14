@@ -18,8 +18,10 @@ class Message(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     org_id: Mapped[UUID] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False)
+    # Indexed: admin.py's list_conversations groups/joins on this for every
+    # conversations-list page load, to attach each row's message count.
     conversation_id: Mapped[UUID] = mapped_column(
-        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # Denormalized from conversation to avoid an extra join on the memory loader hot path.
     user_id: Mapped[UUID] = mapped_column(

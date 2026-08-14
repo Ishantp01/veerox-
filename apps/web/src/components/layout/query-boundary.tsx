@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { AlertCircle } from "lucide-react";
+import { RefreshCw, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface QueryBoundaryProps {
@@ -38,13 +38,19 @@ export function QueryBoundary({
 
   if (isError) {
     return (
-      <div className="flex flex-col items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
-        <span className="flex items-center gap-2">
-          <AlertCircle size={15} className="shrink-0" />
-          {error?.message ?? "Something went wrong loading this data."}
-        </span>
+      <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+        <div className="rounded-2xl bg-gradient-to-b from-slate-100 to-slate-200 p-3.5 text-slate-400 ring-1 ring-slate-200 dark:from-slate-800 dark:to-slate-800/60 dark:text-slate-500 dark:ring-slate-700">
+          <WifiOff size={22} aria-hidden />
+        </div>
+        <div className="space-y-1">
+          <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Unable to load this data</p>
+          <p className="mx-auto max-w-sm text-sm text-slate-500 dark:text-slate-400">
+            Something went wrong on our end. Please try again in a moment.
+          </p>
+        </div>
         {onRetry && (
-          <Button variant="outline" size="sm" onClick={onRetry}>
+          <Button variant="outline" size="sm" onClick={onRetry} className="mt-1">
+            <RefreshCw size={14} aria-hidden />
             Retry
           </Button>
         )}

@@ -2,11 +2,16 @@
 
 import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { z } from "zod";
 import Button from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { LogIn, AlertCircle } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { login as loginRequest } from "@/lib/hooks/useAuthApi";
+
+const tokenSchema = z.object({
+  loginToken: z.string().trim().min(1, "Token is required"),
+});
 
 export default function LoginPage() {
   const router = useRouter();
@@ -17,8 +22,9 @@ export default function LoginPage() {
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!loginToken.trim()) {
-      setError("Please enter your login token.");
+    const parsed = tokenSchema.safeParse({ loginToken });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "Please enter your login token.");
       return;
     }
 
@@ -73,7 +79,7 @@ export default function LoginPage() {
             Enter your org login token, or the shared admin token for the owner org.
           </p>
 
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
             <div>
               <Label htmlFor="loginToken" className="!text-slate-400">Login token</Label>
               <Input

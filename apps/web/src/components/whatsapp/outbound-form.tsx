@@ -88,6 +88,7 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
     formState: { errors },
   } = useForm<WhatsAppForm>({
     resolver: zodResolver(whatsappSchema),
+    mode: "onChange",
     defaultValues: {
       phone: defaultPhone || "+91",
       mode: "text",
@@ -208,6 +209,7 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
               inputMode="tel"
               autoComplete="tel"
               placeholder="+919876543210"
+              maxLength={16}
               className="font-mono"
               aria-invalid={errors.phone ? true : undefined}
               aria-describedby={errors.phone ? "phone-error" : undefined}

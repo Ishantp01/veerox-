@@ -1,6 +1,6 @@
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle, Button, useToast } from "@/components/ui";
+import { Badge, Card, CardContent, CardHeader, CardTitle, Button, Skeleton, useToast } from "@/components/ui";
 import {
   useAvailablePlans,
   useCreateCheckoutSession,
@@ -8,12 +8,8 @@ import {
 } from "@/lib/hooks/useBilling";
 import { openRazorpayCheckout } from "@/lib/razorpay";
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, X } from "lucide-react";
+import { Check, Sparkles, X } from "lucide-react";
 import { useState } from "react";
-
-function formatPriceLabel(cents: number): string {
-  return cents === 0 ? "Free" : `₹${(cents / 100).toLocaleString("en-IN")}/mo`;
-}
 
 // Limit keys rendered as the plan's feature list, in display order. Anything
 // not listed here (a key added to the catalog later) still shows up via the
@@ -136,6 +132,29 @@ export function ChoosePlanCards({
     });
   }
 
+  if (availablePlans.isLoading) {
+    return (
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Card key={i} className="flex h-full flex-col">
+            <CardHeader>
+              <Skeleton className="h-5 w-24" />
+            </CardHeader>
+            <CardContent className="flex flex-1 flex-col gap-4">
+              <Skeleton className="h-8 w-32" />
+              <div className="flex flex-col gap-2.5">
+                {Array.from({ length: 4 }).map((__, j) => (
+                  <Skeleton key={j} className="h-3.5 w-full max-w-[85%]" />
+                ))}
+              </div>
+              <Skeleton className="mt-auto h-10 w-full rounded-xl" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
       {(availablePlans.data ?? []).map((plan) => {
@@ -150,16 +169,43 @@ export function ChoosePlanCards({
             key={plan.code}
             // h-full + flex so every card in the row matches the tallest
             // one and the CTA still lines up despite uneven feature lists.
-            className={`flex h-full flex-col ${isCurrent ? "ring-2 ring-primary-500" : ""}`}
+            className={`relative flex h-full flex-col overflow-hidden transition-shadow ${
+              isCurrent
+                ? "ring-2 ring-primary-500 shadow-glow"
+                : "hover:shadow-card-lg"
+            }`}
           >
-            <CardHeader>
-              <CardTitle>{plan.name}</CardTitle>
+            {isCurrent && (
+              <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-primary-400 to-primary-600" />
+            )}
+            <CardHeader className="flex flex-row items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-400 to-primary-600 text-white shadow-glow">
+                  <Sparkles size={14} aria-hidden />
+                </span>
+                {plan.name}
+              </CardTitle>
+              {isCurrent && (
+                <Badge variant={isLapsed ? "danger" : "success"}>
+                  {isLapsed ? "Renew" : "Current"}
+                </Badge>
+              )}
             </CardHeader>
-            <CardContent className="flex flex-1 flex-col gap-3">
-              <p className="text-lg font-bold text-slate-900 dark:text-slate-100">
-                {formatPriceLabel(plan.price_cents_monthly)}
-              </p>
-              <ul className="flex flex-col gap-1.5 text-sm text-slate-600 dark:text-slate-400">
+            <CardContent className="flex flex-1 flex-col gap-4">
+              <div>
+                <p className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-50">
+                  {plan.price_cents_monthly === 0 ? (
+                    "Free"
+                  ) : (
+                    <>
+                      ₹{(plan.price_cents_monthly / 100).toLocaleString("en-IN")}
+                      <span className="text-sm font-medium text-slate-400 dark:text-slate-500"> /mo</span>
+                    </>
+                  )}
+                </p>
+              </div>
+              <div className="h-px bg-slate-100 dark:bg-slate-800" />
+              <ul className="flex flex-col gap-2 text-sm text-slate-600 dark:text-slate-400">
                 {planFeatures(plan.limits).map((feature) => (
                   <li
                     key={feature.key}
@@ -168,9 +214,11 @@ export function ChoosePlanCards({
                     }`}
                   >
                     {feature.included ? (
-                      <Check size={14} aria-hidden className="mt-0.5 shrink-0 text-primary-500" />
+                      <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary-50 text-primary-600 dark:bg-primary-500/10 dark:text-primary-400">
+                        <Check size={11} aria-hidden />
+                      </span>
                     ) : (
-                      <X size={14} aria-hidden className="mt-0.5 shrink-0 text-slate-300 dark:text-slate-700" />
+                      <X size={16} aria-hidden className="mt-0.5 shrink-0 text-slate-300 dark:text-slate-700" />
                     )}
                     <span>{feature.text}</span>
                   </li>

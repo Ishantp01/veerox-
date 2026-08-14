@@ -55,6 +55,7 @@ function SummaryStat({ label, value }: { label: string; value: string | number }
 export default function ReportsPage() {
   const [days, setDays] = useState<number>(30);
   const [exporting, setExporting] = useState(false);
+  const [downloadingReport, setDownloadingReport] = useState(false);
   const { toast } = useToast();
 
   const timeseries = useReportsTimeseries(days);
@@ -80,21 +81,13 @@ export default function ReportsPage() {
     setExporting(true);
     try {
       const stamp = new Date().toISOString().slice(0, 10);
-      const { rows } = await downloadCsv(
-        "/admin/leads.csv?status=qualified",
-        `qualified-leads-${stamp}.csv`
+      await downloadCsv(
+        "/admin/leads.xlsx?qualification_status=qualified",
+        `qualified-leads-${stamp}.xlsx`
       );
-      if (rows === 0) {
-        toast({
-          title: "Nothing to export",
-          description: "No leads have reached the qualified stage yet.",
-          variant: "info",
-        });
-        return;
-      }
       toast({
         title: "Export started",
-        description: `Your CSV download is ready (${rows} leads).`,
+        description: "Your Excel download is ready.",
         variant: "success",
       });
     } catch (err: unknown) {
@@ -108,16 +101,48 @@ export default function ReportsPage() {
     }
   }
 
+  async function handleDownloadReport() {
+    setDownloadingReport(true);
+    try {
+      const stamp = new Date().toISOString().slice(0, 10);
+      await downloadCsv(`/admin/reports/export.xlsx?days=${days}`, `report-${stamp}.xlsx`);
+      toast({
+        title: "Download started",
+        description: "Your Excel report is ready.",
+        variant: "success",
+      });
+    } catch (err: unknown) {
+      toast({
+        title: "Download failed",
+        description: err instanceof Error ? err.message : "Could not download the report.",
+        variant: "error",
+      });
+    } finally {
+      setDownloadingReport(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="Reports"
         description="Trends across both channels and per-campaign qualification rates, for the sales team."
         action={
-          <Button variant="outline" size="sm" onClick={handleExportQualified} loading={exporting}>
-            {!exporting && <Download size={14} aria-hidden />}
-            Export qualified leads
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDownloadReport}
+              loading={downloadingReport}
+            >
+              {!downloadingReport && <Download size={14} aria-hidden />}
+              Download report
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleExportQualified} loading={exporting}>
+              {!exporting && <Download size={14} aria-hidden />}
+              Export qualified leads
+            </Button>
+          </div>
         }
       />
 

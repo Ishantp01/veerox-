@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FileSpreadsheet, Megaphone, PauseCircle, PlayCircle, Upload } from "lucide-react";
+import { z } from "zod";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -34,6 +35,31 @@ async function downloadSampleContactFile(format: "csv" | "xlsx"): Promise<void> 
   await downloadCsv(`/admin/campaigns/sample.${format}`, `campaign-contacts-sample.${format}`);
 }
 
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+
+const campaignSchema = z.object({
+  name: z.string().trim().min(1, "Campaign name is required"),
+  criteria: z
+    .string()
+    .trim()
+    .min(1, "Qualification criteria is required")
+    .max(5000, "Qualification criteria must be under 5000 characters"),
+});
+
+type CampaignFieldErrors = Partial<Record<"name" | "criteria" | "file", string>>;
+
+function validateContactFile(file: File | null): string | null {
+  if (!file) return "A contact list file is required";
+  const lowerName = file.name.toLowerCase();
+  if (!lowerName.endsWith(".csv") && !lowerName.endsWith(".xlsx")) {
+    return "File must be a .csv or .xlsx";
+  }
+  if (file.size > MAX_FILE_SIZE_BYTES) {
+    return "File must be 10MB or smaller";
+  }
+  return null;
+}
+
 /**
  * Bulk-upload a lead list, criteria included, and let the background worker
  * — the voice dialer (apps/api/workers/campaign_dialer.py) or the WhatsApp
@@ -52,6 +78,7 @@ export function CampaignsView() {
   const [criteria, setCriteria] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [channel, setChannel] = useState<"voice" | "whatsapp">("voice");
+  const [fieldErrors, setFieldErrors] = useState<CampaignFieldErrors>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const createCampaign = useCreateCampaign();
@@ -60,7 +87,24 @@ export function CampaignsView() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    const errors: CampaignFieldErrors = {};
+    const parsed = campaignSchema.safeParse({ name, criteria });
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        const key = issue.path[0] as keyof CampaignFieldErrors;
+        if (!errors[key]) errors[key] = issue.message;
+      }
+    }
+    const fileError = validateContactFile(file);
+    if (fileError) errors.file = fileError;
+
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      return;
+    }
     if (!file) return;
+    setFieldErrors({});
 
     createCampaign.mutate(
       { name, criteria, file, channel },
@@ -78,6 +122,7 @@ export function CampaignsView() {
           setCriteria("");
           setFile(null);
           setChannel("voice");
+          setFieldErrors({});
           if (fileInputRef.current) fileInputRef.current.value = "";
         },
         onError: (err) => {
@@ -122,7 +167,7 @@ export function CampaignsView() {
           <CardTitle>New campaign</CardTitle>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
             <div className="grid gap-4 sm:grid-cols-3">
               <div>
                 <Label htmlFor="campaign-name" required>
@@ -134,7 +179,14 @@ export function CampaignsView() {
                   onChange={(e) => setName(e.target.value)}
                   placeholder="July outreach"
                   required
+                  aria-invalid={fieldErrors.name ? true : undefined}
+                  aria-describedby={fieldErrors.name ? "campaign-name-error" : undefined}
                 />
+                {fieldErrors.name && (
+                  <p id="campaign-name-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.name}
+                  </p>
+                )}
               </div>
               <div>
                 <Label htmlFor="campaign-channel" required>
@@ -161,8 +213,15 @@ export function CampaignsView() {
                   accept=".csv,.xlsx"
                   required
                   onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                  aria-invalid={fieldErrors.file ? true : undefined}
+                  aria-describedby={fieldErrors.file ? "campaign-file-error" : undefined}
                   className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-800 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:file:bg-slate-800 dark:file:text-slate-200"
                 />
+                {fieldErrors.file && (
+                  <p id="campaign-file-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.file}
+                  </p>
+                )}
                 <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
                   Needs a &quot;phone&quot; column (E.164, e.g. +919876543210) and an optional
                   &quot;name&quot; column — same file works for either channel above.
@@ -201,7 +260,14 @@ export function CampaignsView() {
                 onChange={(e) => setCriteria(e.target.value)}
                 placeholder="e.g. Prospect must confirm interest in a demo and have a budget above $5,000."
                 required
+                aria-invalid={fieldErrors.criteria ? true : undefined}
+                aria-describedby={fieldErrors.criteria ? "campaign-criteria-error" : undefined}
               />
+              {fieldErrors.criteria && (
+                <p id="campaign-criteria-error" className="mt-1.5 text-xs text-red-600">
+                  {fieldErrors.criteria}
+                </p>
+              )}
               <p className="mt-1.5 text-xs text-slate-400">
                 The AI agent asks questions to judge each prospect against this bar, then records its
                 verdict — only prospects it marks interested become CRM leads.
