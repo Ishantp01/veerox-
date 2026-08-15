@@ -8,14 +8,14 @@ from pydantic import BaseModel
 class PlanOut(BaseModel):
     code: str
     name: str
-    price_cents_monthly: int
+    price_cents: int
     limits: dict[str, Any]
 
 
 class PlanAdminOut(BaseModel):
     code: str
     name: str
-    price_cents_monthly: int
+    price_cents: int
     limits: dict[str, Any]
     is_active: bool
 
@@ -41,7 +41,7 @@ class OrgAdminOut(BaseModel):
 class PlanCreateIn(BaseModel):
     code: str
     name: str
-    price_cents_monthly: int
+    price_cents: int
     limits: dict[str, Any]
     is_active: bool = True
 
@@ -50,7 +50,7 @@ class PlanUpdateIn(BaseModel):
     """All fields optional — only what's sent gets changed (PATCH semantics)."""
 
     name: str | None = None
-    price_cents_monthly: int | None = None
+    price_cents: int | None = None
     limits: dict[str, Any] | None = None
     is_active: bool | None = None
 
@@ -59,7 +59,10 @@ class BillingStatusOut(BaseModel):
     billing_status: str
     plan: PlanOut | None
     seat_count: int
-    current_period_end: str | None
+    # When the org's current credits were bought. Informational only —
+    # nothing expires on a timer any more, access ends when the credits in
+    # BillingUsageOut run out (see core/usage.py).
+    last_recharge_at: str | None
 
 
 class UsageMetricOut(BaseModel):
@@ -68,6 +71,8 @@ class UsageMetricOut(BaseModel):
 
 
 class BillingUsageOut(BaseModel):
+    # Start of the *credit* period — the org's last recharge, not a
+    # calendar month boundary.
     period_start: str
     call_minutes: UsageMetricOut
     whatsapp_messages: UsageMetricOut

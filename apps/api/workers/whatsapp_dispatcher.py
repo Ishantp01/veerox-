@@ -28,7 +28,7 @@ from sqlalchemy import select, update
 
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.core.agent import _is_kill_switch_active
-from apps.api.core.usage import get_monthly_usage
+from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
@@ -81,7 +81,7 @@ async def _claim_targets() -> list[tuple[str, str, str, int, str | None]]:
     platform default.
 
     Targets belonging to an org that's over its plan's
-    ``max_whatsapp_messages_per_month`` are skipped (left ``pending``, not
+    ``max_whatsapp_messages`` are skipped (left ``pending``, not
     claimed) — this is the only place campaign WhatsApp sends actually
     happen, so without this check a 0-message (or exhausted) plan would
     never stop an already-running campaign from sending.
@@ -111,9 +111,9 @@ async def _claim_targets() -> list[tuple[str, str, str, int, str | None]]:
             if len(claimed) >= _BATCH_SIZE:
                 break
             if org_id not in org_over_limit:
-                usage = await get_monthly_usage(db, org_id)
+                usage = await get_credit_usage(db, org_id)
                 org_over_limit[org_id] = await is_over_plan_limit(
-                    db, org_id, "max_whatsapp_messages_per_month", usage.whatsapp_messages
+                    db, org_id, "max_whatsapp_messages", usage.whatsapp_messages
                 )
             if org_over_limit[org_id]:
                 continue

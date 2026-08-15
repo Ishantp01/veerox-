@@ -1,11 +1,12 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { POLL } from "@/lib/query";
 
 export interface Plan {
   code: string;
   name: string;
-  price_cents_monthly: number;
+  price_cents: number;
   limits: Record<string, number | boolean>;
 }
 
@@ -13,7 +14,9 @@ export interface BillingStatus {
   billing_status: "trialing" | "active" | "past_due" | "canceled" | "incomplete";
   plan: Plan | null;
   seat_count: number;
-  current_period_end: string | null;
+  /** When the org last recharged. Informational only — plans don't expire on
+   * a timer, access ends when the credits in BillingUsage run out. */
+  last_recharge_at: string | null;
 }
 
 export interface UsageMetric {
@@ -22,9 +25,50 @@ export interface UsageMetric {
 }
 
 export interface BillingUsage {
+  /** Start of the credit period — the org's last recharge, not a month. */
   period_start: string;
   call_minutes: UsageMetric;
   whatsapp_messages: UsageMetric;
+}
+
+/**
+ * The metered credits, in display order. Keys must stay in sync with
+ * BillingUsageOut in apps/api/schemas/billing.py.
+ */
+export const CREDIT_METRICS = [
+  { key: "call_minutes", label: "Call minutes", unit: "min" },
+  { key: "whatsapp_messages", label: "WhatsApp messages", unit: "" },
+] as const satisfies readonly { key: keyof BillingUsage; label: string; unit: string }[];
+
+/** Billing states that block everything regardless of credits left. Nothing
+ * downgrades an org on a timer any more (there's no expiry worker — see
+ * apps/api/deps.py), so these only come from a failed payment or a
+ * deliberate admin action. */
+const LAPSED_STATUSES = ["past_due", "canceled", "incomplete"];
+
+export function isMetricExhausted(metric: UsageMetric): boolean {
+  return metric.limit !== null && metric.used >= metric.limit;
+}
+
+/**
+ * True as soon as *any* metered credit is used up — that's the moment the
+ * org actually loses a channel (WhatsApp credits gone means WhatsApp stops,
+ * whether or not call minutes are left), so waiting for every credit to
+ * empty would leave the org half-broken with no gate.
+ *
+ * Two kinds of metric are excluded, both because they can never "run out":
+ * a `null` limit is unlimited on this plan, and a limit of `0` means the
+ * plan never included that channel in the first place (e.g. the
+ * WhatsApp-only plan with `max_call_minutes: 0`). Counting a zero-credit
+ * channel as exhausted would gate those orgs permanently — and recharging
+ * wouldn't help, since the new balance would be zero too. The API still
+ * refuses those calls with a 402; they just don't lock the whole dashboard.
+ */
+export function isAnyCreditExhausted(usage: BillingUsage): boolean {
+  return CREDIT_METRICS.some(({ key }) => {
+    const metric = usage[key];
+    return metric.limit !== null && metric.limit > 0 && isMetricExhausted(metric);
+  });
 }
 
 /**
@@ -60,6 +104,28 @@ export function useBillingUsage() {
     refetchOnMount: "always",
     refetchOnWindowFocus: "always",
   });
+}
+
+/**
+ * Single source of truth for "this org can't do anything until it recharges",
+ * shared by the credit gate, the warning banner, and the billing pages so
+ * they can't disagree about whether an org is blocked.
+ *
+ * Two triggers: any one of the plan's credits is used up, or billing lapsed.
+ * The platform admin's own org is exempt — it's unlimited and never buys a
+ * plan (see apps/api/deps.py's _org_is_platform_admin_owned).
+ */
+export function useIsOutOfCredit(): boolean {
+  const { user } = useAuth();
+  const billing = useBillingStatus();
+  const usage = useBillingUsage();
+
+  if (user?.is_superuser) return false;
+  const lapsed =
+    billing.data !== undefined &&
+    billing.data.plan !== null &&
+    LAPSED_STATUSES.includes(billing.data.billing_status);
+  return lapsed || (usage.data !== undefined && isAnyCreditExhausted(usage.data));
 }
 
 /**

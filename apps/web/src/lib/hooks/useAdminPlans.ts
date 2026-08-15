@@ -4,7 +4,7 @@ import { apiFetch } from "@/lib/api";
 export interface AdminPlan {
   code: string;
   name: string;
-  price_cents_monthly: number;
+  price_cents: number;
   limits: Record<string, number | boolean>;
   is_active: boolean;
 }
@@ -24,7 +24,7 @@ export function useAdminPlans() {
 export interface CreatePlanInput {
   code: string;
   name: string;
-  price_cents_monthly: number;
+  price_cents: number;
   limits: Record<string, number | boolean>;
   is_active?: boolean;
 }
@@ -44,7 +44,7 @@ export function useCreatePlan() {
 export interface UpdatePlanInput {
   code: string;
   name?: string;
-  price_cents_monthly?: number;
+  price_cents?: number;
   limits?: Record<string, number | boolean>;
   is_active?: boolean;
 }

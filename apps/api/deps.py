@@ -150,16 +150,21 @@ async def is_over_plan_limit(
     db: AsyncSession, org_id: UUID, metric: str, current_count: float
 ) -> bool:
     """True if the org should be blocked from consuming `metric` right now —
-    either its plan period has lapsed, or `current_count` has reached the
-    plan's limit for `metric` (a key in `Plan.limits`, e.g.
-    "max_seats"/"max_call_minutes_per_month").
+    either its billing has lapsed, or `current_count` has reached the plan's
+    limit for `metric` (a key in `Plan.limits`, e.g.
+    "max_seats"/"max_call_minutes").
 
-    A `billing_status` outside ("trialing", "active") means the org's last
-    paid period ended (see workers/billing_expiry.py) with no successful
-    renewal — every metric is blocked in that case, not just the one whose
-    limit happens to be checked, since Razorpay Orders (unlike a real
-    subscription) never auto-renew and the org needs to actively re-checkout
-    via POST /billing/checkout-session to clear it.
+    Credits are recharge-based: `current_count` comes from core/usage.py,
+    which measures usage since the org's last recharge and never resets on
+    a calendar boundary. So reaching the limit blocks the metric until the
+    org buys the plan again via POST /billing/checkout-session — that's the
+    normal way an org ends up blocked here.
+
+    A `billing_status` outside ("trialing", "active") blocks *every* metric
+    rather than just the one being checked. Nothing downgrades an org on a
+    timer any more (there is no expiry worker — access ends when credits
+    run out, not when a date passes); this state is now only reached by a
+    failed payment or a deliberate admin action.
 
     Orgs with no plan assigned yet (pre-backfill edge case, or a customer who
     hasn't finished onboarding) are treated as unlimited rather than blocked

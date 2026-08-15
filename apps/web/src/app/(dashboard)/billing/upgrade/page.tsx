@@ -5,28 +5,25 @@ import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { ChoosePlanCards } from "@/components/billing/choose-plan-cards";
 import { Skeleton } from "@/components/ui";
-import { useBillingStatus } from "@/lib/hooks/useBilling";
+import { useBillingStatus, useIsOutOfCredit } from "@/lib/hooks/useBilling";
 
 /**
- * Dedicated full-page plan picker, linked from the "Upgrade plan"/"Renew
- * plan" button on /billing. A separate route (rather than the old in-page
- * dialog) gives the plan grid room to breathe and is directly linkable/
- * bookmarkable/shareable, unlike modal state.
+ * Dedicated full-page plan picker, linked from the "Recharge"/"Change plan"
+ * button on /billing. A separate route (rather than the old in-page dialog)
+ * gives the plan grid room to breathe and is directly linkable/bookmarkable/
+ * shareable, unlike modal state.
  */
 export default function BillingUpgradePage() {
   const router = useRouter();
   const { data, isLoading, isError, error, refetch } = useBillingStatus();
 
-  const needsRenewal =
-    data !== undefined &&
-    data.plan !== null &&
-    ["past_due", "canceled", "incomplete"].includes(data.billing_status);
+  const needsRecharge = useIsOutOfCredit();
 
   return (
     <div className="mx-auto max-w-4xl">
       <PageHeader
-        title={needsRenewal ? "Renew your plan" : "Upgrade your plan"}
-        description="Pick a plan below — you'll be taken through checkout to confirm."
+        title={needsRecharge ? "Renew your plan" : "Change your plan"}
+        description="Pick a plan below — you'll be taken through checkout to confirm. Credits last until you use them up; there's no monthly expiry."
       />
 
       <QueryBoundary
@@ -39,7 +36,7 @@ export default function BillingUpgradePage() {
         {data && (
           <ChoosePlanCards
             currentPlanCode={data.plan?.code ?? null}
-            needsRenewal={needsRenewal}
+            needsRecharge={needsRecharge}
             onPlanActivated={() => router.replace("/billing")}
           />
         )}

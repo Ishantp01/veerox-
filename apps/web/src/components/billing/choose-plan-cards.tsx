@@ -17,8 +17,8 @@ import { useState } from "react";
 const LIMIT_LABELS: Record<string, string> = {
   max_seats: "team members",
   max_campaigns: "campaigns",
-  max_call_minutes_per_month: "call minutes / month",
-  max_whatsapp_messages_per_month: "WhatsApp messages / month",
+  max_call_minutes: "call minutes",
+  max_whatsapp_messages: "WhatsApp messages",
   automated_followups: "automated follow-ups",
 };
 
@@ -47,24 +47,23 @@ function planFeatures(
 }
 
 /**
- * The plan-picker grid, shared by the full Billing page (upgrading/renewing
- * an already-active org) and the standalone /choose-plan onboarding gate
+ * The plan-picker grid, shared by the full Billing page (recharging or
+ * switching plan for an already-active org) and the standalone /choose-plan onboarding gate
  * (a freshly provisioned org with no plan yet — see apps/web/src/app/
  * (dashboard)/layout.tsx's needsPlan redirect). Kept as one component so
  * checkout/payment-verification behavior can't drift between the two.
  */
 export function ChoosePlanCards({
   currentPlanCode,
-  needsRenewal = false,
+  needsRecharge = false,
   onPlanActivated,
 }: {
   currentPlanCode?: string | null;
-  /** True when the current plan's paid period has lapsed (billing_status
-   * isn't "active") — the current-plan card stays clickable and reads
-   * "Renew plan" instead of the normal disabled "Current plan", since
-   * Razorpay Orders don't auto-renew and re-checkout is how an org clears
-   * past_due (see apps/api/routers/billing.py). */
-  needsRenewal?: boolean;
+  /** True when the org is out of credit right now (or its billing lapsed) —
+   * the current-plan card is styled as the urgent action rather than a
+   * neutral "buy it again", since buying it again is the only thing that
+   * restores credit (see apps/api/routers/billing.py). */
+  needsRecharge?: boolean;
   onPlanActivated?: () => void;
 }) {
   const availablePlans = useAvailablePlans();
@@ -159,11 +158,11 @@ export function ChoosePlanCards({
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
       {(availablePlans.data ?? []).map((plan) => {
         const isCurrent = currentPlanCode === plan.code;
-        // The current plan's card stays clickable as "Renew plan" even
-        // while still active — Razorpay Orders don't auto-renew (see
-        // apps/api/routers/billing.py), so re-checkout is the only way to
-        // extend before `current_period_end`, not just to clear past_due.
-        const isLapsed = isCurrent && needsRenewal;
+        // The current plan's card stays clickable as "Recharge" even with
+        // credit left — buying the same plan again is how an org tops up
+        // (it resets Org.plan_started_at, which is what usage is counted
+        // from — see apps/api/core/usage.py).
+        const isEmpty = isCurrent && needsRecharge;
         return (
           <Card
             key={plan.code}
@@ -186,20 +185,26 @@ export function ChoosePlanCards({
                 {plan.name}
               </CardTitle>
               {isCurrent && (
-                <Badge variant={isLapsed ? "danger" : "success"}>
-                  {isLapsed ? "Renew" : "Current"}
+                <Badge variant={isEmpty ? "danger" : "success"}>
+                  {isEmpty ? "Out of credit" : "Current"}
                 </Badge>
               )}
             </CardHeader>
             <CardContent className="flex flex-1 flex-col gap-4">
               <div>
                 <p className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-50">
-                  {plan.price_cents_monthly === 0 ? (
+                  {plan.price_cents === 0 ? (
                     "Free"
                   ) : (
                     <>
-                      ₹{(plan.price_cents_monthly / 100).toLocaleString("en-IN")}
-                      <span className="text-sm font-medium text-slate-400 dark:text-slate-500"> /mo</span>
+                      ₹{(plan.price_cents / 100).toLocaleString("en-IN")}
+                      {/* One-time recharge, not a subscription — the plan
+                          lasts until its credits are used up, however long
+                          that takes (apps/api/core/usage.py). */}
+                      <span className="text-sm font-medium text-slate-400 dark:text-slate-500">
+                        {" "}
+                        per renewal
+                      </span>
                     </>
                   )}
                 </p>
@@ -226,15 +231,15 @@ export function ChoosePlanCards({
               </ul>
               <Button
                 className="mt-auto"
-                variant={isLapsed ? "danger" : isCurrent ? "secondary" : "primary"}
+                variant={isEmpty ? "danger" : isCurrent ? "secondary" : "primary"}
                 // Only the clicked card spins; the others just go inert so a
                 // second plan can't be started while one is mid-checkout.
-                // The current plan stays clickable (renew), not disabled.
+                // The current plan stays clickable (recharge), not disabled.
                 disabled={pendingCode !== null && pendingCode !== plan.code}
                 loading={pendingCode === plan.code}
                 onClick={() => handleChoose(plan.code)}
               >
-                {isCurrent ? "Renew plan" : "Choose plan"}
+                {isCurrent ? "Renew this plan" : "Choose plan"}
               </Button>
             </CardContent>
           </Card>

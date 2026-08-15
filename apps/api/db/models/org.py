@@ -19,10 +19,11 @@ class Org(Base):
     billing_status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default="trialing"
     )
-    # When the org's *current* plan_id took effect — usage aggregation
-    # (core/usage.py) counts from here rather than the calendar month's
-    # start, so a plan upgrade isn't immediately eaten by usage already
-    # accrued under the previous plan.
+    # When the org's *current* plan_id took effect, i.e. its last recharge.
+    # Usage aggregation (core/usage.py) counts from here, so moving this
+    # forward is what restores an org's credits — there is no calendar
+    # reset, and a plan change isn't eaten by usage accrued under the
+    # previous plan.
     plan_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

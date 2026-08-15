@@ -14,7 +14,7 @@ async def _seed_plan(db: AsyncSession) -> Plan:
     plan = Plan(
         code="pro",
         name="Pro",
-        price_cents_monthly=490000,
+        price_cents=490000,
         limits={"max_seats": 5},
     )
     db.add(plan)
@@ -34,7 +34,7 @@ async def test_create_list_update_plan(client: AsyncClient, db_session: AsyncSes
         json={
             "code": "enterprise",
             "name": "Enterprise",
-            "price_cents_monthly": 4990000,
+            "price_cents": 4990000,
             "limits": {"max_seats": 100},
         },
         headers=ADMIN_HEADERS,
@@ -47,7 +47,7 @@ async def test_create_list_update_plan(client: AsyncClient, db_session: AsyncSes
         json={
             "code": "enterprise",
             "name": "Enterprise Again",
-            "price_cents_monthly": 1,
+            "price_cents": 1,
             "limits": {},
         },
         headers=ADMIN_HEADERS,
@@ -106,7 +106,7 @@ async def test_create_paid_plan_never_touches_razorpay(client: AsyncClient) -> N
         json={
             "code": "unconfigured-paid",
             "name": "Unconfigured Paid",
-            "price_cents_monthly": 100000,
+            "price_cents": 100000,
             "limits": {},
         },
         headers=ADMIN_HEADERS,
@@ -120,7 +120,7 @@ async def test_create_free_plan(client: AsyncClient) -> None:
         json={
             "code": "totally-free",
             "name": "Totally Free",
-            "price_cents_monthly": 0,
+            "price_cents": 0,
             "limits": {},
         },
         headers=ADMIN_HEADERS,

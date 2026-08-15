@@ -3,6 +3,15 @@ export const AUTH_MODE_KEY = "veerox_auth_mode";
 export type AuthMode = "session" | "admin";
 
 /**
+ * Fired on `window` whenever the API answers 402 — the org has run out of
+ * plan credit (or its paid period lapsed) and the request was refused. The
+ * credit modal (components/billing/credit-expired-modal.tsx) listens for
+ * this so the block surfaces the instant it happens, instead of waiting up
+ * to POLL.billing ms for /billing/status to catch up.
+ */
+export const CREDIT_LIMIT_EVENT = "veerox:credit-limit";
+
+/**
  * Read the dashboard session token from localStorage.
  * Returns an empty string when called during SSR (localStorage is unavailable).
  */
@@ -56,6 +65,13 @@ export async function apiFetch<T>(
       }
     } catch {
       // ignore JSON parse failure — use the status message
+    }
+    // Announce a plan-credit refusal to whoever is listening (the credit
+    // modal), regardless of which page made the call — every feature route
+    // goes through this wrapper, so the block can't be missed just because
+    // the calling page only rendered a toast.
+    if (response.status === 402 && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(CREDIT_LIMIT_EVENT, { detail: { message } }));
     }
     // Status is attached (not just embedded in the message) so callers —
     // notably the query client's retry policy — can tell a permanent auth

@@ -18,7 +18,10 @@ class Plan(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     code: Mapped[str] = mapped_column(String(30), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    price_cents_monthly: Mapped[int] = mapped_column(Integer, nullable=False)
+    # One-time price per recharge, not a monthly subscription fee — plans
+    # are bought outright and last until their credits run out (see
+    # core/usage.py).
+    price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     # e.g. {"max_seats": 5, "max_campaigns": 20}
     limits: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")

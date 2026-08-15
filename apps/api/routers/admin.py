@@ -38,7 +38,7 @@ from apps.api.core.tools import (
     TOOL_DEFINITIONS,
     _normalize_phone,
 )
-from apps.api.core.usage import get_monthly_usage
+from apps.api.core.usage import get_credit_usage
 from apps.api.db.models import CallCampaign, CampaignTarget, Conversation, Lead, Message, Org, User
 from apps.api.deps import (
     AnalyticsScopeDep,
@@ -1615,8 +1615,8 @@ async def outbound_whatsapp(
     behaviour — useful for local development without Meta credentials.
     """
     org_id = org
-    usage = await get_monthly_usage(db, org_id)
-    await enforce_plan_limit(db, org_id, "max_whatsapp_messages_per_month", usage.whatsapp_messages)
+    usage = await get_credit_usage(db, org_id)
+    await enforce_plan_limit(db, org_id, "max_whatsapp_messages", usage.whatsapp_messages)
 
     # Find or create the recipient user under the default org.
     user_stmt = select(User).where(User.org_id == org_id, User.phone == payload.phone)
@@ -1753,8 +1753,8 @@ async def outbound_call(
     ``channels/voice/webhook.py`` — which currently speaks a test message.
     """
     org_id = org
-    usage = await get_monthly_usage(db, org_id)
-    await enforce_plan_limit(db, org_id, "max_call_minutes_per_month", usage.call_minutes)
+    usage = await get_credit_usage(db, org_id)
+    await enforce_plan_limit(db, org_id, "max_call_minutes", usage.call_minutes)
 
     if not voice_failover.is_configured():
         logger.warning(

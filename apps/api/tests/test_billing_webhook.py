@@ -20,7 +20,7 @@ def _fake_event(event_type: str, payment: dict | None = None) -> dict:
 
 
 async def _seed_org_and_plan(db: AsyncSession) -> Plan:
-    plan = Plan(code="pro", name="Pro", price_cents_monthly=490000, limits={"max_seats": 5})
+    plan = Plan(code="pro", name="Pro", price_cents=490000, limits={"max_seats": 5})
     db.add(plan)
     org = Org(id=ORG_ID, name="Test Org")
     db.add(org)

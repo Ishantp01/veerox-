@@ -5,10 +5,16 @@ Razorpay Subscriptions require the "Subscriptions" product to be separately
 activated on the merchant account (a dashboard-side provisioning step,
 independent of having API keys) before subscription.* events even appear as
 webhook options — that gate blocked local/test-mode setup, so billing here
-is done with plain Orders instead: each plan purchase/renewal is a one-time
-payment that grants a fixed period of access (`_PERIOD_DAYS`), tracked in
-`billing_payments`. There is no provider-side auto-renew; the frontend
-prompts the org to check out again once `current_period_end` has passed.
+is done with plain Orders instead: each plan purchase is a one-time payment
+that grants that plan's credits, tracked in `billing_payments`.
+
+Access is credit-based, not time-based: a payment is a *recharge*, and it
+lasts until the org has used up the plan's included call minutes/messages —
+there is no 30-day window and nothing resets on the calendar (see
+apps/api/core/usage.py). `BillingPayment.period_start` records when a
+recharge landed; `period_end` is left null, since nothing expires on a
+timer. There is no provider-side auto-renew either; the frontend prompts
+the org to check out again once its credits are exhausted.
 
 The webhook route has no session/admin auth — Razorpay authenticates itself
 by signing the payload (verified via `client.utility.verify_webhook_signature`
@@ -26,7 +32,7 @@ import asyncio
 import hashlib
 import io
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Annotated, Any, cast
 from uuid import UUID
 
@@ -42,7 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.config import settings
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import invalidate_user_sessions
-from apps.api.core.usage import get_monthly_usage
+from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.billing_event import BillingEvent
 from apps.api.db.models.billing_payment import BillingPayment
@@ -85,11 +91,6 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
-# How long a single paid Order grants access for. No provider-side
-# auto-renew with Orders, so this is purely a local bookkeeping window —
-# the frontend re-runs checkout once current_period_end has passed.
-_PERIOD_DAYS = 30
-
 _RAZORPAY_API_ERRORS = (
     razorpay.errors.BadRequestError,
     razorpay.errors.GatewayError,
@@ -115,14 +116,14 @@ async def get_billing_usage(org: CurrentOrgDep, db: DbDep) -> BillingUsageOut:
         if plan is not None:
             limits = plan.limits
 
-    usage = await get_monthly_usage(db, org.org_id)
+    usage = await get_credit_usage(db, org.org_id)
     return BillingUsageOut(
         period_start=usage.period_start.isoformat(),
         call_minutes=UsageMetricOut(
-            used=usage.call_minutes, limit=limits.get("max_call_minutes_per_month")
+            used=usage.call_minutes, limit=limits.get("max_call_minutes")
         ),
         whatsapp_messages=UsageMetricOut(
-            used=usage.whatsapp_messages, limit=limits.get("max_whatsapp_messages_per_month")
+            used=usage.whatsapp_messages, limit=limits.get("max_whatsapp_messages")
         ),
     )
 
@@ -131,7 +132,7 @@ def _plan_admin_out(plan: Plan) -> PlanAdminOut:
     return PlanAdminOut(
         code=plan.code,
         name=plan.name,
-        price_cents_monthly=plan.price_cents_monthly,
+        price_cents=plan.price_cents,
         limits=plan.limits,
         is_active=plan.is_active,
     )
@@ -250,7 +251,7 @@ async def regenerate_admin_token(
 
 @router.get("/plans", response_model=list[PlanAdminOut])
 async def list_plans(db: DbDep, _admin: PlatformAdminDep) -> list[PlanAdminOut]:
-    result = await db.execute(select(Plan).order_by(Plan.price_cents_monthly))
+    result = await db.execute(select(Plan).order_by(Plan.price_cents))
     return [_plan_admin_out(plan) for plan in result.scalars().all()]
 
 
@@ -261,12 +262,12 @@ async def create_plan(payload: PlanCreateIn, db: DbDep, _admin: PlatformAdminDep
         raise HTTPException(status_code=400, detail="A plan with that code already exists")
 
     # Plans have no Razorpay-side counterpart — Orders are created ad hoc at
-    # checkout time using price_cents_monthly directly, so paid plans need
+    # checkout time using price_cents directly, so paid plans need
     # nothing beyond a price to become checkout-able.
     plan = Plan(
         code=payload.code,
         name=payload.name,
-        price_cents_monthly=payload.price_cents_monthly,
+        price_cents=payload.price_cents,
         limits=payload.limits,
         is_active=payload.is_active,
     )
@@ -371,13 +372,13 @@ async def list_available_plans(org: CurrentOrgDep, db: DbDep) -> list[PlanOut]:
     """
     _ = org  # CurrentOrgDep only used to require *some* valid session
     result = await db.execute(
-        select(Plan).where(Plan.is_active.is_(True)).order_by(Plan.price_cents_monthly)
+        select(Plan).where(Plan.is_active.is_(True)).order_by(Plan.price_cents)
     )
     return [
         PlanOut(
             code=plan.code,
             name=plan.name,
-            price_cents_monthly=plan.price_cents_monthly,
+            price_cents=plan.price_cents,
             limits=plan.limits,
         )
         for plan in result.scalars().all()
@@ -414,14 +415,16 @@ async def get_billing_status(org: CurrentOrgDep, db: DbDep) -> BillingStatusOut:
         plan_out = PlanOut(
             code=plan.code,
             name=plan.name,
-            price_cents_monthly=plan.price_cents_monthly,
+            price_cents=plan.price_cents,
             limits=plan.limits,
         )
 
+    # Ordered by period_start (when the recharge landed), not period_end —
+    # period_end is null now that credits don't expire on a timer.
     payment_result = await db.execute(
         select(BillingPayment)
         .where(BillingPayment.org_id == org.org_id, BillingPayment.status == "paid")
-        .order_by(BillingPayment.period_end.desc())
+        .order_by(BillingPayment.period_start.desc())
         .limit(1)
     )
     latest_payment = payment_result.scalar_one_or_none()
@@ -430,9 +433,9 @@ async def get_billing_status(org: CurrentOrgDep, db: DbDep) -> BillingStatusOut:
         billing_status=target_org.billing_status,
         plan=plan_out,
         seat_count=seat_count,
-        current_period_end=(
-            latest_payment.period_end.isoformat()
-            if latest_payment and latest_payment.period_end
+        last_recharge_at=(
+            latest_payment.period_start.isoformat()
+            if latest_payment and latest_payment.period_start
             else None
         ),
     )
@@ -447,7 +450,7 @@ async def create_checkout_session(
     if plan is None:
         raise HTTPException(status_code=400, detail="Unknown plan")
 
-    if plan.price_cents_monthly == 0:
+    if plan.price_cents == 0:
         # Free plan — no payment to collect, so there's nothing for Razorpay
         # to do. Assign it directly and send the caller straight back to
         # their own success_url (no external redirect needed).
@@ -471,7 +474,7 @@ async def create_checkout_session(
             "dict[str, Any]",
             client.order.create(
                 {
-                    "amount": plan.price_cents_monthly,
+                    "amount": plan.price_cents,
                     "currency": "INR",
                     "receipt": receipt,
                     "notes": {"org_id": str(org.org_id), "plan_code": plan.code},
@@ -491,7 +494,7 @@ async def create_checkout_session(
             provider="razorpay",
             provider_order_id=order["id"],
             plan_id=plan.id,
-            amount_cents=plan.price_cents_monthly,
+            amount_cents=plan.price_cents,
             status="created",
         )
     )
@@ -499,7 +502,7 @@ async def create_checkout_session(
 
     return CheckoutSessionOut(
         order_id=order["id"],
-        amount_cents=plan.price_cents_monthly,
+        amount_cents=plan.price_cents,
         razorpay_key_id=settings.razorpay_key_id,
     )
 
@@ -507,9 +510,13 @@ async def create_checkout_session(
 async def _activate_paid_payment(
     db: AsyncSession, payment: BillingPayment, razorpay_payment_id: str
 ) -> None:
-    """Marks a BillingPayment paid and extends the org's plan access.
+    """Marks a BillingPayment paid and recharges the org's credits.
     Idempotent — both verify_payment (client-side) and the webhook
     (server-side) can call this for the same order without double-applying.
+
+    Resetting `plan_started_at` is what actually restores credit: usage is
+    counted from that timestamp forward (core/usage.py), so moving it to
+    now zeroes the org's consumed call minutes/messages.
     """
     if payment.status == "paid":
         return
@@ -518,7 +525,10 @@ async def _activate_paid_payment(
     payment.provider_payment_id = razorpay_payment_id
     now = datetime.now(UTC)
     payment.period_start = now
-    payment.period_end = now + timedelta(days=_PERIOD_DAYS)
+    # Left null deliberately: credits don't expire on a timer, so there is
+    # no end date to record. Org.plan_started_at (set below) is what usage
+    # is measured from.
+    payment.period_end = None
 
     org_result = await db.execute(select(Org).where(Org.id == payment.org_id))
     target_org = org_result.scalar_one_or_none()

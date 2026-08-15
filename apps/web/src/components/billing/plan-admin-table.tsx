@@ -14,7 +14,7 @@ import { useAdminPlans, useDeletePlan, useUpdatePlan, type AdminPlan } from "@/l
 import { NewPlanDialog } from "./new-plan-dialog";
 
 function formatRupees(cents: number): string {
-  return cents === 0 ? "Free" : `₹${(cents / 100).toLocaleString("en-IN")}/mo`;
+  return cents === 0 ? "Free" : `₹${(cents / 100).toLocaleString("en-IN")}`;
 }
 
 function LimitCell({ plan, field }: { plan: AdminPlan; field: string }) {
@@ -105,11 +105,11 @@ export function PlanAdminTable() {
           <thead>
             <TableRow isHeader>
               <TableHeader>Plan</TableHeader>
-              <TableHeader>Price</TableHeader>
+              <TableHeader>Price / renewal</TableHeader>
               <TableHeader>Team members</TableHeader>
               <TableHeader>Campaigns</TableHeader>
-              <TableHeader>Call min/mo</TableHeader>
-              <TableHeader>WhatsApp msgs/mo</TableHeader>
+              <TableHeader>Call min / renewal</TableHeader>
+              <TableHeader>WhatsApp msgs / renewal</TableHeader>
               <TableHeader>Automated follow-ups</TableHeader>
               <TableHeader className="text-right">Actions</TableHeader>
             </TableRow>
@@ -125,7 +125,7 @@ export function PlanAdminTable() {
                     </Badge>
                   )}
                 </TableCell>
-                <TableCell>{formatRupees(plan.price_cents_monthly)}</TableCell>
+                <TableCell>{formatRupees(plan.price_cents)}</TableCell>
                 <TableCell>
                   <LimitCell plan={plan} field="max_seats" />
                 </TableCell>
@@ -133,10 +133,10 @@ export function PlanAdminTable() {
                   <LimitCell plan={plan} field="max_campaigns" />
                 </TableCell>
                 <TableCell>
-                  <LimitCell plan={plan} field="max_call_minutes_per_month" />
+                  <LimitCell plan={plan} field="max_call_minutes" />
                 </TableCell>
                 <TableCell>
-                  <LimitCell plan={plan} field="max_whatsapp_messages_per_month" />
+                  <LimitCell plan={plan} field="max_whatsapp_messages" />
                 </TableCell>
                 <TableCell>
                   <BooleanLimitCell plan={plan} field="automated_followups" />

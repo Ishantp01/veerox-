@@ -62,8 +62,8 @@ async def test_superuser_org_exempt_from_plan_limits(
     plan = Plan(
         code="basic",
         name="Basic",
-        price_cents_monthly=0,
-        limits={"max_whatsapp_messages_per_month": 0},
+        price_cents=0,
+        limits={"max_whatsapp_messages": 0},
     )
     db_session.add(plan)
     await db_session.flush()

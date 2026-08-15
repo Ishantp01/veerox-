@@ -53,7 +53,7 @@ async def test_checkout_session_rejects_member_role(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     headers = await _seed_org_and_login_as_member(client, db_session)
-    plan = Plan(code="basic", name="Basic", price_cents_monthly=0, limits={})
+    plan = Plan(code="basic", name="Basic", price_cents=0, limits={})
     db_session.add(plan)
     await db_session.commit()
 
@@ -73,7 +73,7 @@ async def test_checkout_session_activates_free_plan_instantly(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     headers = await _seed_org_and_login(client, db_session)
-    plan = Plan(code="basic", name="Basic", price_cents_monthly=0, limits={})
+    plan = Plan(code="basic", name="Basic", price_cents=0, limits={})
     db_session.add(plan)
     await db_session.commit()
 
@@ -99,7 +99,7 @@ async def test_checkout_session_paid_plan_returns_order_for_embedded_checkout(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     headers = await _seed_org_and_login(client, db_session)
-    plan = Plan(code="pro", name="Pro", price_cents_monthly=490000, limits={})
+    plan = Plan(code="pro", name="Pro", price_cents=490000, limits={})
     db_session.add(plan)
     await db_session.commit()
 
@@ -135,7 +135,7 @@ async def test_verify_payment_activates_org_on_valid_signature(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     headers = await _seed_org_and_login(client, db_session)
-    plan = Plan(code="pro", name="Pro", price_cents_monthly=490000, limits={})
+    plan = Plan(code="pro", name="Pro", price_cents=490000, limits={})
     db_session.add(plan)
     await db_session.flush()
     db_session.add(
@@ -176,14 +176,20 @@ async def test_verify_payment_activates_org_on_valid_signature(
     ).scalar_one()
     assert payment.status == "paid"
     assert payment.provider_payment_id == "pay_xyz"
-    assert payment.period_end is not None
+    # A recharge stamps when it landed but has no end date — credits expire
+    # by consumption, not by a timer (see routers/billing.py).
+    assert payment.period_start is not None
+    assert payment.period_end is None
+    # ...and it resets the org's credit window, which is what actually
+    # restores usage headroom (core/usage.py counts from plan_started_at).
+    assert org.plan_started_at is not None
 
 
 async def test_verify_payment_rejects_bad_signature(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     headers = await _seed_org_and_login(client, db_session)
-    plan = Plan(code="pro", name="Pro", price_cents_monthly=490000, limits={})
+    plan = Plan(code="pro", name="Pro", price_cents=490000, limits={})
     db_session.add(plan)
     await db_session.flush()
     db_session.add(
@@ -226,19 +232,19 @@ async def test_available_plans_reflects_admin_catalog_not_hardcoded(
 ) -> None:
     headers = await _seed_org_and_login(client, db_session)
     db_session.add(
-        Plan(code="basic", name="Basic", price_cents_monthly=0, limits={}, is_active=True)
+        Plan(code="basic", name="Basic", price_cents=0, limits={}, is_active=True)
     )
     db_session.add(
         Plan(
             code="enterprise",
             name="Enterprise",
-            price_cents_monthly=9990000,
+            price_cents=9990000,
             limits={},
             is_active=True,
         )
     )
     db_session.add(
-        Plan(code="retired", name="Retired", price_cents_monthly=100, limits={}, is_active=False)
+        Plan(code="retired", name="Retired", price_cents=100, limits={}, is_active=False)
     )
     await db_session.commit()
 

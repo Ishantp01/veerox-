@@ -4,27 +4,22 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { useBillingStatus, useBillingUsage, type BillingUsage } from "@/lib/hooks/useBilling";
+import {
+  CREDIT_METRICS,
+  isMetricExhausted,
+  useBillingUsage,
+  type BillingUsage,
+} from "@/lib/hooks/useBilling";
 
-/** Keys here must stay in sync with BillingUsageOut in apps/api/schemas/billing.py. */
-const METRIC_LABELS: Record<string, string> = {
-  call_minutes: "call minutes",
-  whatsapp_messages: "WhatsApp messages",
-};
+/** How much of a capped credit has to be gone before we warn about it. */
+const LOW_CREDIT_THRESHOLD = 0.8;
 
-// Mirrors apps/api/workers/billing_expiry.py's _REMINDER_WINDOW — that
-// worker only logs the approaching-expiry case server-side; this is the
-// user-facing half of the same window.
-const RENEWAL_REMINDER_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
-
-function daysUntil(iso: string): number {
-  return Math.max(0, Math.ceil((new Date(iso).getTime() - Date.now()) / (24 * 60 * 60 * 1000)));
-}
-
-function firstExhaustedMetric(usage: BillingUsage): string | null {
-  for (const key of ["call_minutes", "whatsapp_messages"] as const) {
+function lowOrEmptyMetric(usage: BillingUsage): { label: string; isOut: boolean } | null {
+  for (const { key, label } of CREDIT_METRICS) {
     const metric = usage[key];
-    if (metric && metric.limit !== null && metric.used >= metric.limit) return METRIC_LABELS[key];
+    if (metric.limit === null) continue;
+    if (isMetricExhausted(metric)) return { label, isOut: true };
+    if (metric.used / metric.limit >= LOW_CREDIT_THRESHOLD) return { label, isOut: false };
   }
   return null;
 }
@@ -32,60 +27,50 @@ function firstExhaustedMetric(usage: BillingUsage): string | null {
 /**
  * Persistent top-of-page notice — mounted once in DashboardShell so it's
  * visible from every dashboard route, not just the Billing page's usage
- * bars. Three cases, in priority order:
- *   1. billing_status "past_due" — the org's paid period ended (see
- *      apps/api/workers/billing_expiry.py) and outbound calls/messages are
- *      actually blocked now (enforce_plan_limit / campaign_dialer.py /
- *      whatsapp_dispatcher.py).
- *   2. Still "active" but current_period_end is within the reminder window
- *      — Razorpay Orders never auto-renew, so this is the only warning an
- *      org gets before falling into case 1.
- *   3. Still "active" but this month's plan quota for some metric is
- *      already used up — same blocking behavior, different cause (usage,
- *      not expiry).
+ * bars.
+ *
+ * Mostly the *soft* warning, for the window where the org can still work —
+ * a credit is running low but nothing has stopped yet. The instant a credit
+ * actually empties, CreditExpiredModal takes over with a non-dismissible
+ * full-screen gate and this banner is never seen underneath it.
+ *
+ * The "used up" branch below is therefore only reachable on /billing*, the
+ * one place the gate suppresses itself so it can't cover the checkout
+ * buttons — which is exactly where the reminder is still wanted.
+ *
+ * The renewal-reminder case was removed from here — credits are
+ * recharge-based and nothing lapses on a date (see apps/api/core/usage.py),
+ * so there's no upcoming deadline to warn about. See removefeature.md §4 to
+ * re-add it.
+ *
  * Superusers never see this — the platform admin org is exempt from plan
  * limits entirely (see deps.py's _org_is_platform_admin_owned).
  */
 export function UsageWarningBanner() {
   const { user } = useAuth();
-  const billing = useBillingStatus();
   const usage = useBillingUsage();
 
   if (user?.is_superuser) return null;
-  if (!billing.data) return null;
+  if (!usage.data) return null;
 
-  if (billing.data.billing_status === "past_due") {
+  const warning = lowOrEmptyMetric(usage.data);
+  if (!warning) return null;
+
+  if (warning.isOut) {
     return (
-      <BannerShell tone="red" title="Plan expired" cta="Renew now">
-        Your plan has expired and calls/messages are paused.
+      <BannerShell tone="amber" title={`${warning.label} used up`} cta="Renew">
+        You&apos;ve spent all your {warning.label.toLowerCase()}. The rest of your plan keeps
+        working until those credits run out too.
       </BannerShell>
     );
   }
 
-  if (billing.data.billing_status === "active" && billing.data.current_period_end) {
-    const msRemaining = new Date(billing.data.current_period_end).getTime() - Date.now();
-    if (msRemaining > 0 && msRemaining <= RENEWAL_REMINDER_WINDOW_MS) {
-      const days = daysUntil(billing.data.current_period_end);
-      return (
-        <BannerShell tone="amber" title="Renewal reminder" cta="Renew now">
-          Your plan renews in {days} day{days === 1 ? "" : "s"} — there&apos;s no auto-renew, so
-          check out again to keep calls/messages running.
-        </BannerShell>
-      );
-    }
-  }
-
-  const exhausted = usage.data ? firstExhaustedMetric(usage.data) : null;
-  if (exhausted) {
-    return (
-      <BannerShell tone="amber" title={`${exhausted} limit reached`} cta="Upgrade plan">
-        You&apos;ve used all of this month&apos;s included {exhausted}. Everything else on your
-        plan keeps working as normal.
-      </BannerShell>
-    );
-  }
-
-  return null;
+  return (
+    <BannerShell tone="amber" title={`${warning.label} running low`} cta="Renew">
+      You&apos;re close to using up your {warning.label.toLowerCase()}. Renew to avoid an
+      interruption.
+    </BannerShell>
+  );
 }
 
 const TONE_STYLES = {
@@ -135,7 +120,7 @@ function BannerShell({
           <span className={`mt-0.5 block text-sm leading-snug ${styles.body}`}>{children}</span>
         </span>
         <Link
-          href="/billing"
+          href="/billing/upgrade"
           className={`ml-auto shrink-0 whitespace-nowrap rounded-lg px-3.5 py-2 text-xs font-semibold shadow-sm transition-colors ${styles.cta}`}
         >
           {cta}

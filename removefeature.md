@@ -1,12 +1,18 @@
-# Removed features: Help Desk Chatbot, Social Media Links & SMS notification text
+# Removed features: Help Desk Chatbot, Social Media Links, SMS notification text & monthly billing periods
 
-Date removed: 2026-08-14
+Date removed: 2026-08-14 (sections 1–3), 2026-08-16 (section 4)
 
-All three were removed from user-visible UI only (Settings page tabs,
+Sections 1–3 were removed from user-visible UI only (Settings page tabs,
 navbar/dashboard chrome, and — for SMS — a status line in a dialog). All
 backend routes, DB models, and the underlying React components/hooks/side
 effects were left intact and untouched so any of them can be re-enabled by
 wiring the UI back up — no backend or data work needed.
+
+**Section 4 is different in kind** — read its own note before assuming the
+paragraph above applies to it. Monthly billing periods were removed from the
+*backend and the database*, not just the UI: a worker file was deleted, a
+schema migration ran, and plan-limit semantics changed. Restoring it is real
+work, not a re-import.
 
 Update (still 2026-08-14, two follow-ups): both editors were also pulled from
 the **Billing page** (`/billing`), where they'd remained mounted for platform
@@ -25,6 +31,8 @@ having to go looking:
 - `apps/web/src/app/(dashboard)/settings/page.tsx` — comment below `TABS` where `PLATFORM_TABS` used to be defined.
 - `apps/web/src/app/(dashboard)/billing/page.tsx` — comment where both `<HelpDeskScriptPanel />` and `<SocialLinksPanel />` (originally the combined `<PlatformSettingsPanel />`) used to render.
 - `apps/web/src/components/organizations/new-org-dialog.tsx` — comment where the SMS status line used to render, on the org-creation success screen.
+- `apps/api/main.py` — comment in `lifespan` where `run_billing_expiry_checker()` used to be started (section 4).
+- `apps/web/src/components/billing/usage-warning-banner.tsx` — comment in the component docstring where the renewal-reminder case used to be (section 4).
 
 ---
 
@@ -171,6 +179,140 @@ send succeeded. That line is what was removed.
 
 ---
 
+## 4. Monthly billing periods (30-day plan expiry, calendar-month usage reset)
+
+Date removed: 2026-08-16
+
+Billing moved from a monthly subscription-shaped model to **recharge-based
+credits**. A plan is now bought outright: you get its included call minutes
+and WhatsApp messages, they're consumed until they run out, and the only
+thing that restores them is buying a plan again. Nothing expires on a date
+and nothing resets on the 1st of the month.
+
+> **Unlike sections 1–3, this touched the backend and the database.** A
+> worker file was deleted, `plans` columns/JSON keys were renamed by
+> migration `e7a1c9b2d4f3`, and an API response field was dropped. Code and
+> schema must move together — the deployed API will 500 on billing routes if
+> it runs the pre-migration code against the migrated DB, or vice versa.
+
+### What was removed
+
+- **`apps/api/workers/billing_expiry.py` — file deleted.** Ran hourly and
+  flipped any org past its `period_end` to `billing_status: "past_due"`
+  (plus a 3-day-out reminder log). With no time-based expiry there is
+  nothing for it to do.
+- **`apps/api/main.py`** — `run_billing_expiry_checker()` import and its
+  `asyncio.create_task(...)` line in `lifespan`, plus its entry in the
+  `background_tasks` tuple.
+- **`apps/api/routers/billing.py`**
+  - `_PERIOD_DAYS = 30` and the `timedelta` import.
+  - `_activate_paid_payment` no longer sets `payment.period_end` to
+    `now + 30 days` — it writes `None`. `period_start` still records when
+    the recharge landed.
+  - `GET /billing/status` no longer returns `current_period_end`; it
+    returns `last_recharge_at` (from `BillingPayment.period_start`)
+    instead, which is informational only. The query now orders by
+    `period_start` rather than the now-always-null `period_end`.
+- **`apps/api/core/usage.py`** — `current_month_start()` and the
+  `max(month start, plan_started_at)` floor. `get_monthly_usage` /
+  `MonthlyUsage` were renamed to `get_credit_usage` / `CreditUsage`, and
+  usage is counted from `Org.plan_started_at` alone. An org with no
+  recharge on record gets no lower bound at all (all-time usage counts)
+  rather than a fallback timestamp.
+- **`apps/web/src/components/billing/usage-warning-banner.tsx`** — the
+  "Renewal reminder — your plan renews in N days" case and its
+  `RENEWAL_REMINDER_WINDOW_MS`. There's no upcoming deadline to warn about
+  any more, so the banner is now purely credit-level based (low / used up).
+  Its `past_due` case also went, because that state is now handled by the
+  hard gate described below.
+- **`apps/web/src/app/(dashboard)/billing/page.tsx`** — the "Access until
+  {date}" / "Access ended {date}" line, and the `needsRenewal` flag derived
+  from `billing_status`.
+
+### Renamed by migration `e7a1c9b2d4f3` (not removed — values preserved)
+
+| before | after |
+| --- | --- |
+| `plans.price_cents_monthly` (column) | `plans.price_cents` |
+| `max_call_minutes_per_month` | `max_call_minutes` |
+| `max_whatsapp_messages_per_month` | `max_whatsapp_messages` |
+| `max_tokens_per_month` | `max_tokens` |
+| `max_leads_per_month` | `max_leads` |
+
+The last four are keys inside each plan's `limits` JSON. `max_seats`,
+`max_campaigns` and `automated_followups` were never monthly and are
+untouched. Applied to the shared Neon DB on 2026-08-16; all 7 plan rows
+migrated, and a plan with empty `limits` was correctly skipped.
+
+### What was added in its place
+
+- **`apps/web/src/components/billing/credit-expired-modal.tsx`** — a
+  centred recharge-prompt modal mounted once in `DashboardShell`. Shown when
+  any metered credit is spent or billing lapsed; exempt on `/billing*` so it
+  can't cover the checkout buttons that clear it. Dismissible (X, Escape,
+  backdrop, "Remind me later"), but every dismissal only snoozes it for
+  `SNOOZE_MS` (5 minutes) — it reopens on its own until the org recharges,
+  rather than being closable for good.
+- **`useIsOutOfCredit()`** in `apps/web/src/lib/hooks/useBilling.ts` — the
+  single source of truth for "blocked", shared by the modal, the banner and
+  both billing pages so they can't disagree. `isAnyCreditExhausted` is the
+  underlying rule: *any one* metered credit hitting its limit blocks the
+  org, not all of them — a plan with call minutes still left but WhatsApp
+  spent is still blocked, since WhatsApp itself has actually stopped.
+  Metrics with a `null` limit (unlimited) or a limit of `0` (channel not
+  included in this plan at all — e.g. a WhatsApp-only plan's
+  `max_call_minutes: 0`) are excluded, since neither can ever "run out" and
+  counting a zero-credit channel would gate those orgs permanently with no
+  recharge able to clear it.
+- **`CREDIT_LIMIT_EVENT`** in `apps/web/src/lib/api.ts` — `apiFetch` fires a
+  `window` event on any 402 so the modal appears immediately instead of
+  waiting up to `POLL.billing` ms.
+
+### What still exists (untouched)
+
+- `BillingPayment.period_end` — the **column stays**, it's just written as
+  `NULL` now. Existing rows keep whatever end date they were given before
+  2026-08-16, so no history was destroyed.
+- `Org.billing_status` and `deps.py`'s `_BLOCKED_BILLING_STATUSES` —
+  `past_due` / `canceled` / `incomplete` still block every metric. Nothing
+  *sets* them on a timer any more, so they're now only reached by a failed
+  payment webhook or a deliberate admin action.
+- `Org.plan_started_at` — unchanged column, but now load-bearing: it *is*
+  the credit balance's start line, so moving it forward is what recharges
+  an org.
+- Razorpay one-time Orders, `/billing/checkout-session`,
+  `/billing/verify-payment`, `/billing/webhook` — all unchanged. Checkout
+  was already a one-time payment; only what the payment *grants* changed.
+
+### How to re-add monthly periods
+
+Not a re-import — expect a migration plus code on both sides:
+
+1. `uv run alembic downgrade 22124d6b9b9d` to put the column and JSON keys
+   back, then revert the corresponding names in `apps/api/db/models/plan.py`,
+   `apps/api/schemas/billing.py`, `apps/api/routers/billing.py`,
+   `apps/api/routers/admin.py`, the two workers, `realtime_bridge.py`, and
+   the frontend hooks/components. **Do this in the same deploy as the
+   downgrade**, not before or after it.
+2. Restore `apps/api/workers/billing_expiry.py` from git history (it was
+   deleted on 2026-08-16) and re-register it in `main.py`'s `lifespan`.
+3. In `apps/api/routers/billing.py`, restore `_PERIOD_DAYS` and have
+   `_activate_paid_payment` set `payment.period_end = now + timedelta(...)`
+   again — the expiry worker keys entirely off that field, so it stays inert
+   until this is done.
+4. In `apps/api/core/usage.py`, reinstate the calendar-month floor
+   (`max(current_month_start(), plan_started_at)`).
+5. Decide what the credit gate should do — if periods come back, the
+   `past_due` case belongs in the banner again and the gate should probably
+   narrow to credit exhaustion only.
+
+Tests to update: `apps/api/tests/test_usage_limits.py` has
+`test_credit_usage_counts_only_since_last_recharge` and
+`test_credit_usage_does_not_reset_on_calendar_month`, which assert exactly
+the behaviour this section removed.
+
+---
+
 ## Notes for whoever re-adds these
 - Help Desk and Social Links share **one** DB row/table (`PlatformSettings`,
   id=1) and **one** PATCH endpoint (`/billing/platform-settings`), so
@@ -181,4 +323,8 @@ send succeeded. That line is what was removed.
   used by the components above are still there.
 - `git log` around 2026-08-14 has the exact diff if you want the original
   `SocialLinksRow` / tab JSX / SMS status-line JSX verbatim instead of
-  rewriting it from this doc.
+  rewriting it from this doc. Section 4's removals are in the 2026-08-16
+  commits — that's also where the deleted `billing_expiry.py` lives.
+- Sections 1–3 are independent of each other and of section 4. Section 4 is
+  the only one where the frontend, the backend and the DB schema have to
+  move together; treat it as one change, not three.

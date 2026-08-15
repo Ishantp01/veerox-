@@ -42,7 +42,7 @@ from apps.api.core.prompts import (
     campaign_qualification_prompt,
     current_datetime_block,
 )
-from apps.api.core.usage import get_monthly_usage
+from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
@@ -137,9 +137,9 @@ async def _watch_usage_limit(
     org_id: UUID, call_started_at: datetime, oai: Any, call_uuid: str, provider: str, log: Any
 ) -> None:
     """Poll the org's plan usage while this call is live and force-hang-up
-    the instant it crosses ``max_call_minutes_per_month``.
+    the instant it crosses ``max_call_minutes``.
 
-    ``core.usage.get_monthly_usage`` only sums *ended* conversations, so it
+    ``core.usage.get_credit_usage`` only sums *ended* conversations, so it
     can't see this call's own in-progress duration — add elapsed wall-clock
     time for the current call on top of it, otherwise a single long call
     could run well past the limit before anything noticed.
@@ -149,9 +149,9 @@ async def _watch_usage_limit(
         await asyncio.sleep(_USAGE_CHECK_INTERVAL_SECS)
         elapsed_minutes = (datetime.now(UTC) - call_started_at).total_seconds() / 60.0
         async with AsyncSessionLocal() as db:
-            usage = await get_monthly_usage(db, org_id)
+            usage = await get_credit_usage(db, org_id)
             over_limit = await is_over_plan_limit(
-                db, org_id, "max_call_minutes_per_month", usage.call_minutes + elapsed_minutes
+                db, org_id, "max_call_minutes", usage.call_minutes + elapsed_minutes
             )
         log.info(
             "voice_usage_watcher_check",

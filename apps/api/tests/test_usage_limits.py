@@ -1,4 +1,4 @@
-"""Covers apps/api/core/usage.py's monthly aggregation and the plan-limit
+"""Covers apps/api/core/usage.py's recharge-based credit aggregation and the plan-limit
 enforcement wired into /admin/outbound/whatsapp and /admin/outbound/call,
 plus GET /billing/usage.
 """
@@ -6,7 +6,7 @@ plus GET /billing/usage.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
 from apps.api.core.security import generate_login_token, hash_token
-from apps.api.core.usage import get_monthly_usage
+from apps.api.core.usage import get_credit_usage
 from apps.api.db.models import (
     AccountUser,
     Conversation,
@@ -58,7 +58,7 @@ async def _seed_whatsapp_messages(db: AsyncSession, count: int) -> None:
     await db.commit()
 
 
-async def test_get_monthly_usage_aggregates_call_minutes(db_session: AsyncSession) -> None:
+async def test_get_credit_usage_aggregates_call_minutes(db_session: AsyncSession) -> None:
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000098")
     db_session.add(user)
@@ -69,8 +69,53 @@ async def test_get_monthly_usage_aggregates_call_minutes(db_session: AsyncSessio
     db_session.add(conversation)
     await db_session.commit()
 
-    usage = await get_monthly_usage(db_session, ORG_ID)
+    usage = await get_credit_usage(db_session, ORG_ID)
     assert usage.call_minutes == 2.0
+
+
+async def test_credit_usage_counts_only_since_last_recharge(db_session: AsyncSession) -> None:
+    """A recharge (plan_started_at moving forward) is what restores credit —
+    usage recorded before it must not count against the new balance."""
+    org = await _seed_org(db_session)
+    await _seed_whatsapp_messages(db_session, 3)
+
+    org.plan_started_at = datetime.now(UTC) + timedelta(seconds=1)
+    await db_session.commit()
+
+    usage = await get_credit_usage(db_session, ORG_ID)
+    assert usage.whatsapp_messages == 0.0
+
+
+async def test_credit_usage_does_not_reset_on_calendar_month(db_session: AsyncSession) -> None:
+    """Credits are recharge-based, not monthly: usage from before the current
+    calendar month still counts as long as it's after the last recharge."""
+    org = await _seed_org(db_session)
+    org.plan_started_at = datetime(2020, 1, 1, tzinfo=UTC)
+    await db_session.commit()
+
+    user = User(org_id=ORG_ID, phone="+910000000097")
+    db_session.add(user)
+    await db_session.flush()
+    conversation = Conversation(org_id=ORG_ID, user_id=user.id, channel="whatsapp")
+    db_session.add(conversation)
+    await db_session.flush()
+    # Dated well before this month — the old monthly aggregation would have
+    # excluded it, the credit-based one must not.
+    db_session.add(
+        Message(
+            org_id=ORG_ID,
+            conversation_id=conversation.id,
+            user_id=user.id,
+            role="assistant",
+            content="hi",
+            channel="whatsapp",
+            created_at=datetime(2024, 3, 15, tzinfo=UTC),
+        )
+    )
+    await db_session.commit()
+
+    usage = await get_credit_usage(db_session, ORG_ID)
+    assert usage.whatsapp_messages == 1.0
 
 
 async def test_billing_usage_endpoint_reflects_plan_limits(
@@ -80,8 +125,8 @@ async def test_billing_usage_endpoint_reflects_plan_limits(
     plan = Plan(
         code="pro",
         name="Pro",
-        price_cents_monthly=490000,
-        limits={"max_whatsapp_messages_per_month": 5},
+        price_cents=490000,
+        limits={"max_whatsapp_messages": 5},
     )
     db_session.add(plan)
     await db_session.flush()
@@ -113,8 +158,8 @@ async def test_outbound_whatsapp_blocked_once_over_plan_limit(
     plan = Plan(
         code="pro",
         name="Pro",
-        price_cents_monthly=490000,
-        limits={"max_whatsapp_messages_per_month": 2},
+        price_cents=490000,
+        limits={"max_whatsapp_messages": 2},
     )
     db_session.add(plan)
     await db_session.flush()
@@ -138,8 +183,8 @@ async def test_outbound_whatsapp_blocked_when_past_due(
     plan = Plan(
         code="pro",
         name="Pro",
-        price_cents_monthly=490000,
-        limits={"max_whatsapp_messages_per_month": 1000},
+        price_cents=490000,
+        limits={"max_whatsapp_messages": 1000},
     )
     db_session.add(plan)
     await db_session.flush()
@@ -167,8 +212,8 @@ async def test_outbound_whatsapp_allowed_under_plan_limit(
     plan = Plan(
         code="pro",
         name="Pro",
-        price_cents_monthly=490000,
-        limits={"max_whatsapp_messages_per_month": 10},
+        price_cents=490000,
+        limits={"max_whatsapp_messages": 10},
     )
     db_session.add(plan)
     await db_session.flush()

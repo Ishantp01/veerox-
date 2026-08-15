@@ -22,7 +22,7 @@ from sqlalchemy import func, select, update
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.config import settings
 from apps.api.core.agent import _is_kill_switch_active
-from apps.api.core.usage import get_monthly_usage
+from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
@@ -125,7 +125,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None]]
     flight.
 
     Targets belonging to an org that's over its plan's
-    ``max_call_minutes_per_month`` are skipped (left ``pending``, not
+    ``max_call_minutes`` are skipped (left ``pending``, not
     claimed) rather than dialed — this is the only place campaign calls
     actually get placed, so without this check a 0-minute (or exhausted)
     plan would never stop an already-running campaign from dialing.
@@ -160,9 +160,9 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None]]
             if len(claimed) >= capacity:
                 break
             if org_id not in org_over_limit:
-                usage = await get_monthly_usage(db, org_id)
+                usage = await get_credit_usage(db, org_id)
                 org_over_limit[org_id] = await is_over_plan_limit(
-                    db, org_id, "max_call_minutes_per_month", usage.call_minutes
+                    db, org_id, "max_call_minutes", usage.call_minutes
                 )
             if org_over_limit[org_id]:
                 continue

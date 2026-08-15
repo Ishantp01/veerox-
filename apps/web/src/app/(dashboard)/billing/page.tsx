@@ -8,7 +8,12 @@ import { PlanAdminTable } from "@/components/billing/plan-admin-table";
 import { ChoosePlanCards } from "@/components/billing/choose-plan-cards";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Skeleton } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
-import { useBillingStatus, useBillingUsage, type UsageMetric } from "@/lib/hooks/useBilling";
+import {
+  useBillingStatus,
+  useBillingUsage,
+  useIsOutOfCredit,
+  type UsageMetric,
+} from "@/lib/hooks/useBilling";
 import { useCampaigns } from "@/lib/hooks/useCampaigns";
 
 const STATUS_BADGE: Record<string, "success" | "danger" | "neutral"> = {
@@ -48,14 +53,7 @@ export default function BillingPage() {
   const { user } = useAuth();
   const router = useRouter();
 
-  // "Lapsed" statuses — the org has a plan on record but its last paid
-  // period didn't renew (Razorpay Orders never auto-renew; see
-  // apps/api/routers/billing.py). Distinct from "trialing", which has never
-  // had a paid period to lapse in the first place.
-  const needsRenewal =
-    data !== undefined &&
-    data.plan !== null &&
-    ["past_due", "canceled", "incomplete"].includes(data.billing_status);
+  const needsRecharge = useIsOutOfCredit();
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -104,23 +102,26 @@ export default function BillingPage() {
                       <p className="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
                         {data.plan?.name ?? "No plan assigned"}
                       </p>
-                      {data.current_period_end && (
-                        <p
-                          className={`mt-1 text-xs ${needsRenewal ? "font-medium text-red-600 dark:text-red-400" : "text-slate-500 dark:text-slate-400"}`}
-                        >
-                          {needsRenewal
-                            ? `Access ended ${new Date(data.current_period_end).toLocaleDateString()} — renew to restore calls and messages.`
-                            : `Access until ${new Date(data.current_period_end).toLocaleDateString()} — no auto-renew, check out again to extend.`}
-                        </p>
-                      )}
+                      {/* No expiry date to show — plans don't lapse on a
+                          timer, they last until their credits are spent
+                          (apps/api/core/usage.py). */}
+                      <p
+                        className={`mt-1 text-xs ${needsRecharge ? "font-medium text-red-600 dark:text-red-400" : "text-slate-500 dark:text-slate-400"}`}
+                      >
+                        {needsRecharge
+                          ? "Credits used up — renew to restore calls and messages."
+                          : data.last_recharge_at
+                            ? `Renewed ${new Date(data.last_recharge_at).toLocaleDateString()} — credits below last until they run out.`
+                            : "Credits last until they run out — there's no monthly expiry."}
+                      </p>
                     </div>
                     {data.plan && (
                       <div>
                         <Button
-                          variant={needsRenewal ? "danger" : "primary"}
+                          variant={needsRecharge ? "danger" : "primary"}
                           onClick={() => router.push("/billing/upgrade")}
                         >
-                          {needsRenewal ? "Renew plan" : "Upgrade plan"}
+                          {needsRecharge ? "Renew now" : "Renew or change plan"}
                         </Button>
                       </div>
                     )}
@@ -130,7 +131,7 @@ export default function BillingPage() {
                 {usage.data && (
                   <Card>
                     <CardHeader>
-                      <CardTitle>Usage this month</CardTitle>
+                      <CardTitle>Credits used since last renewal</CardTitle>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-4">
                       {data.plan && (

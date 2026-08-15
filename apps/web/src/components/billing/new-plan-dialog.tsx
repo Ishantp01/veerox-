@@ -23,8 +23,8 @@ const EMPTY = {
   priceRupees: "",
   maxSeats: "",
   maxCampaigns: "",
-  maxCallMinutesPerMonth: "",
-  maxWhatsappMessagesPerMonth: "",
+  maxCallMinutes: "",
+  maxWhatsappMessages: "",
   automatedFollowups: false,
 };
 
@@ -34,8 +34,8 @@ const planSchema = z.object({
   priceRupees: z.coerce.number().nonnegative("Price must be zero or greater"),
   maxSeats: z.coerce.number().nonnegative("Must be zero or greater"),
   maxCampaigns: z.coerce.number().nonnegative("Must be zero or greater"),
-  maxCallMinutesPerMonth: z.coerce.number().nonnegative("Must be zero or greater"),
-  maxWhatsappMessagesPerMonth: z.coerce.number().nonnegative("Must be zero or greater"),
+  maxCallMinutes: z.coerce.number().nonnegative("Must be zero or greater"),
+  maxWhatsappMessages: z.coerce.number().nonnegative("Must be zero or greater"),
 });
 
 type PlanFieldErrors = Partial<Record<keyof typeof planSchema.shape, string>>;
@@ -64,12 +64,12 @@ export function NewPlanDialog() {
       {
         code: parsed.data.code,
         name: parsed.data.name,
-        price_cents_monthly: Math.round(parsed.data.priceRupees * 100),
+        price_cents: Math.round(parsed.data.priceRupees * 100),
         limits: {
           max_seats: parsed.data.maxSeats,
           max_campaigns: parsed.data.maxCampaigns,
-          max_call_minutes_per_month: parsed.data.maxCallMinutesPerMonth,
-          max_whatsapp_messages_per_month: parsed.data.maxWhatsappMessagesPerMonth,
+          max_call_minutes: parsed.data.maxCallMinutes,
+          max_whatsapp_messages: parsed.data.maxWhatsappMessages,
           automated_followups: form.automatedFollowups,
         },
       },
@@ -138,7 +138,7 @@ export function NewPlanDialog() {
               </div>
             </div>
             <div>
-              <Label htmlFor="plan-price">Price (₹/month)</Label>
+              <Label htmlFor="plan-price">Price (₹ per renewal)</Label>
               <Input
                 id="plan-price"
                 type="number"
@@ -197,40 +197,40 @@ export function NewPlanDialog() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="plan-call-minutes">Call min/mo</Label>
+                <Label htmlFor="plan-call-minutes">Call min / renewal</Label>
                 <Input
                   id="plan-call-minutes"
                   type="number"
                   min={0}
-                  value={form.maxCallMinutesPerMonth}
-                  onChange={(e) => setForm((f) => ({ ...f, maxCallMinutesPerMonth: e.target.value }))}
-                  aria-invalid={fieldErrors.maxCallMinutesPerMonth ? true : undefined}
-                  aria-describedby={fieldErrors.maxCallMinutesPerMonth ? "plan-call-minutes-error" : undefined}
+                  value={form.maxCallMinutes}
+                  onChange={(e) => setForm((f) => ({ ...f, maxCallMinutes: e.target.value }))}
+                  aria-invalid={fieldErrors.maxCallMinutes ? true : undefined}
+                  aria-describedby={fieldErrors.maxCallMinutes ? "plan-call-minutes-error" : undefined}
                 />
-                {fieldErrors.maxCallMinutesPerMonth && (
+                {fieldErrors.maxCallMinutes && (
                   <p id="plan-call-minutes-error" className="mt-1.5 text-xs text-red-600">
-                    {fieldErrors.maxCallMinutesPerMonth}
+                    {fieldErrors.maxCallMinutes}
                   </p>
                 )}
               </div>
               <div>
-                <Label htmlFor="plan-whatsapp">WhatsApp msgs/mo</Label>
+                <Label htmlFor="plan-whatsapp">WhatsApp msgs / renewal</Label>
                 <Input
                   id="plan-whatsapp"
                   type="number"
                   min={0}
-                  value={form.maxWhatsappMessagesPerMonth}
+                  value={form.maxWhatsappMessages}
                   onChange={(e) =>
-                    setForm((f) => ({ ...f, maxWhatsappMessagesPerMonth: e.target.value }))
+                    setForm((f) => ({ ...f, maxWhatsappMessages: e.target.value }))
                   }
-                  aria-invalid={fieldErrors.maxWhatsappMessagesPerMonth ? true : undefined}
+                  aria-invalid={fieldErrors.maxWhatsappMessages ? true : undefined}
                   aria-describedby={
-                    fieldErrors.maxWhatsappMessagesPerMonth ? "plan-whatsapp-error" : undefined
+                    fieldErrors.maxWhatsappMessages ? "plan-whatsapp-error" : undefined
                   }
                 />
-                {fieldErrors.maxWhatsappMessagesPerMonth && (
+                {fieldErrors.maxWhatsappMessages && (
                   <p id="plan-whatsapp-error" className="mt-1.5 text-xs text-red-600">
-                    {fieldErrors.maxWhatsappMessagesPerMonth}
+                    {fieldErrors.maxWhatsappMessages}
                   </p>
                 )}
               </div>

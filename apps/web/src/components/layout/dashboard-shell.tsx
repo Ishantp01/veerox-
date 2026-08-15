@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import Nav from "@/components/nav";
 import { Topbar } from "@/components/layout/topbar";
 import { UsageWarningBanner } from "@/components/billing/usage-warning-banner";
+import { CreditExpiredModal } from "@/components/billing/credit-expired-modal";
 
 /**
  * Owns the mobile-drawer open state shared by Nav (the sidebar itself) and
@@ -22,6 +23,12 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         <UsageWarningBanner />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
+      {/* Out-of-credit / billing-lapsed recharge prompt. Mounted here (not
+          per page) so it reaches every dashboard route, and outside <main>
+          so its backdrop — which deliberately covers the sidebar too —
+          isn't clipped by the scroll container. Dismissible, but re-opens
+          on its own every SNOOZE_MS until the org recharges. */}
+      <CreditExpiredModal />
     </div>
   );
 }
