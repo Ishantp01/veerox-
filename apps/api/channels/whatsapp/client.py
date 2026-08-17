@@ -203,6 +203,67 @@ async def send_template(
     return data
 
 
+async def create_template(
+    name: str,
+    body_text: str,
+    category: str = "UTILITY",
+    language_code: str = "en_US",
+    example_params: list[str] | None = None,
+) -> dict[str, Any]:
+    """Submit a new WhatsApp message template to Meta for review.
+
+    Unlike ``send_template``, this doesn't message anyone — it registers a
+    reusable, reviewable template on the WABA (see
+    ``settings.meta_whatsapp_business_account_id``). Meta typically reviews
+    within minutes to ~24h; the response's ``status`` is ``PENDING`` right
+    after submission. Poll ``list_templates`` (matched by name+language) for
+    the live status once approved, the template becomes usable via
+    ``send_template``.
+
+    ``body_text`` uses ``{{1}}``, ``{{2}}`` ... placeholders. ``example_params``
+    supplies one example value per placeholder, in order — Meta requires an
+    example for every variable to approve a template.
+
+    Returns the raw JSON response (contains the new template's id + status).
+    Raises ``httpx.HTTPStatusError`` on a non-2xx response (e.g. a name
+    that's already taken for this language, or a malformed component).
+    """
+    url = (
+        f"{_GRAPH_BASE}/{settings.meta_graph_api_version}"
+        f"/{settings.meta_whatsapp_business_account_id}/message_templates"
+    )
+    body_component: dict[str, Any] = {"type": "BODY", "text": body_text}
+    if example_params:
+        body_component["example"] = {"body_text": [example_params]}
+    payload = {
+        "name": name,
+        "language": language_code,
+        "category": category,
+        "components": [body_component],
+    }
+    try:
+        r = await _http.post(url, json=payload, headers=_auth_headers())
+        r.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "whatsapp_create_template_failed",
+            name=name,
+            error=str(exc),
+            status=getattr(getattr(exc, "response", None), "status_code", None),
+            meta_error=_meta_error_detail(exc),
+        )
+        raise
+
+    data: dict[str, Any] = r.json()
+    logger.info(
+        "whatsapp_create_template_ok",
+        name=name,
+        template_id=data.get("id"),
+        status=data.get("status"),
+    )
+    return data
+
+
 async def list_templates() -> list[dict[str, Any]]:
     """Fetch this WABA's message templates with their live Meta review status.
 
