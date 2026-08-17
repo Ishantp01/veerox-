@@ -17,7 +17,7 @@ import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -33,6 +33,7 @@ from apps.api.config import settings
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.appointment import Appointment
 from apps.api.db.models.conversation import Conversation
+from apps.api.db.models.follow_up import FollowUpTask
 from apps.api.db.models.lead import Lead
 from apps.api.db.models.org import Org
 from apps.api.db.models.user import User
@@ -375,6 +376,38 @@ async def capture_lead(
     return {"status": "ok", "lead_id": str(lead.id)}
 
 
+APPOINTMENT_CONFLICT_WINDOW_MINUTES = 30
+
+
+async def find_conflicting_appointment(
+    db: AsyncSession,
+    org_id: UUID,
+    scheduled_at: datetime,
+    exclude_appointment_id: UUID | None = None,
+) -> Appointment | None:
+    """Return an existing appointment within ``APPOINTMENT_CONFLICT_WINDOW_MINUTES``
+    of ``scheduled_at`` for this org, or ``None`` if the slot is free.
+
+    Cancelled/no-show appointments have freed up their slot, so they're
+    excluded from the check.
+    """
+    window = timedelta(minutes=APPOINTMENT_CONFLICT_WINDOW_MINUTES)
+    stmt = (
+        select(Appointment)
+        .where(
+            Appointment.org_id == org_id,
+            Appointment.scheduled_at > scheduled_at - window,
+            Appointment.scheduled_at < scheduled_at + window,
+            Appointment.status.notin_(("cancelled", "no_show")),
+        )
+        .limit(1)
+    )
+    if exclude_appointment_id is not None:
+        stmt = stmt.where(Appointment.id != exclude_appointment_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def book_appointment(
     db: AsyncSession,
     date: str,
@@ -439,6 +472,12 @@ async def book_appointment(
         # booking silently landing in the past.
         return {"status": "error", "reason": "date_in_past"}
 
+    if await find_conflicting_appointment(db, org_id, scheduled_at) is not None:
+        # Keeps appointments at least APPOINTMENT_CONFLICT_WINDOW_MINUTES apart
+        # org-wide — e.g. a 2:00 PM booking blocks 2:29 PM. Checked before any
+        # row is written so a rejected slot leaves no partial Lead/Appointment.
+        return {"status": "error", "reason": "slot_conflict"}
+
     metadata: dict[str, Any] = {
         "date": date,
         "time": time,
@@ -466,6 +505,36 @@ async def book_appointment(
         notes=notes,
     )
     db.add(appointment)
+
+    # Schedule reminders at each offset before the appointment, sent by the
+    # follow-up dispatcher (workers/follow_up_dispatcher.py) via the same
+    # pre-approved template used for the immediate confirmation below — it
+    # works outside the 24h free-text session window, which a reminder sent
+    # hours after booking usually is. Offsets that have already passed by
+    # booking time (e.g. booking 10 minutes out) are skipped rather than
+    # firing immediately.
+    reminder_params = [
+        booking_user.name if booking_user and booking_user.name else "there",
+        date,
+        time,
+    ]
+    now = datetime.now(UTC)
+    for offset_minutes in _APPOINTMENT_REMINDER_OFFSETS_MINUTES:
+        reminder_at = scheduled_at - timedelta(minutes=offset_minutes)
+        if reminder_at <= now:
+            continue
+        db.add(
+            FollowUpTask(
+                org_id=org_id,
+                lead_id=lead.id,
+                rule_id=None,
+                run_at=reminder_at,
+                status="pending",
+                template_name=_APPOINTMENT_TEMPLATE_NAME,
+                template_params=reminder_params,
+            )
+        )
+
     await db.commit()
 
     logger.info(
@@ -703,6 +772,10 @@ def _meta_error_code(exc: httpx.HTTPStatusError) -> int | None:
 _REENGAGEMENT_ERROR_CODE = 131047
 
 _APPOINTMENT_TEMPLATE_NAME = "appointment_confirmation"
+
+# Reminders fire this many minutes before the appointment (see
+# book_appointment) — 1 hour, 30 minutes, and 5 minutes out.
+_APPOINTMENT_REMINDER_OFFSETS_MINUTES = (60, 30, 5)
 
 
 async def send_whatsapp_message(

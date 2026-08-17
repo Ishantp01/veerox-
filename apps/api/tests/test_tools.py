@@ -27,6 +27,7 @@ from apps.api.db.models import (
     CallCampaign,
     CampaignTarget,
     Conversation,
+    FollowUpTask,
     Lead,
     Org,
     User,
@@ -190,6 +191,172 @@ async def test_book_appointment_rejects_past_date(
     assert result == {"status": "error", "reason": "date_in_past"}
     count = (await db_session.execute(select(Lead).where(Lead.intent == "booking"))).scalars().all()
     assert count == []
+
+
+async def test_book_appointment_rejects_slot_within_30_minutes(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second booking within the 30-minute buffer of an existing one must
+    be rejected rather than double-booking the slot (see
+    find_conflicting_appointment in core/tools.py)."""
+    async def _noop_send_template(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _noop_send_template)
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000097", name="Caller")
+    db_session.add(user)
+    await db_session.commit()
+
+    future = (datetime.now(UTC) + timedelta(days=7)).replace(
+        hour=14, minute=0, second=0, microsecond=0
+    )
+    first = await book_appointment(
+        db_session,
+        user_id=user.id,
+        date=future.date().isoformat(),
+        time="14:00",
+        timezone="UTC",
+        channel="whatsapp",
+    )
+    assert first["status"] == "ok"
+
+    second = await book_appointment(
+        db_session,
+        user_id=user.id,
+        date=future.date().isoformat(),
+        time="14:25",
+        timezone="UTC",
+        channel="whatsapp",
+    )
+    assert second == {"status": "error", "reason": "slot_conflict"}
+
+    # Only the first booking's Lead/Appointment rows exist.
+    leads = (
+        await db_session.execute(select(Lead).where(Lead.intent == "booking"))
+    ).scalars().all()
+    assert len(leads) == 1
+
+
+async def test_book_appointment_allows_slot_30_minutes_apart(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exactly 30 minutes after an existing booking is far enough to allow."""
+    async def _noop_send_template(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _noop_send_template)
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000096", name="Caller")
+    db_session.add(user)
+    await db_session.commit()
+
+    future = (datetime.now(UTC) + timedelta(days=7)).replace(
+        hour=14, minute=0, second=0, microsecond=0
+    )
+    first = await book_appointment(
+        db_session,
+        user_id=user.id,
+        date=future.date().isoformat(),
+        time="14:00",
+        timezone="UTC",
+        channel="whatsapp",
+    )
+    assert first["status"] == "ok"
+
+    second = await book_appointment(
+        db_session,
+        user_id=user.id,
+        date=future.date().isoformat(),
+        time="14:30",
+        timezone="UTC",
+        channel="whatsapp",
+    )
+    assert second["status"] == "ok"
+
+
+async def test_book_appointment_schedules_three_reminders(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A booking far enough out gets reminder FollowUpTasks at 60/30/5
+    minutes before, sent via the same pre-approved template as the
+    confirmation (see _APPOINTMENT_REMINDER_OFFSETS_MINUTES in
+    core/tools.py)."""
+    async def _noop_send_template(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _noop_send_template)
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000095", name="Priya")
+    db_session.add(user)
+    await db_session.commit()
+
+    future = datetime.now(UTC) + timedelta(days=3)
+    result = await book_appointment(
+        db_session,
+        user_id=user.id,
+        date=future.date().isoformat(),
+        time="15:00",
+        timezone="UTC",
+        channel="whatsapp",
+    )
+    assert result["status"] == "ok"
+
+    lead = (
+        await db_session.execute(select(Lead).where(Lead.intent == "booking"))
+    ).scalars().one()
+    tasks = (
+        await db_session.execute(
+            select(FollowUpTask).where(FollowUpTask.lead_id == lead.id).order_by(FollowUpTask.run_at)
+        )
+    ).scalars().all()
+
+    assert len(tasks) == 3
+    appointment = (
+        await db_session.execute(select(Appointment).where(Appointment.lead_id == lead.id))
+    ).scalars().one()
+    expected_offsets_minutes = [60, 30, 5]
+    for task, offset in zip(tasks, expected_offsets_minutes):
+        assert task.status == "pending"
+        assert task.template_name == "appointment_confirmation"
+        assert task.template_params == ["Priya", future.date().isoformat(), "15:00"]
+        assert task.run_at == appointment.scheduled_at - timedelta(minutes=offset)
+
+
+async def test_book_appointment_skips_reminders_already_in_the_past(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Booking only a few minutes out must not fire the 60/30-minute
+    reminders immediately — only offsets still in the future get scheduled."""
+    async def _noop_send_template(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _noop_send_template)
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000094", name="Rahul")
+    db_session.add(user)
+    await db_session.commit()
+
+    future = datetime.now(UTC) + timedelta(minutes=10)
+    result = await book_appointment(
+        db_session,
+        user_id=user.id,
+        date=future.date().isoformat(),
+        time=future.strftime("%H:%M"),
+        timezone="UTC",
+        channel="whatsapp",
+    )
+    assert result["status"] == "ok"
+
+    lead = (
+        await db_session.execute(select(Lead).where(Lead.intent == "booking"))
+    ).scalars().one()
+    tasks = (
+        await db_session.execute(select(FollowUpTask).where(FollowUpTask.lead_id == lead.id))
+    ).scalars().all()
+
+    # Only the 5-minute-before reminder is still in the future.
+    assert len(tasks) == 1
 
 
 async def test_transfer_to_human_enqueues_and_writes_lead(

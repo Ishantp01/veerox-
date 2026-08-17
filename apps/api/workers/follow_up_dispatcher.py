@@ -156,15 +156,24 @@ async def _execute_task(task_id: UUID) -> None:
             await _resolve_task(task_id, "failed")
             return
 
-        if lead.channel != "whatsapp" or not lead.phone:
-            # No automated send path for voice (or unknown-channel) leads yet
-            # — surfaced to operators as "skipped" rather than staying
-            # pending forever.
-            await _resolve_task(task_id, "skipped")
+        if not lead.phone:
+            await _resolve_task(task_id, "failed")
             return
 
-        rule = await db.get(FollowUpRule, task.rule_id) if task.rule_id else None
-        message = rule.message_template if rule else (lead.follow_up_note or _DEFAULT_FOLLOW_UP_MESSAGE)
+        # Template sends (e.g. appointment reminders) reach the recipient via
+        # Meta's pre-approved template path regardless of channel or open-
+        # session state, so — unlike free-form text below — they skip the
+        # whatsapp-channel gate.
+        message: str | None = None
+        if task.template_name is None:
+            if lead.channel != "whatsapp":
+                # No automated send path for voice (or unknown-channel) leads
+                # yet — surfaced to operators as "skipped" rather than
+                # staying pending forever.
+                await _resolve_task(task_id, "skipped")
+                return
+            rule = await db.get(FollowUpRule, task.rule_id) if task.rule_id else None
+            message = rule.message_template if rule else (lead.follow_up_note or _DEFAULT_FOLLOW_UP_MESSAGE)
 
         # Send from this org's own dedicated WhatsApp number when it has one
         # (see Org.whatsapp_phone_number_id), falling back to the platform default.
@@ -172,7 +181,15 @@ async def _execute_task(task_id: UUID) -> None:
         phone_number_id = org_record.whatsapp_phone_number_id if org_record else None
 
     try:
-        await wa_client.send_text(lead.phone, message, phone_number_id=phone_number_id)
+        if task.template_name:
+            await wa_client.send_template(
+                lead.phone,
+                task.template_name,
+                body_params=task.template_params or [],
+                phone_number_id=phone_number_id,
+            )
+        else:
+            await wa_client.send_text(lead.phone, message, phone_number_id=phone_number_id)
     except httpx.HTTPError:
         logger.warning("follow_up_dispatcher_send_failed", task_id=str(task_id))
         await _resolve_task(task_id, "failed")

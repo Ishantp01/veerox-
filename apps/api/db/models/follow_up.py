@@ -63,3 +63,10 @@ class FollowUpTask(Base):
         nullable=False,
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When set, the dispatcher sends via this Meta pre-approved WhatsApp
+    # template (ordered body params in template_params) instead of the
+    # rule/lead free-text path — see workers/follow_up_dispatcher.py's
+    # _execute_task. Used by appointment reminders, which must reach the
+    # recipient even outside the 24h free-form-text session window.
+    template_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    template_params: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)

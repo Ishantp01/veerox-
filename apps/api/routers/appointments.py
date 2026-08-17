@@ -4,9 +4,10 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import select, update
 
-from apps.api.db.models import Appointment
+from apps.api.core.tools import _APPOINTMENT_TEMPLATE_NAME, find_conflicting_appointment
+from apps.api.db.models import Appointment, FollowUpTask
 from apps.api.deps import DbDep, RequestOrgDep, verify_admin_or_session
 from apps.api.schemas.appointment import (
     APPOINTMENT_STATUSES,
@@ -52,6 +53,11 @@ async def list_appointments(
 async def create_appointment(
     payload: AppointmentCreate, db: DbDep, org_id: RequestOrgDep
 ) -> Appointment:
+    conflict = await find_conflicting_appointment(db, org_id, payload.scheduled_at)
+    if conflict is not None:
+        raise HTTPException(
+            status_code=409, detail="Another appointment is scheduled too close to this time"
+        )
     appointment = Appointment(
         org_id=org_id,
         contact_id=payload.contact_id,
@@ -88,7 +94,34 @@ async def update_appointment(
     appointment = (await db.execute(stmt)).scalar_one_or_none()
     if appointment is None:
         raise HTTPException(status_code=404, detail="Appointment not found")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    if "scheduled_at" in updates:
+        conflict = await find_conflicting_appointment(
+            db, org_id, updates["scheduled_at"], exclude_appointment_id=appointment.id
+        )
+        if conflict is not None:
+            raise HTTPException(
+                status_code=409, detail="Another appointment is scheduled too close to this time"
+            )
+
+    # A rescheduled or cancelled appointment must not let a stale
+    # pre-scheduled reminder (see book_appointment in core/tools.py) fire for
+    # the old time. Rescheduling doesn't re-create reminders for the new
+    # time — only bookings made through book_appointment get them.
+    if appointment.lead_id is not None and (
+        "scheduled_at" in updates or updates.get("status") in {"cancelled", "no_show"}
+    ):
+        await db.execute(
+            update(FollowUpTask)
+            .where(
+                FollowUpTask.lead_id == appointment.lead_id,
+                FollowUpTask.template_name == _APPOINTMENT_TEMPLATE_NAME,
+                FollowUpTask.status == "pending",
+            )
+            .values(status="cancelled")
+        )
+
+    for field, value in updates.items():
         setattr(appointment, field, value)
     await db.commit()
     await db.refresh(appointment)
