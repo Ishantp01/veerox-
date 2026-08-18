@@ -8,12 +8,12 @@ from apps.api.deps import DbDep, RedisDep
 router = APIRouter(tags=["health"])
 
 
-@router.get("/health")
+@router.api_route("/health", methods=["GET", "HEAD"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/ready")
+@router.api_route("/ready", methods=["GET", "HEAD"])
 async def ready(db: DbDep, redis: RedisDep) -> dict[str, str]:
     db_status = "ok"
     redis_status = "ok"
