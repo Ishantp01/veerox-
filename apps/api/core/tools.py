@@ -277,6 +277,18 @@ def _normalize_phone(phone: str) -> str:
     return cleaned
 
 
+def _format_display_time(time_str: str) -> str:
+    """Render a 24-hour ``HH:MM`` time (the LLM's tool-call format) as
+    12-hour clock time for customer-facing WhatsApp templates, e.g.
+    ``"15:00"`` -> ``"3:00 PM"``. Falls back to the raw value if it doesn't
+    parse, so a malformed time still reaches the template instead of
+    crashing the send."""
+    try:
+        return datetime.strptime(time_str, "%H:%M").strftime("%I:%M %p").lstrip("0")
+    except ValueError:
+        return time_str
+
+
 def _lead_dedupe_key(org_id: UUID, phone: str, intent: str) -> str:
     """Stable Redis key for the ``(org_id, phone, intent)`` idempotency tuple."""
     digest = hashlib.sha256(
@@ -516,7 +528,7 @@ async def book_appointment(
     reminder_params = [
         booking_user.name if booking_user and booking_user.name else "there",
         date,
-        time,
+        _format_display_time(time),
     ]
     now = datetime.now(UTC)
     for offset_minutes in _APPOINTMENT_REMINDER_OFFSETS_MINUTES:
@@ -562,7 +574,11 @@ async def book_appointment(
             await wa_client.send_template(
                 _normalize_phone(target_phone),
                 _APPOINTMENT_TEMPLATE_NAME,
-                body_params=[booking_user.name if booking_user and booking_user.name else "there", date, time],
+                body_params=[
+                    booking_user.name if booking_user and booking_user.name else "there",
+                    date,
+                    _format_display_time(time),
+                ],
                 phone_number_id=phone_number_id,
             )
         except httpx.HTTPError:
@@ -836,7 +852,11 @@ async def send_whatsapp_message(
                 await wa_client.send_template(
                     normalized,
                     _APPOINTMENT_TEMPLATE_NAME,
-                    body_params=[caller.name if caller and caller.name else "there", appointment_date, appointment_time],
+                    body_params=[
+                        caller.name if caller and caller.name else "there",
+                        appointment_date,
+                        _format_display_time(appointment_time),
+                    ],
                     phone_number_id=phone_number_id,
                 )
             except httpx.HTTPError as exc2:

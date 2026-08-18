@@ -319,7 +319,7 @@ async def test_book_appointment_schedules_three_reminders(
     for task, offset in zip(tasks, expected_offsets_minutes):
         assert task.status == "pending"
         assert task.template_name == "appointment_confirmation"
-        assert task.template_params == ["Priya", future.date().isoformat(), "15:00"]
+        assert task.template_params == ["Priya", future.date().isoformat(), "3:00 PM"]
         assert task.run_at == appointment.scheduled_at - timedelta(minutes=offset)
 
 

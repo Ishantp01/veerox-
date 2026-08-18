@@ -215,6 +215,63 @@ async def test_handle_turn_dispatches_tool_then_replies(
     assert by_role["assistant"].tokens_out == 17
 
 
+async def test_handle_turn_flags_successful_booking_for_whatsapp_suppression(
+    db_session: AsyncSession,
+    fake_redis: _FakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful book_appointment call sets appointment_booked_this_turn()
+    — channels/whatsapp/adapter.py reads this to skip its own text reply
+    since the tool already sent a template confirmation (core/tools.py)."""
+    from datetime import UTC, datetime, timedelta
+
+    from apps.api.core import tools as tools_module
+
+    async def _noop_send_template(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(tools_module.wa_client, "send_template", _noop_send_template)
+    await _seed_org_and_user(db_session)
+
+    future = datetime.now(UTC) + timedelta(days=1)
+    _patch_llm_sequence(
+        monkeypatch,
+        [
+            ChatResult(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        id="call_1",
+                        name="book_appointment",
+                        arguments_json=json.dumps(
+                            {
+                                "date": future.date().isoformat(),
+                                "time": "15:00",
+                                "timezone": "UTC",
+                            }
+                        ),
+                    )
+                ],
+                tokens_in=20,
+                tokens_out=5,
+                finish_reason="tool_calls",
+            ),
+            ChatResult(content="You're all set for tomorrow at 3pm.", tokens_in=10, tokens_out=8),
+        ],
+    )
+
+    assert agent_module.appointment_booked_this_turn() is False
+
+    await agent_core.handle_turn(
+        db=db_session,
+        user_id=USER_ID,
+        channel="whatsapp",
+        input_text="book me for tomorrow at 3pm",
+    )
+
+    assert agent_module.appointment_booked_this_turn() is True
+
+
 async def test_handle_turn_forwards_channel_into_tool_dispatch(
     db_session: AsyncSession,
     fake_redis: _FakeRedis,

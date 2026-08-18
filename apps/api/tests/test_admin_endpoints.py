@@ -367,7 +367,7 @@ async def test_leads_csv_includes_channel_column(
 
     assert response.status_code == 200
     lines = response.text.strip().splitlines()
-    assert lines[0] == "id,name,phone,intent,tags,channel,status,created_at"
+    assert lines[0] == "id,name,phone,intent,tags,channel,status,qualification_status,qualification_score,created_at"
     assert lines[1].split(",")[3:7] == ["quote", "", "voice", "new"]
 
 

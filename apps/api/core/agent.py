@@ -10,6 +10,7 @@ reach past it. That's the "one brain, two mouths" invariant — see
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID
@@ -63,6 +64,23 @@ ESCALATION_FALLBACK = (
 
 
 Channel = Literal["voice", "whatsapp"]
+
+# Set when this task's most recent handle_turn() call booked an appointment
+# — read by channels/whatsapp/adapter.py to skip sending the model's own
+# text reply, since book_appointment (core/tools.py) already sends its own
+# WhatsApp template confirmation. Voice has no equivalent written record, so
+# it keeps its spoken reply; this only affects the WhatsApp send. A
+# ContextVar rather than a return-value field so handle_turn's `-> str`
+# contract (relied on by cli/chat.py and the test suite) doesn't change —
+# it's set deep inside the tool-dispatch loop and reads back correctly in
+# the caller because both run in the same asyncio task.
+_appointment_booked_ctx: ContextVar[bool] = ContextVar("_appointment_booked_ctx", default=False)
+
+
+def appointment_booked_this_turn() -> bool:
+    """Whether the just-completed ``handle_turn`` call on this task booked
+    an appointment. Only meaningful immediately after awaiting handle_turn."""
+    return _appointment_booked_ctx.get()
 
 
 async def _system_prompt_for(db: AsyncSession, org_id: UUID, channel: Channel) -> str:
@@ -231,6 +249,7 @@ class AgentCore:
             for transporting that string back over the channel.
         """
         org_id = org_id or UUID(settings.default_org_id)
+        _appointment_booked_ctx.set(False)
 
         # Kill switch — operators can pause via dashboard. Check BEFORE any
         # spend on the LLM so a paused agent costs nothing.
@@ -296,6 +315,8 @@ class AgentCore:
                     campaign_target_id=campaign_target_id,
                     conversation_id=conversation.id,
                 )
+                if tool_call.name == "book_appointment" and tool_result.get("status") == "ok":
+                    _appointment_booked_ctx.set(True)
                 messages.append(
                     {
                         "role": "tool",

@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
-from apps.api.core.agent import agent_core
+from apps.api.core.agent import agent_core, appointment_booked_this_turn
 from apps.api.core.transcribe import transcribe
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
@@ -288,7 +288,13 @@ async def process_inbound(payload: dict[str, Any]) -> None:
         # structlog and Sentry capture the failure. (The read receipt was
         # already fired above, before the agent ran.) Replies go out from
         # the same number the message came in on.
-        await wa_client.send_text(msg.from_phone, reply, phone_number_id=phone_number_id)
+        #
+        # Skip it when this turn booked an appointment: book_appointment
+        # (core/tools.py) already sent its own pre-approved template
+        # confirmation, so sending the model's own text reply too would
+        # double-confirm the same booking with two back-to-back messages.
+        if not appointment_booked_this_turn():
+            await wa_client.send_text(msg.from_phone, reply, phone_number_id=phone_number_id)
         send_done = time.monotonic()
 
         timings = {
