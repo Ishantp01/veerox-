@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, update
 
-from apps.api.core.tools import _APPOINTMENT_TEMPLATE_NAME, find_conflicting_appointment
+from apps.api.core.tools import _APPOINTMENT_REMINDER_TEMPLATE_NAME, find_conflicting_appointment
 from apps.api.db.models import Appointment, FollowUpTask
 from apps.api.deps import DbDep, RequestOrgDep, verify_admin_or_session
 from apps.api.schemas.appointment import (
@@ -115,7 +115,7 @@ async def update_appointment(
             update(FollowUpTask)
             .where(
                 FollowUpTask.lead_id == appointment.lead_id,
-                FollowUpTask.template_name == _APPOINTMENT_TEMPLATE_NAME,
+                FollowUpTask.template_name == _APPOINTMENT_REMINDER_TEMPLATE_NAME,
                 FollowUpTask.status == "pending",
             )
             .values(status="cancelled")

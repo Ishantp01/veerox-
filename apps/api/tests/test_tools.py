@@ -279,9 +279,8 @@ async def test_book_appointment_schedules_three_reminders(
     db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A booking far enough out gets reminder FollowUpTasks at 60/30/5
-    minutes before, sent via the same pre-approved template as the
-    confirmation (see _APPOINTMENT_REMINDER_OFFSETS_MINUTES in
-    core/tools.py)."""
+    minutes before, sent via the pre-approved appointment_reminder template
+    (see _APPOINTMENT_REMINDER_OFFSETS_MINUTES in core/tools.py)."""
     async def _noop_send_template(*args: object, **kwargs: object) -> None:
         return None
 
@@ -318,7 +317,7 @@ async def test_book_appointment_schedules_three_reminders(
     expected_offsets_minutes = [60, 30, 5]
     for task, offset in zip(tasks, expected_offsets_minutes):
         assert task.status == "pending"
-        assert task.template_name == "appointment_confirmation"
+        assert task.template_name == "appointment_reminder"
         assert task.template_params == ["Priya", future.date().isoformat(), "3:00 PM"]
         assert task.run_at == appointment.scheduled_at - timedelta(minutes=offset)
 

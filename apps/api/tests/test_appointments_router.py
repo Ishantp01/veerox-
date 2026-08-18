@@ -38,7 +38,7 @@ async def _seed_booked_lead(db: AsyncSession, scheduled_at: datetime) -> tuple[A
         rule_id=None,
         run_at=scheduled_at - timedelta(hours=1),
         status="pending",
-        template_name="appointment_confirmation",
+        template_name="appointment_reminder",
         template_params=["Caller", scheduled_at.date().isoformat(), "10:00"],
     )
     db.add(reminder)

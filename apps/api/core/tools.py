@@ -519,11 +519,12 @@ async def book_appointment(
     db.add(appointment)
 
     # Schedule reminders at each offset before the appointment, sent by the
-    # follow-up dispatcher (workers/follow_up_dispatcher.py) via the same
-    # pre-approved template used for the immediate confirmation below — it
-    # works outside the 24h free-text session window, which a reminder sent
-    # hours after booking usually is. Offsets that have already passed by
-    # booking time (e.g. booking 10 minutes out) are skipped rather than
+    # follow-up dispatcher (workers/follow_up_dispatcher.py) via the
+    # dedicated appointment_reminder template (distinct wording from the
+    # immediate confirmation below, same pre-approved-template mechanism) —
+    # it works outside the 24h free-text session window, which a reminder
+    # sent hours after booking usually is. Offsets that have already passed
+    # by booking time (e.g. booking 10 minutes out) are skipped rather than
     # firing immediately.
     reminder_params = [
         booking_user.name if booking_user and booking_user.name else "there",
@@ -542,7 +543,7 @@ async def book_appointment(
                 rule_id=None,
                 run_at=reminder_at,
                 status="pending",
-                template_name=_APPOINTMENT_TEMPLATE_NAME,
+                template_name=_APPOINTMENT_REMINDER_TEMPLATE_NAME,
                 template_params=reminder_params,
             )
         )
@@ -788,6 +789,12 @@ def _meta_error_code(exc: httpx.HTTPStatusError) -> int | None:
 _REENGAGEMENT_ERROR_CODE = 131047
 
 _APPOINTMENT_TEMPLATE_NAME = "appointment_confirmation"
+
+# Separate pre-approved template for reminders (see book_appointment's
+# reminder FollowUpTasks below) — same 3 positional params (name, date,
+# time) as _APPOINTMENT_TEMPLATE_NAME but reminder-specific wording ("this
+# is a reminder that your appointment is scheduled for...").
+_APPOINTMENT_REMINDER_TEMPLATE_NAME = "appointment_reminder"
 
 # Reminders fire this many minutes before the appointment (see
 # book_appointment) — 1 hour, 30 minutes, and 5 minutes out.
