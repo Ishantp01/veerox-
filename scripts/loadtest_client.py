@@ -1,12 +1,15 @@
-"""Ramps concurrent /voice/stream connections against a running
-loadtest_server.py instance and reports success/failure/latency at each
-concurrency level.
+"""Ramps concurrent /voice/stream connections against one OR MULTIPLE
+running loadtest_server.py instances (round-robining across them, to
+simulate what a real load balancer does across horizontally-scaled
+instances) and reports success/failure/latency at each concurrency level.
 
 Usage:
     python scripts/loadtest_client.py wss://veerox-staging.onrender.com
     python scripts/loadtest_client.py ws://127.0.0.1:8199          # local
+    # multiple instances, comma-separated — simulates horizontal scaling:
+    python scripts/loadtest_client.py wss://veerox-staging.onrender.com,wss://veerox-2.onrender.com,wss://veerox-3.onrender.com
 
-Only point this at a disposable staging deployment (see
+Only point this at disposable staging deployments (see
 loadtest_server.py's module docstring) — never at production.
 """
 
@@ -45,8 +48,10 @@ async def one_call(base_url: str, idx: int) -> tuple[bool, float, str]:
         return False, time.monotonic() - started, f"{type(exc).__name__}: {exc}"
 
 
-async def run_level(base_url: str, n: int, start_idx: int) -> None:
-    results = await asyncio.gather(*[one_call(base_url, start_idx + i) for i in range(n)])
+async def run_level(base_urls: list[str], n: int, start_idx: int) -> None:
+    results = await asyncio.gather(
+        *[one_call(base_urls[i % len(base_urls)], start_idx + i) for i in range(n)]
+    )
     oks = [r for r in results if r[0]]
     fails = [r for r in results if not r[0]]
     latencies = sorted(r[1] for r in results)
@@ -66,14 +71,17 @@ async def run_level(base_url: str, n: int, start_idx: int) -> None:
 
 async def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: python scripts/loadtest_client.py <ws(s)://host>")
+        print("Usage: python scripts/loadtest_client.py <ws(s)://host>[,<ws(s)://host2>,...]")
         sys.exit(1)
-    base_url = sys.argv[1].rstrip("/")
+    base_urls = [u.rstrip("/") for u in sys.argv[1].split(",")]
     levels = [int(x) for x in sys.argv[2].split(",")] if len(sys.argv) > 2 else DEFAULT_LEVELS
+
+    if len(base_urls) > 1:
+        print(f"Distributing across {len(base_urls)} instances: {base_urls}")
 
     idx = 0
     for level in levels:
-        await run_level(base_url, level, idx)
+        await run_level(base_urls, level, idx)
         idx += level
         await asyncio.sleep(1)
 

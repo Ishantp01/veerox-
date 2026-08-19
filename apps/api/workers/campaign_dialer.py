@@ -138,6 +138,16 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None]]
 
         # Over-fetch beyond `capacity` since some candidates may belong to an
         # over-limit org and get skipped rather than claimed.
+        #
+        # with_for_update(skip_locked=True, of=CampaignTarget): without
+        # this, two dialer instances (horizontal scaling — see
+        # longrunning/operations/load.md) polling at the same moment could
+        # both SELECT the same pending targets before either commits its
+        # claim, and both place a real call to the same person. Locking
+        # just CampaignTarget (not the joined CallCampaign/Org rows) avoids
+        # contending with unrelated admin operations on those tables. A
+        # no-op with a single dialer instance — the lock only ever
+        # contends against a second instance's own claim attempt.
         stmt = (
             select(
                 CampaignTarget, CallCampaign.org_id, Org.plivo_phone_number, Org.twilio_phone_number
@@ -151,6 +161,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None]]
             )
             .order_by(CampaignTarget.created_at)
             .limit(max(capacity * 4, 50))
+            .with_for_update(skip_locked=True, of=CampaignTarget)
         )
         rows = (await db.execute(stmt)).all()
 

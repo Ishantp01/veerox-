@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from apps.api.db.base import Base
@@ -44,6 +44,35 @@ class FollowUpTask(Base):
     """
 
     __tablename__ = "follow_up_tasks"
+    __table_args__ = (
+        # Prevents duplicate tasks if two dispatcher instances race under
+        # horizontal scaling (see workers/follow_up_dispatcher.py's
+        # materialize functions and longrunning/operations/load.md) — a
+        # no-op constraint for a single-instance deployment, which never
+        # produces the concurrent insert these guard against.
+        #
+        # template_name IS NULL matters on the first index: core/tools.py's
+        # book_appointment creates several rule_id=NULL tasks per lead on
+        # purpose (one per reminder offset), always with template_name set
+        # — a bare "one rule_id IS NULL row per lead" constraint would
+        # break that feature. Confirmed against production data before
+        # adding this (see migration e7b3a5c9f2d4's docstring).
+        Index(
+            "uq_follow_up_tasks_lead_builtin",
+            "lead_id",
+            unique=True,
+            postgresql_where=text("rule_id IS NULL AND template_name IS NULL"),
+            sqlite_where=text("rule_id IS NULL AND template_name IS NULL"),
+        ),
+        Index(
+            "uq_follow_up_tasks_lead_rule",
+            "lead_id",
+            "rule_id",
+            unique=True,
+            postgresql_where=text("rule_id IS NOT NULL"),
+            sqlite_where=text("rule_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     org_id: Mapped[UUID] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False)

@@ -24,6 +24,7 @@ from uuid import UUID
 import httpx
 import structlog
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.core.agent import _is_kill_switch_active
@@ -42,9 +43,25 @@ _DEFAULT_FOLLOW_UP_MESSAGE = "Following up as promised — is now still a good t
 
 async def _materialize_lead_follow_up_at_tasks() -> None:
     """One task per lead whose own ``follow_up_at`` has arrived, skipping
-    leads that already have a built-in (``rule_id`` is null) task."""
+    leads that already have a built-in (``rule_id`` is null) task.
+
+    ``template_name IS NULL`` matters in both the "already exists" check
+    below and the DB-level uniqueness this relies on (migration
+    e7b3a5c9f2d4): core/tools.py's book_appointment also creates
+    ``rule_id=NULL`` tasks (appointment reminders), several per lead, by
+    design. Without this filter, a lead with appointment reminders would
+    look like it "already has" its built-in follow-up task and silently
+    never get one materialized.
+
+    Duplicate-key errors (two dispatcher instances racing under horizontal
+    scaling — see longrunning/operations/load.md) are caught per-row via a
+    savepoint so one collision doesn't lose the rest of the batch; a
+    single-instance deployment never hits this branch.
+    """
     async with AsyncSessionLocal() as db:
-        existing_lead_ids_stmt = select(FollowUpTask.lead_id).where(FollowUpTask.rule_id.is_(None))
+        existing_lead_ids_stmt = select(FollowUpTask.lead_id).where(
+            FollowUpTask.rule_id.is_(None), FollowUpTask.template_name.is_(None)
+        )
         existing_lead_ids = set((await db.execute(existing_lead_ids_stmt)).scalars().all())
 
         stmt = select(Lead).where(Lead.follow_up_at.is_not(None), Lead.follow_up_at <= datetime.now(UTC))
@@ -54,15 +71,20 @@ async def _materialize_lead_follow_up_at_tasks() -> None:
         for lead in leads:
             if lead.id in existing_lead_ids:
                 continue
-            db.add(
-                FollowUpTask(
-                    org_id=lead.org_id,
-                    lead_id=lead.id,
-                    rule_id=None,
-                    run_at=lead.follow_up_at,
-                    status="pending",
-                )
-            )
+            try:
+                async with db.begin_nested():
+                    db.add(
+                        FollowUpTask(
+                            org_id=lead.org_id,
+                            lead_id=lead.id,
+                            rule_id=None,
+                            run_at=lead.follow_up_at,
+                            status="pending",
+                        )
+                    )
+                    await db.flush()
+            except IntegrityError:
+                continue
             created += 1
         if created:
             await db.commit()
@@ -71,7 +93,13 @@ async def _materialize_lead_follow_up_at_tasks() -> None:
 
 async def _materialize_rule_tasks() -> None:
     """One task per (lead, rule) match for every active rule, skipping pairs
-    that already have a task so a rule only ever fires once per lead."""
+    that already have a task so a rule only ever fires once per lead.
+
+    Duplicate-key errors (two dispatcher instances racing under horizontal
+    scaling — see longrunning/operations/load.md) are caught per-row via a
+    savepoint, matching _materialize_lead_follow_up_at_tasks above; a
+    single-instance deployment never hits this branch.
+    """
     async with AsyncSessionLocal() as db:
         rules = (
             await db.execute(select(FollowUpRule).where(FollowUpRule.active.is_(True)))
@@ -95,15 +123,20 @@ async def _materialize_rule_tasks() -> None:
             for lead in leads:
                 if lead.id in existing_lead_ids:
                     continue
-                db.add(
-                    FollowUpTask(
-                        org_id=lead.org_id,
-                        lead_id=lead.id,
-                        rule_id=rule.id,
-                        run_at=datetime.now(UTC) + timedelta(hours=delay_hours),
-                        status="pending",
-                    )
-                )
+                try:
+                    async with db.begin_nested():
+                        db.add(
+                            FollowUpTask(
+                                org_id=lead.org_id,
+                                lead_id=lead.id,
+                                rule_id=rule.id,
+                                run_at=datetime.now(UTC) + timedelta(hours=delay_hours),
+                                status="pending",
+                            )
+                        )
+                        await db.flush()
+                except IntegrityError:
+                    continue
                 created += 1
         if created:
             await db.commit()
