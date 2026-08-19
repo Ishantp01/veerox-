@@ -366,9 +366,26 @@ async def test_leads_csv_includes_channel_column(
     response = await client.get("/admin/leads.csv", headers=ADMIN_HEADERS)
 
     assert response.status_code == 200
-    lines = response.text.strip().splitlines()
+    # Leading UTF-8 BOM is intentional — see _csv_streaming_response in
+    # routers/admin.py, needed for Excel to detect non-ASCII text correctly.
+    lines = response.text.lstrip("﻿").strip().splitlines()
     assert lines[0] == "id,name,phone,intent,tags,channel,status,qualification_status,qualification_score,created_at"
     assert lines[1].split(",")[3:7] == ["quote", "", "voice", "new"]
+
+
+async def test_leads_csv_export_starts_with_utf8_bom(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Without a BOM, Excel on Windows guesses the file's encoding from the
+    system codepage instead of UTF-8, and any non-ASCII character (accented
+    names, ...) renders as mojibake even though the underlying bytes are
+    valid UTF-8. See _csv_streaming_response in routers/admin.py."""
+    await _seed_org(db_session)
+
+    response = await client.get("/admin/leads.csv", headers=ADMIN_HEADERS)
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"\xef\xbb\xbf")
 
 
 async def test_leads_csv_includes_tags_and_filters_by_tag(
@@ -483,6 +500,29 @@ async def test_import_leads_csv_reports_row_errors(
     reasons = {e["reason"] for e in body["errors"]}
     assert "missing phone" in reasons
     assert any("country code" in r for r in reasons)
+
+
+async def test_import_leads_csv_decodes_cp1252_fallback(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A CSV saved by Excel on Windows (the common real-world case) is
+    typically cp1252, not UTF-8 — a name with a curly apostrophe or an
+    accented character used to crash the import with an unhandled
+    UnicodeDecodeError (500) instead of importing cleanly. See
+    _decode_csv_bytes in routers/admin.py."""
+    await _seed_org(db_session)
+    csv_bytes = "name,phone\nO’Brien,+919179609989\n".encode("cp1252")
+
+    response = await client.post(
+        "/admin/leads/import",
+        files={"file": ("leads.csv", csv_bytes, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["imported"] == 1
+    assert body["skipped"] == 0
 
 
 async def test_import_leads_csv_rejects_missing_phone_column(

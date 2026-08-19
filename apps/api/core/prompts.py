@@ -18,6 +18,12 @@ VOICE_APPEND = """
 You are speaking over a phone call. Keep your responses short and conversational.
 Avoid bullet points, markdown, or lists. Speak naturally as if talking to someone.
 
+At the very start of the call, before anything else, ask the caller which language they're
+comfortable speaking in. Whatever language they answer in (or name) - Hindi, English, Hinglish,
+or any other - switch to and continue the entire rest of the call in that language. Don't ask
+again later or switch back on your own; only change language if the caller explicitly asks you
+to.
+
 If the caller asks you to send them something in writing - pricing, a link, a confirmation,
 anything - call send_whatsapp_message rather than trying to read it all out loud. Always send
 it to the number they're calling from by default - leave the phone argument unset and don't

@@ -14,9 +14,10 @@ conversation directly, and this adapter is the thin translator around it:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -26,6 +27,7 @@ from fastapi import WebSocket
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.channels.voice import elevenlabs_client
 from apps.api.config import settings
 from apps.api.core.memory import persist_turn
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
@@ -53,6 +55,17 @@ class CallState:
     # Set only for calls placed by the campaign dialer — lets qualify_lead
     # find the CampaignTarget row to update (see core/tools.py).
     campaign_target_id: UUID | None = None
+    # "openai" (default, unchanged behavior) or "elevenlabs" — see
+    # config.Settings.voice_tts_provider and elevenlabs_client.py. Fixed for
+    # the lifetime of one call, copied from settings when the call starts.
+    tts_provider: str = "openai"
+    # Per-turn ElevenLabs streaming-TTS state, live only between the first
+    # response.text.delta and that response finishing (or being cancelled by
+    # a barge-in) — None the rest of the time. Not used when tts_provider
+    # is "openai".
+    eleven_session: elevenlabs_client.ElevenLabsTTSSession | None = field(default=None, repr=False)
+    eleven_forward_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
+    eleven_text_buffer: str = ""
 
 
 def realtime_tools() -> list[dict[str, Any]]:
@@ -270,6 +283,41 @@ async def _send_clear(ws: WebSocket, state: CallState) -> None:
     await ws.send_text(json.dumps(message))
 
 
+async def _forward_elevenlabs_audio(call_ws: WebSocket, state: CallState, log: Any) -> None:
+    """Background task: drain one ElevenLabsTTSSession's audio queue onto
+    the call as it arrives — started as soon as the first text delta opens
+    the session, not only after the full response finishes, so playback
+    starts as early as possible."""
+    session = state.eleven_session
+    if session is None:
+        return
+    try:
+        async for chunk in session.audio_chunks():
+            await _send_media(call_ws, state, chunk)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        log.warning("elevenlabs_audio_forward_error", exc_info=True)
+
+
+async def _teardown_elevenlabs_turn(state: CallState) -> None:
+    """Tear down any in-flight ElevenLabs session/forward task — called both
+    to cancel mid-speech on barge-in and to clean up after a turn finishes
+    normally (the forward task is already done by then, so cancel() is a
+    harmless no-op in that case)."""
+    if state.eleven_forward_task is not None:
+        state.eleven_forward_task.cancel()
+        try:
+            await state.eleven_forward_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+        state.eleven_forward_task = None
+    if state.eleven_session is not None:
+        await state.eleven_session.__aexit__(None, None, None)
+        state.eleven_session = None
+    state.eleven_text_buffer = ""
+
+
 async def handle_openai_event(
     event: dict[str, Any],
     call_ws: WebSocket,
@@ -289,8 +337,20 @@ async def handle_openai_event(
             await _send_media(call_ws, state, delta)
 
     elif etype == "input_audio_buffer.speech_started":
-        # Barge-in: the caller started talking over the agent.
+        # Barge-in: the caller started talking over the agent. Clear
+        # whatever's buffered on the provider, and — on the ElevenLabs path
+        # — also cancel the in-flight TTS turn and ask OpenAI to stop
+        # generating more text for it, so stale speech doesn't keep
+        # trickling in after the caller's already talking.
         await _send_clear(call_ws, state)
+        if state.tts_provider == "elevenlabs" and (
+            state.eleven_session is not None or state.eleven_forward_task is not None
+        ):
+            await _teardown_elevenlabs_turn(state)
+            try:
+                await oai_ws.send(json.dumps({"type": "response.cancel"}))
+            except Exception:  # noqa: BLE001
+                pass
 
     elif etype == "conversation.item.input_audio_transcription.completed":
         state.pending_user_transcript = (event.get("transcript") or "").strip()
@@ -301,6 +361,34 @@ async def handle_openai_event(
         if assistant_text:
             await _persist_voice_turn(state, assistant_text)
             log.info("voice_assistant_transcript", text=assistant_text)
+
+    elif etype in ("response.text.delta", "response.output_text.delta"):
+        # ElevenLabs path only — reached when session.update set
+        # output_modalities=["text"], so OpenAI never emits audio deltas at
+        # all. Opens the ElevenLabs session on the first delta and starts
+        # forwarding its audio concurrently, rather than waiting for the
+        # full response to finish.
+        delta = event.get("delta") or ""
+        if state.tts_provider == "elevenlabs" and delta:
+            if state.eleven_session is None:
+                state.eleven_session = await elevenlabs_client.ElevenLabsTTSSession().__aenter__()
+                state.eleven_text_buffer = ""
+                state.eleven_forward_task = asyncio.create_task(
+                    _forward_elevenlabs_audio(call_ws, state, log)
+                )
+            state.eleven_text_buffer += delta
+            await state.eleven_session.send_text(delta)
+
+    elif etype in ("response.text.done", "response.output_text.done"):
+        if state.tts_provider == "elevenlabs" and state.eleven_session is not None:
+            await state.eleven_session.finish()
+            if state.eleven_forward_task is not None:
+                await state.eleven_forward_task
+            assistant_text = (event.get("text") or state.eleven_text_buffer or "").strip()
+            await _teardown_elevenlabs_turn(state)
+            if assistant_text:
+                await _persist_voice_turn(state, assistant_text)
+                log.info("voice_assistant_transcript", text=assistant_text)
 
     elif etype == "response.function_call_arguments.done":
         call_id = event.get("call_id")

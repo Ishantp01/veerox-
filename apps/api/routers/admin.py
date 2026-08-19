@@ -610,6 +610,23 @@ _SAMPLE_IMPORT_ROWS = [
 ]
 
 
+def _csv_streaming_response(csv_text: str, filename: str) -> StreamingResponse:
+    """Wrap CSV text as a downloadable response with a UTF-8 BOM prefix.
+
+    Without the BOM, Excel on Windows guesses the file's encoding from the
+    system codepage instead of UTF-8 — any non-ASCII character (accented
+    names, curly quotes, ...) renders as mojibake even though the bytes
+    themselves are valid UTF-8. The BOM makes Excel detect UTF-8 correctly;
+    other tools (Python's csv module, Google Sheets, ...) already ignore or
+    strip a leading BOM, so this doesn't break anything else that reads it.
+    """
+    return StreamingResponse(
+        iter(["﻿" + csv_text]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/leads/sample.csv")
 async def sample_leads_csv(x_admin_token: str | None = Header(None)) -> StreamingResponse:
     """Blank-data template for POST /leads/import — same columns that
@@ -625,11 +642,7 @@ async def sample_leads_csv(x_admin_token: str | None = Header(None)) -> Streamin
         writer.writerow([row["name"], row["phone"], row["channel"]])
     buf.seek(0)
 
-    return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="leads-sample.csv"'},
-    )
+    return _csv_streaming_response(buf.getvalue(), "leads-sample.csv")
 
 
 @router.get("/leads/sample.xlsx")
@@ -809,11 +822,7 @@ async def export_leads_csv(
         writer.writerow(_lead_export_row(lead))
     buf.seek(0)
 
-    return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="leads.csv"'},
-    )
+    return _csv_streaming_response(buf.getvalue(), "leads.csv")
 
 
 @router.get("/leads.xlsx")
@@ -866,8 +875,33 @@ def _normalize_import_row(raw_row: dict[str, object]) -> dict[str, str]:
     }
 
 
+def _decode_csv_bytes(raw: bytes) -> str:
+    """Best-effort decode of an uploaded CSV's raw bytes.
+
+    UTF-8 (with or without a BOM) is tried first since it's the correct,
+    unambiguous case. Falls back to cp1252 — what Excel on Windows saves as
+    by default, and the single most common reason a real user's CSV isn't
+    valid UTF-8 (curly quotes, accented names, the Euro sign, ...) — before
+    giving up with a clear error instead of the raw UnicodeDecodeError
+    previously leaking out of this as an unhandled 500.
+    """
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            return raw.decode("cp1252")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Could not read this CSV's text encoding. Please save/export it as "
+                    "UTF-8 CSV and try again."
+                ),
+            ) from exc
+
+
 def _iter_csv_rows(raw: bytes) -> Iterator[tuple[int, dict[str, str]]]:
-    reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
+    reader = csv.DictReader(io.StringIO(_decode_csv_bytes(raw)))
     if not reader.fieldnames or "phone" not in {
         (f or "").strip().lower() for f in reader.fieldnames
     }:
@@ -1275,11 +1309,7 @@ async def sample_campaign_csv(x_admin_token: str | None = Header(None)) -> Strea
         writer.writerow([row["name"], row["phone"]])
     buf.seek(0)
 
-    return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="campaign-contacts-sample.csv"'},
-    )
+    return _csv_streaming_response(buf.getvalue(), "campaign-contacts-sample.csv")
 
 
 @router.get("/campaigns/sample.xlsx")

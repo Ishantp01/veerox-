@@ -108,26 +108,37 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
     output_audio_format / top-level voice / temperature — was removed on
     2026-05-12 and now fails the connection with beta_api_shape_disabled).
     """
-    return {
-        "type": "session.update",
-        "session": {
-            "type": "realtime",
-            "instructions": instructions,
-            "audio": {
-                "input": {
-                    "format": {"type": "audio/pcmu"},
-                    "turn_detection": {"type": "server_vad", "silence_duration_ms": 500},
-                    "transcription": {"model": "whisper-1"},
-                },
-                "output": {
-                    "format": {"type": "audio/pcmu"},
-                    "voice": settings.openai_realtime_voice,
-                },
+    session: dict[str, Any] = {
+        "type": "realtime",
+        "instructions": instructions,
+        "audio": {
+            "input": {
+                "format": {"type": "audio/pcmu"},
+                "turn_detection": {"type": "server_vad", "silence_duration_ms": 500},
+                "transcription": {"model": "whisper-1"},
             },
-            "tools": voice_adapter.realtime_tools(),
-            "tool_choice": "auto",
+            "output": {
+                "format": {"type": "audio/pcmu"},
+                "voice": settings.openai_realtime_voice,
+            },
         },
+        "tools": voice_adapter.realtime_tools(),
+        "tool_choice": "auto",
     }
+    if settings.voice_tts_provider == "elevenlabs":
+        # Text-only output — OpenAI still does speech-to-text, reasoning,
+        # tool-calling, turn detection, and barge-in; it just stops
+        # synthesizing audio itself. adapter.handle_openai_event pipes the
+        # resulting response.text.delta events through ElevenLabs' streaming
+        # TTS instead (see elevenlabs_client.py).
+        #
+        # UNVERIFIED: `output_modalities` is our best-guess field name for
+        # this GA session shape (mirroring the audio.input/audio.output
+        # split above) — OpenAI's docs weren't checked against a live
+        # connection for this. Confirm session.updated doesn't error before
+        # relying on this in production.
+        session["output_modalities"] = ["text"]
+    return {"type": "session.update", "session": session}
 
 
 _USAGE_CHECK_INTERVAL_SECS = 20
@@ -209,6 +220,7 @@ async def voice_stream(ws: WebSocket) -> None:
             org_id=org_id or UUID(settings.default_org_id),
             provider=provider,
             campaign_target_id=campaign_target_id,
+            tts_provider=settings.voice_tts_provider,
         )
         if campaign_target_id is not None:
             # Proof the call actually connected — tells the hangup webhook
@@ -233,8 +245,9 @@ async def voice_stream(ws: WebSocket) -> None:
                         "type": "response.create",
                         "response": {
                             "instructions": (
-                                "Greet the caller warmly in one short sentence "
-                                "and ask how you can help."
+                                "Greet the caller warmly in one short sentence, then ask "
+                                "which language they're comfortable speaking in before "
+                                "anything else."
                             ),
                         },
                     }

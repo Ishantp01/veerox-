@@ -52,6 +52,20 @@ class Settings(BaseSettings):
     openai_realtime_model: str = "gpt-4o-realtime-preview"
     openai_realtime_voice: str = "alloy"
 
+    # ElevenLabs — optional TTS swap for voice calls (see
+    # channels/voice/elevenlabs_client.py). "openai" (default) keeps calls on
+    # OpenAI Realtime's native speech-to-speech, unchanged. "elevenlabs"
+    # switches the Realtime session to text-only output (still handles STT,
+    # reasoning, tool-calling, turn-taking) and pipes the text through
+    # ElevenLabs' streaming TTS instead — real latency/cost tradeoff, opt-in
+    # only, never flip this without ELEVENLABS_API_KEY set.
+    voice_tts_provider: str = "openai"
+    elevenlabs_api_key: str | None = None
+    elevenlabs_voice_id: str = "CwhRBWXzGAHq8TQ4Fs17"
+    # Low-latency model — eleven_multilingual_v2 sounds better but is too
+    # slow for a live call; flash/turbo trade some quality for speed.
+    elevenlabs_model_id: str = "eleven_flash_v2_5"
+
     # Plivo
     plivo_auth_id: str | None = None
     plivo_auth_token: str | None = None
