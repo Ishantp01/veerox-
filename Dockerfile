@@ -38,6 +38,13 @@ COPY --from=builder /app/.venv /app/.venv
 COPY apps/ ./apps/
 COPY migrations/ ./migrations/
 COPY alembic.ini ./alembic.ini
+# Operational/one-off scripts (seed.py, loadtest_server.py, ...) — not run by
+# the default CMD below, but need to be present in the image for services
+# that override the start command to run one directly (e.g. a disposable
+# staging service running scripts/loadtest_server.py — see
+# longrunning/operations/load.md). Harmless for the normal production CMD,
+# which never touches this directory.
+COPY scripts/ ./scripts/
 
 # Make sure the app user owns everything
 RUN chown -R app:app /app
