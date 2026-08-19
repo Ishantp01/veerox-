@@ -428,12 +428,15 @@ async def test_leads_csv_filters_by_status(
     assert lines[1].split(",")[6] == "qualified"
 
 
-async def test_import_leads_csv_stages_campaign_not_leads(
+async def test_import_leads_csv_stages_campaign_and_creates_qualified_leads(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """Bulk-imported rows are staged as a CallCampaign + CampaignTarget rows,
-    not written straight to the CRM — only qualify_lead (fired by the AI
-    during voice/WhatsApp outreach) promotes a target into a Lead."""
+    """Leads-page imports (unlike the Campaigns page) do both: stage the
+    usual CallCampaign + CampaignTarget rows for AI outreach (campaign
+    behavior is unchanged), AND immediately create a Lead per contact with
+    status="qualified" — an org uploading a trusted contact list shouldn't
+    have to wait for the AI to call each one before seeing them on the Leads
+    page."""
     await _seed_org(db_session)
     csv_body = "name,phone,intent\nAsha,+910000000010,Book a demo\nRavi,+910000000011,\n"
 
@@ -453,8 +456,11 @@ async def test_import_leads_csv_stages_campaign_not_leads(
     targets = (await db_session.execute(select(CampaignTarget))).scalars().all()
     assert {t.phone for t in targets} == {"+910000000010", "+910000000011"}
     assert all(t.status == "pending" for t in targets)
+
     leads = (await db_session.execute(select(Lead))).scalars().all()
-    assert leads == []
+    assert {lead.phone for lead in leads} == {"+910000000010", "+910000000011"}
+    assert all(lead.status == "qualified" for lead in leads)
+    assert all(lead.intent == "imported" for lead in leads)
 
 
 async def test_import_leads_csv_accepts_custom_campaign_name_and_channel(
@@ -566,7 +572,7 @@ def _make_xlsx_bytes(rows: list[list[str]]) -> bytes:
     return buf.getvalue()
 
 
-async def test_import_leads_xlsx_stages_campaign_not_leads(
+async def test_import_leads_xlsx_stages_campaign_and_creates_qualified_leads(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     await _seed_org(db_session)
@@ -598,7 +604,8 @@ async def test_import_leads_xlsx_stages_campaign_not_leads(
     targets = (await db_session.execute(select(CampaignTarget))).scalars().all()
     assert {t.phone for t in targets} == {"+910000000020", "+910000000021"}
     leads = (await db_session.execute(select(Lead))).scalars().all()
-    assert leads == []
+    assert {lead.phone for lead in leads} == {"+910000000020", "+910000000021"}
+    assert all(lead.status == "qualified" for lead in leads)
 
 
 async def test_import_leads_xlsx_rejects_missing_phone_column(
@@ -622,7 +629,7 @@ async def test_import_leads_xlsx_rejects_missing_phone_column(
     assert response.status_code == 400
 
 
-async def test_import_leads_bulk_json_stages_campaign_not_leads(
+async def test_import_leads_bulk_json_stages_campaign_and_creates_qualified_leads(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     await _seed_org(db_session)
@@ -652,7 +659,8 @@ async def test_import_leads_bulk_json_stages_campaign_not_leads(
     targets = (await db_session.execute(select(CampaignTarget))).scalars().all()
     assert {t.phone for t in targets} == {"+910000000030", "+910000000031"}
     leads = (await db_session.execute(select(Lead))).scalars().all()
-    assert leads == []
+    assert {lead.phone for lead in leads} == {"+910000000030", "+910000000031"}
+    assert all(lead.status == "qualified" for lead in leads)
 
 
 async def test_import_leads_bulk_json_defaults_channel_to_voice(

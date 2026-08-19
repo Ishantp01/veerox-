@@ -16,6 +16,7 @@ import { useLeads } from "@/lib/hooks";
 import type { LeadQualificationStatus, LeadStatus } from "@/lib/types";
 
 interface ImportLeadsResult {
+  campaign: { name: string; channel: string };
   imported: number;
   skipped: number;
   errors: { row: number; reason: string }[];
@@ -169,12 +170,18 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
     setImporting(true);
     try {
       const result = await importLeadsFile(file, effectiveChannel);
+      // Leads-page import creates a Lead per contact immediately (status
+      // "qualified", editable like any lead) — unlike the Campaigns page,
+      // which only creates a Lead once the AI actually qualifies someone.
+      // It also still stages the usual campaign for AI outreach in the
+      // background (routers/admin.py::_create_campaign_from_rows,
+      // auto_qualify=True) — that part is unchanged.
       toast({
         title: "Import complete",
         description:
           result.skipped > 0
-            ? `Imported ${result.imported} lead(s), skipped ${result.skipped} row(s).`
-            : `Imported ${result.imported} lead(s).`,
+            ? `Added ${result.imported} lead(s), marked Qualified (${result.skipped} row(s) skipped). The AI will also reach out via campaign "${result.campaign.name}".`
+            : `Added ${result.imported} lead(s), marked Qualified. The AI will also reach out via campaign "${result.campaign.name}".`,
         variant: result.skipped > 0 ? "info" : "success",
       });
       await refetch();

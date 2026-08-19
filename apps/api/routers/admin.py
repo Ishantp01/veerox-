@@ -36,6 +36,7 @@ from apps.api.core.llm import chat_completion
 from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND, WHATSAPP_APPEND
 from apps.api.core.tools import (
     TOOL_DEFINITIONS,
+    _get_or_create_user_by_phone,
     _normalize_phone,
 )
 from apps.api.core.usage import get_credit_usage
@@ -982,7 +983,7 @@ async def import_leads_file(
 
     if channel:
         return await _create_campaign_from_rows(
-            db, org_id=org_id, name=name, criteria=crit, channel=channel, rows=rows
+            db, org_id=org_id, name=name, criteria=crit, channel=channel, rows=rows, auto_qualify=True
         )
 
     # No forced channel: split rows by their own "channel" column so one
@@ -1015,6 +1016,7 @@ async def import_leads_file(
             criteria=crit,
             channel=group_channel,
             rows=group_rows,
+            auto_qualify=True,
         )
         imported += group_result.imported
         skipped += group_result.skipped
@@ -1056,6 +1058,7 @@ async def import_leads_bulk(
         name=payload.campaign_name or _default_campaign_name(),
         criteria=payload.criteria or _DEFAULT_IMPORT_CRITERIA,
         channel=payload.channel or "voice",
+        auto_qualify=True,
         rows=rows,
     )
 
@@ -1146,12 +1149,25 @@ async def _create_campaign_from_rows(
     criteria: str,
     channel: str,
     rows: Iterable[tuple[int, dict[str, str]]],
+    auto_qualify: bool = False,
 ) -> CampaignCreateResult:
     """Shared core for every campaign-creation entry point (CSV/xlsx upload,
-    JSON bulk import). Contacts are staged as ``CampaignTarget`` rows, not
-    ``Lead`` rows — the background dialer/dispatcher calls or messages each
-    one and the AI's ``qualify_lead`` tool call is what promotes a target
-    into the CRM leads table, and only when interested.
+    JSON bulk import).
+
+    By default (``auto_qualify=False``, the Campaigns page's ``POST
+    /admin/campaigns``) contacts are staged as ``CampaignTarget`` rows only —
+    the background dialer/dispatcher calls or messages each one and the AI's
+    ``qualify_lead`` tool call is what promotes a target into the CRM leads
+    table, and only when interested. Campaign behavior itself is unchanged
+    either way.
+
+    ``auto_qualify=True`` (the leads-page entry points, ``POST
+    /admin/leads/import`` and ``POST /admin/leads/bulk``) additionally
+    creates a ``Lead`` row immediately for every successfully staged
+    contact, with ``status="qualified"`` — an org uploading a list of
+    contacts they already trust shouldn't have to wait for the AI to call
+    each one before seeing them on the Leads page. The org can change that
+    status afterward like any other lead.
     """
     campaign = CallCampaign(org_id=org_id, name=name, criteria=criteria, channel=channel)
     db.add(campaign)
@@ -1176,14 +1192,28 @@ async def _create_campaign_from_rows(
                 }
             )
             continue
+        row_name = row.get("name") or None
         db.add(
             CampaignTarget(
                 campaign_id=campaign.id,
                 org_id=org_id,
-                name=row.get("name") or None,
+                name=row_name,
                 phone=normalized,
             )
         )
+        if auto_qualify:
+            user = await _get_or_create_user_by_phone(db, org_id, normalized, row_name)
+            db.add(
+                Lead(
+                    org_id=org_id,
+                    user_id=user.id,
+                    name=row_name,
+                    phone=normalized,
+                    intent="imported",
+                    channel=channel,
+                    status="qualified",
+                )
+            )
         imported += 1
 
     await db.commit()
