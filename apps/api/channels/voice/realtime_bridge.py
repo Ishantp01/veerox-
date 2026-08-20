@@ -198,14 +198,55 @@ async def _watch_usage_limit(
 
 @router.websocket("/voice/stream")
 async def voice_stream(ws: WebSocket) -> None:
-    """Bridge a single Plivo call to an OpenAI Realtime session."""
+    """Bridge a single Plivo/Twilio call to an OpenAI Realtime session."""
     await ws.accept()
     caller = ws.query_params.get("from", "unknown")
     call_uuid = ws.query_params.get("call_uuid", "")
     provider = ws.query_params.get("provider", "plivo")
     raw_campaign_target_id = ws.query_params.get("campaign_target_id")
+    raw_org_id = ws.query_params.get("org_id")
+
+    # Twilio drops the Stream url's query string on connect (Plivo doesn't),
+    # so the above are all still defaults for a Twilio call at this point —
+    # its real values travel instead as <Parameter> tags on the TwiML (see
+    # webhook.py's answer), delivered here in the "start" event's
+    # start.customParameters. Peel off the handshake frames ("connected",
+    # then "start") before doing any provider/org-dependent work so a Twilio
+    # call picks up its actual identity too; a stream_id found here is handed
+    # to state below so pump_call_to_openai's own "start" handling (which
+    # still runs, for Plivo) is a harmless no-op repeat if it fires again.
+    stream_id: str | None = None
+    try:
+        while True:
+            raw = await asyncio.wait_for(ws.receive_text(), timeout=10)
+            msg = json.loads(raw)
+            event = msg.get("event")
+            if event == "connected":
+                continue
+            if event == "start":
+                start = msg.get("start") or {}
+                stream_id = (
+                    start.get("streamId")
+                    or start.get("streamSid")
+                    or msg.get("streamId")
+                    or msg.get("streamSid")
+                    or ""
+                )
+                custom = start.get("customParameters") or {}
+                if custom:
+                    caller = custom.get("from", caller)
+                    call_uuid = custom.get("call_uuid", call_uuid)
+                    provider = custom.get("provider", provider)
+                    raw_org_id = custom.get("org_id", raw_org_id)
+                    raw_campaign_target_id = custom.get(
+                        "campaign_target_id", raw_campaign_target_id
+                    )
+            break
+    except (asyncio.TimeoutError, WebSocketDisconnect):
+        pass
+
     campaign_target_id = UUID(raw_campaign_target_id) if raw_campaign_target_id else None
-    org_id = await _resolve_org_id(campaign_target_id, ws.query_params.get("org_id"))
+    org_id = await _resolve_org_id(campaign_target_id, raw_org_id)
     log = logger.bind(caller=caller, call_uuid=call_uuid, provider=provider)
     log.info("voice_stream_connected")
 
@@ -222,6 +263,8 @@ async def voice_stream(ws: WebSocket) -> None:
             campaign_target_id=campaign_target_id,
             tts_provider=settings.voice_tts_provider,
         )
+        if stream_id:
+            state.stream_id = stream_id
         if campaign_target_id is not None:
             # Proof the call actually connected — tells the hangup webhook
             # (campaign_dialer.handle_call_ended) not to re-dial this person

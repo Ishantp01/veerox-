@@ -81,6 +81,25 @@ def _ws_stream_url(
     return f"{ws_base}/voice/stream?{qs}"
 
 
+def _ws_stream_base_url() -> str:
+    """Same scheme derivation as ``_ws_stream_url`` but with no query string.
+
+    Twilio's ``<Connect><Stream>`` drops the ``url`` attribute's query string
+    when it opens the actual WebSocket (confirmed against a live call —
+    ``ws.query_params`` on the other end come back empty), unlike Plivo which
+    preserves it. Twilio's supported alternative is nested ``<Parameter>``
+    tags, delivered in the ``start`` event's ``start.customParameters`` — see
+    the Twilio branch of ``answer`` below and ``realtime_bridge.voice_stream``,
+    which reads them from there instead.
+    """
+    base = settings.public_base_url.rstrip("/")
+    if base.startswith("https://"):
+        return "wss://" + base[len("https://") :] + "/voice/stream"
+    if base.startswith("http://"):
+        return "ws://" + base[len("http://") :] + "/voice/stream"
+    return "wss://" + base + "/voice/stream"
+
+
 def _normalize_phone(value: str) -> str:
     """Digits only, no `+` — the stored convention for `Org.plivo_phone_number`
     (see routers/admin.py's update_calling_number, which normalizes the same
@@ -168,17 +187,30 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
         org_id = await _resolve_org_by_number(to_number, is_twilio)
 
     provider = "twilio" if is_twilio else "plivo"
-    ws_url = _ws_stream_url(caller, call_uuid, campaign_target_id, org_id, provider=provider)
 
     if is_twilio:
+        # No query string here — Twilio drops it (see _ws_stream_base_url).
+        # Everything the bridge needs travels as <Parameter> tags instead,
+        # delivered in the "start" event's customParameters.
+        ws_url = _ws_stream_base_url()
+        param_tags = (
+            f'<Parameter name="from" value="{_xml_escape(caller)}" />'
+            f'<Parameter name="call_uuid" value="{_xml_escape(call_uuid)}" />'
+            '<Parameter name="provider" value="twilio" />'
+        )
+        if campaign_target_id:
+            param_tags += f'<Parameter name="campaign_target_id" value="{_xml_escape(campaign_target_id)}" />'
+        if org_id:
+            param_tags += f'<Parameter name="org_id" value="{_xml_escape(org_id)}" />'
         xml = (
             '<?xml version="1.0" encoding="UTF-8"?>'
             "<Response>"
-            f'<Connect><Stream url="{_xml_escape(ws_url)}" /></Connect>'
+            f'<Connect><Stream url="{_xml_escape(ws_url)}">{param_tags}</Stream></Connect>'
             "</Response>"
         )
         logger.info("twilio_answer_served", caller=caller, call_uuid=call_uuid)
     else:
+        ws_url = _ws_stream_url(caller, call_uuid, campaign_target_id, org_id, provider=provider)
         xml = (
             '<?xml version="1.0" encoding="UTF-8"?>'
             "<Response>"
