@@ -71,6 +71,7 @@ from apps.api.schemas.campaign import (
     CampaignCreateResult,
     CampaignDetailOut,
     CampaignOut,
+    CampaignScheduleIn,
     CampaignStatusUpdateOut,
     CampaignTargetOut,
 )
@@ -80,6 +81,7 @@ from apps.api.schemas.lead import (
     LEAD_STATUSES,
     LeadBulkImportIn,
     LeadDetailOut,
+    LeadImportRow,
     LeadOut,
     LeadUpdateIn,
 )
@@ -606,8 +608,9 @@ async def list_leads(
 
 
 _SAMPLE_IMPORT_ROWS = [
-    {"name": "Asha Verma", "phone": "+919876543210", "channel": "voice"},
-    {"name": "Rohit Singh", "phone": "+919812345678", "channel": "whatsapp"},
+    {"name": "Asha Verma", "phone": "+919876543210", "call": "yes", "whatsapp": "no"},
+    {"name": "Rohit Singh", "phone": "+919812345678", "call": "no", "whatsapp": "yes"},
+    {"name": "Priya Nair", "phone": "+919845098450", "call": "yes", "whatsapp": "yes"},
 ]
 
 
@@ -631,16 +634,16 @@ def _csv_streaming_response(csv_text: str, filename: str) -> StreamingResponse:
 @router.get("/leads/sample.csv")
 async def sample_leads_csv(x_admin_token: str | None = Header(None)) -> StreamingResponse:
     """Blank-data template for POST /leads/import — same columns that
-    endpoint reads (name, phone, channel), so a unified-page upload can mix
-    call and WhatsApp rows in one file. Registered ahead of GET
-    /leads/{lead_id} so its literal path isn't swallowed by that route's
-    UUID path param.
+    endpoint reads (name, phone, call, whatsapp), so a unified-page upload
+    can mix call-only, WhatsApp-only, and both-channel rows in one file.
+    Registered ahead of GET /leads/{lead_id} so its literal path isn't
+    swallowed by that route's UUID path param.
     """
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["name", "phone", "channel"])
+    writer.writerow(["name", "phone", "call", "whatsapp"])
     for row in _SAMPLE_IMPORT_ROWS:
-        writer.writerow([row["name"], row["phone"], row["channel"]])
+        writer.writerow([row["name"], row["phone"], row["call"], row["whatsapp"]])
     buf.seek(0)
 
     return _csv_streaming_response(buf.getvalue(), "leads-sample.csv")
@@ -652,9 +655,9 @@ async def sample_leads_xlsx(x_admin_token: str | None = Header(None)) -> Streami
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Leads"
-    sheet.append(["name", "phone", "channel"])
+    sheet.append(["name", "phone", "call", "whatsapp"])
     for row in _SAMPLE_IMPORT_ROWS:
-        sheet.append([row["name"], row["phone"], row["channel"]])
+        sheet.append([row["name"], row["phone"], row["call"], row["whatsapp"]])
     for cell in sheet["B"][1:]:
         cell.number_format = "@"
 
@@ -876,6 +879,52 @@ def _normalize_import_row(raw_row: dict[str, object]) -> dict[str, str]:
     }
 
 
+def _parse_bool_cell(value: str) -> bool:
+    return value.strip().lower() in {"1", "y", "yes", "true"}
+
+
+def _resolve_row_channels(row: dict[str, str]) -> list[str] | None:
+    """Per-row channel resolution for unified (multi-channel) uploads.
+
+    Priority: the new 'call'/'whatsapp' boolean-ish columns (a row may
+    resolve to one, both, or neither); else the legacy single 'channel' text
+    column (voice XOR whatsapp), kept for backward compatibility.
+
+    Returns ``None`` when the row gives no usable signal at all — the caller
+    must treat this as a visible per-row error, NOT default to voice (that
+    silent default was the root cause of "WhatsApp list uploaded but nothing
+    sent").
+    """
+    if "call" in row or "whatsapp" in row:
+        channels = []
+        if row.get("call") and _parse_bool_cell(row["call"]):
+            channels.append("voice")
+        if row.get("whatsapp") and _parse_bool_cell(row["whatsapp"]):
+            channels.append("whatsapp")
+        return channels or None
+    if "channel" in row:
+        value = row["channel"].strip().lower()
+        return [value] if value in ("voice", "whatsapp") else None
+    return None
+
+
+def _parse_template_params_form(raw: str | None) -> list[str] | None:
+    """Decode the JSON-encoded ``template_params`` Form field (a list of
+    per-placeholder tokens/literals — see CallCampaign.template_params) sent
+    by the Campaigns-page upload form. ``None``/blank means no template
+    params configured, distinct from an (invalid) empty JSON array."""
+    error_detail = "template_params must be a JSON array of strings"
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=error_detail) from exc
+    if not isinstance(parsed, list) or not all(isinstance(v, str) for v in parsed):
+        raise HTTPException(status_code=400, detail=error_detail)
+    return parsed
+
+
 def _decode_csv_bytes(raw: bytes) -> str:
     """Best-effort decode of an uploaded CSV's raw bytes.
 
@@ -948,6 +997,12 @@ async def import_leads_file(
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
     campaign_name: str | None = Form(None),
     criteria: str | None = Form(None),
+    start_mode: str = Form("draft", pattern="^(draft|now|scheduled)$"),
+    scheduled_start_at: datetime | None = Form(None),
+    template_name: str | None = Form(None),
+    template_language: str | None = Form(None),
+    template_params: str | None = Form(None),
+    custom_message: str | None = Form(None),
 ) -> CampaignCreateResult:
     """Bulk-import leads from an uploaded CSV or Excel (.xlsx) file.
 
@@ -963,10 +1018,21 @@ async def import_leads_file(
     ``channel`` is optional: per-channel pages (e.g. /calling/leads,
     /whatsapp/leads) pass it explicitly, forcing every row into that one
     channel. The unified CRM leads page omits it, since a single upload may
-    mix call and WhatsApp rows — in that case each row's own ``channel``
-    column picks its destination and the file is split into one campaign per
-    channel found.
+    mix call and WhatsApp rows — in that case each row's own ``call``/
+    ``whatsapp`` columns (or legacy ``channel`` column) pick its
+    destination(s) and the file is split into one campaign per channel found.
+
+    ``start_mode`` controls whether the resulting campaign(s) begin outreach
+    immediately ("now"), sit inert until manually started ("draft", the
+    default — uploading a list never starts calling/messaging on its own),
+    or begin at a future ``scheduled_start_at`` ("scheduled").
     """
+    if start_mode == "scheduled" and (
+        scheduled_start_at is None or scheduled_start_at <= datetime.now(UTC)
+    ):
+        raise HTTPException(status_code=400, detail="scheduled_start_at must be in the future")
+    parsed_template_params = _parse_template_params_form(template_params)
+
     filename = (file.filename or "").lower()
     raw = await file.read()
 
@@ -980,58 +1046,22 @@ async def import_leads_file(
     org_id = org
     name = campaign_name or _default_campaign_name()
     crit = criteria or _DEFAULT_IMPORT_CRITERIA
+    resolved_status = {"draft": "draft", "now": "running", "scheduled": "scheduled"}[start_mode]
 
-    if channel:
-        return await _create_campaign_from_rows(
-            db, org_id=org_id, name=name, criteria=crit, channel=channel, rows=rows, auto_qualify=True
-        )
-
-    # No forced channel: split rows by their own "channel" column so one
-    # upload can carry both call and WhatsApp leads at once.
-    # If a row has no channel column, default to "voice" for backwards compatibility.
-    grouped: dict[str, list[tuple[int, dict[str, str]]]] = {"voice": [], "whatsapp": []}
-    errors: list[dict[str, str | int]] = []
-    for row_num, row in rows:
-        row_channel = (row.get("channel") or "voice").strip().lower()
-        if row_channel not in grouped:
-            errors.append(
-                {
-                    "row": row_num,
-                    "reason": f"channel must be 'voice' or 'whatsapp', got '{row_channel or ''}'",
-                }
-            )
-            continue
-        grouped[row_channel].append((row_num, row))
-
-    result: CampaignCreateResult | None = None
-    imported = 0
-    skipped = len(errors)
-    for group_channel, group_rows in grouped.items():
-        if not group_rows:
-            continue
-        group_result = await _create_campaign_from_rows(
-            db,
-            org_id=org_id,
-            name=f"{name} ({group_channel})",
-            criteria=crit,
-            channel=group_channel,
-            rows=group_rows,
-            auto_qualify=True,
-        )
-        imported += group_result.imported
-        skipped += group_result.skipped
-        errors.extend(group_result.errors)
-        if result is None:
-            result = group_result
-
-    if result is None:
-        raise HTTPException(
-            status_code=400,
-            detail="File must include a 'channel' column (voice or whatsapp) for each row",
-        )
-
-    return CampaignCreateResult(
-        campaign=result.campaign, imported=imported, skipped=skipped, errors=errors
+    return await _create_campaigns_from_rows(
+        db,
+        org_id=org_id,
+        name=name,
+        criteria=crit,
+        forced_channel=channel,
+        rows=rows,
+        auto_qualify=True,
+        status=resolved_status,
+        scheduled_start_at=scheduled_start_at if start_mode == "scheduled" else None,
+        template_name=template_name,
+        template_language=template_language,
+        template_params=parsed_template_params,
+        custom_message=custom_message,
     )
 
 
@@ -1046,20 +1076,56 @@ async def import_leads_bulk(
     the CSV/Excel upload above, for callers integrating directly against the
     API rather than uploading a file. Same auto-campaign behavior as
     ``POST /admin/leads/import``.
+
+    ``channel``, when set, forces every row into that one channel (unchanged
+    behavior for existing integrations). When omitted, rows may instead set
+    their own ``call``/``whatsapp`` flags for per-row routing — but only if
+    at least one row actually uses them; if none do, this still defaults to
+    "voice" exactly as before, so existing callers see no behavior change.
     """
+    if payload.start_mode == "scheduled" and (
+        payload.scheduled_start_at is None or payload.scheduled_start_at <= datetime.now(UTC)
+    ):
+        raise HTTPException(status_code=400, detail="scheduled_start_at must be in the future")
+
     org_id = org
-    rows = (
-        (row_num, {"phone": row.phone, "name": row.name or ""})
-        for row_num, row in enumerate(payload.leads, start=1)
+    any_row_channel_set = any(
+        row.call is not None or row.whatsapp is not None for row in payload.leads
     )
-    return await _create_campaign_from_rows(
+    if payload.channel:
+        forced_channel: str | None = payload.channel
+    elif any_row_channel_set:
+        forced_channel = None
+    else:
+        forced_channel = "voice"
+
+    def _row_dict(row: LeadImportRow) -> dict[str, str]:
+        d = {"phone": row.phone, "name": row.name or ""}
+        if row.call is not None:
+            d["call"] = "yes" if row.call else "no"
+        if row.whatsapp is not None:
+            d["whatsapp"] = "yes" if row.whatsapp else "no"
+        return d
+
+    rows = [(row_num, _row_dict(row)) for row_num, row in enumerate(payload.leads, start=1)]
+    resolved_status = {"draft": "draft", "now": "running", "scheduled": "scheduled"}[
+        payload.start_mode
+    ]
+
+    return await _create_campaigns_from_rows(
         db,
         org_id=org_id,
         name=payload.campaign_name or _default_campaign_name(),
         criteria=payload.criteria or _DEFAULT_IMPORT_CRITERIA,
-        channel=payload.channel or "voice",
+        forced_channel=forced_channel,
         auto_qualify=True,
         rows=rows,
+        status=resolved_status,
+        scheduled_start_at=payload.scheduled_start_at if payload.start_mode == "scheduled" else None,
+        template_name=payload.template_name,
+        template_language=payload.template_language,
+        template_params=payload.template_params,
+        custom_message=payload.custom_message,
     )
 
 
@@ -1136,6 +1202,11 @@ def _campaign_out(campaign: CallCampaign, counts: CampaignCounts) -> CampaignOut
         criteria=campaign.criteria,
         channel=campaign.channel,
         status=campaign.status,
+        scheduled_start_at=campaign.scheduled_start_at,
+        template_name=campaign.template_name,
+        template_language=campaign.template_language,
+        template_params=campaign.template_params,
+        custom_message=campaign.custom_message,
         created_at=campaign.created_at,
         counts=counts,
     )
@@ -1147,12 +1218,23 @@ async def _create_campaign_from_rows(
     org_id: UUID,
     name: str,
     criteria: str,
-    channel: str,
-    rows: Iterable[tuple[int, dict[str, str]]],
+    rows: Iterable[tuple[int, dict[str, str], str]],
     auto_qualify: bool = False,
+    status: str = "draft",
+    scheduled_start_at: datetime | None = None,
+    template_name: str | None = None,
+    template_language: str | None = None,
+    template_params: list[str] | None = None,
+    custom_message: str | None = None,
 ) -> CampaignCreateResult:
     """Shared core for every campaign-creation entry point (CSV/xlsx upload,
-    JSON bulk import).
+    JSON bulk import). Creates exactly ONE ``CallCampaign`` regardless of how
+    many distinct channels appear across ``rows`` — a row already resolved to
+    both call and whatsapp appears twice in ``rows`` (once per channel) and
+    produces two ``CampaignTarget`` rows under this single campaign, one per
+    channel. ``CallCampaign.channel`` is set once at the end from the
+    distinct channels actually inserted ("voice", "whatsapp", or "mixed") —
+    it's a display summary only; routing is per-target (CampaignTarget.channel).
 
     By default (``auto_qualify=False``, the Campaigns page's ``POST
     /admin/campaigns``) contacts are staged as ``CampaignTarget`` rows only —
@@ -1167,15 +1249,28 @@ async def _create_campaign_from_rows(
     contact, with ``status="qualified"`` — an org uploading a list of
     contacts they already trust shouldn't have to wait for the AI to call
     each one before seeing them on the Leads page. The org can change that
-    status afterward like any other lead.
+    status afterward like any other lead. A row resolved to both channels
+    still produces one Lead per channel, matching its two outreach attempts.
     """
-    campaign = CallCampaign(org_id=org_id, name=name, criteria=criteria, channel=channel)
+    campaign = CallCampaign(
+        org_id=org_id,
+        name=name,
+        criteria=criteria,
+        channel="voice",  # placeholder — corrected below once targets are known
+        status=status,
+        scheduled_start_at=scheduled_start_at,
+        template_name=template_name,
+        template_language=template_language,
+        template_params=template_params,
+        custom_message=custom_message,
+    )
     db.add(campaign)
     await db.flush()
 
     imported = 0
     errors: list[dict[str, str | int]] = []
-    for row_num, row in rows:
+    seen_channels: set[str] = set()
+    for row_num, row, channel in rows:
         phone = row.get("phone", "")
         if not phone:
             errors.append({"row": row_num, "reason": "missing phone"})
@@ -1199,6 +1294,7 @@ async def _create_campaign_from_rows(
                 org_id=org_id,
                 name=row_name,
                 phone=normalized,
+                channel=channel,
             )
         )
         if auto_qualify:
@@ -1214,25 +1310,113 @@ async def _create_campaign_from_rows(
                     status="qualified",
                 )
             )
+        seen_channels.add(channel)
         imported += 1
+
+    campaign.channel = seen_channels.pop() if len(seen_channels) == 1 else (
+        "mixed" if len(seen_channels) > 1 else "voice"
+    )
 
     await db.commit()
 
     logger.info(
         "admin_campaign_created",
         campaign_id=str(campaign.id),
-        channel=channel,
+        channel=campaign.channel,
         imported=imported,
         skipped=len(errors),
     )
 
     counts = await _campaign_counts(db, campaign.id)
+    campaign_out = _campaign_out(campaign, counts)
     return CampaignCreateResult(
-        campaign=_campaign_out(campaign, counts),
+        campaign=campaign_out,
+        campaigns=[campaign_out],
         imported=imported,
         skipped=len(errors),
         errors=errors,
     )
+
+
+async def _create_campaigns_from_rows(
+    db: DbDep,
+    *,
+    org_id: UUID,
+    name: str,
+    criteria: str,
+    forced_channel: str | None,
+    rows: list[tuple[int, dict[str, str]]],
+    auto_qualify: bool = False,
+    status: str = "draft",
+    scheduled_start_at: datetime | None = None,
+    template_name: str | None = None,
+    template_language: str | None = None,
+    template_params: list[str] | None = None,
+    custom_message: str | None = None,
+) -> CampaignCreateResult:
+    """Multi-channel orchestrator on top of ``_create_campaign_from_rows``.
+    Always creates exactly ONE campaign, regardless of how many distinct
+    channels the upload's rows resolve to.
+
+    When ``forced_channel`` is given (an explicit per-channel page, or a
+    caller that already knows its channel), every row goes to that one
+    channel unchanged — row-level call/whatsapp/channel columns are ignored.
+
+    When ``forced_channel`` is ``None``, each row is resolved independently
+    via ``_resolve_row_channels`` and may resolve to BOTH voice and
+    whatsapp — that row is expanded into two ``(row_num, row, channel)``
+    entries, producing two ``CampaignTarget`` rows under the same campaign.
+    Rows that resolve to neither channel are recorded as a visible per-row
+    error instead of silently defaulting to voice.
+    """
+    expanded: list[tuple[int, dict[str, str], str]] = []
+    row_errors: list[dict[str, str | int]] = []
+    for row_num, row in rows:
+        if forced_channel:
+            expanded.append((row_num, row, forced_channel))
+            continue
+        channels = _resolve_row_channels(row)
+        if not channels:
+            row_errors.append(
+                {
+                    "row": row_num,
+                    "reason": (
+                        "row must mark 'call' and/or 'whatsapp' as yes, or set a "
+                        "'channel' column to 'voice'/'whatsapp' — this row was not "
+                        "sent on any channel"
+                    ),
+                }
+            )
+            continue
+        for ch in channels:
+            expanded.append((row_num, row, ch))
+
+    if not expanded:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No row could be routed to a channel — add 'call'/'whatsapp' "
+                "columns (yes/no) or a 'channel' column (voice/whatsapp)."
+            ),
+        )
+
+    result = await _create_campaign_from_rows(
+        db,
+        org_id=org_id,
+        name=name,
+        criteria=criteria,
+        rows=expanded,
+        auto_qualify=auto_qualify,
+        status=status,
+        scheduled_start_at=scheduled_start_at,
+        template_name=template_name,
+        template_language=template_language,
+        template_params=template_params,
+        custom_message=custom_message,
+    )
+    result.errors = row_errors + result.errors
+    result.skipped += len(row_errors)
+    return result
 
 
 @router.post("/campaigns", response_model=CampaignCreateResult)
@@ -1242,22 +1426,40 @@ async def create_campaign(
     name: str = Form(...),
     criteria: str = Form(...),
     file: UploadFile = File(...),
-    channel: str = Form("voice", pattern="^(voice|whatsapp)$"),
+    channel: str | None = Form(None, pattern="^(voice|whatsapp)$"),
+    start_mode: str = Form("draft", pattern="^(draft|now|scheduled)$"),
+    scheduled_start_at: datetime | None = Form(None),
+    template_name: str | None = Form(None),
+    template_language: str | None = Form(None),
+    template_params: str | None = Form(None),
+    custom_message: str | None = Form(None),
     x_admin_token: str | None = Header(None),
 ) -> CampaignCreateResult:
     """Create a campaign from an uploaded CSV/Excel contact list.
 
-    ``channel`` selects which background worker drives the resulting
-    targets: the voice dialer (apps/api/workers/campaign_dialer.py) or the
-    WhatsApp dispatcher (apps/api/workers/whatsapp_dispatcher.py). Defaults
-    to "voice" to match this endpoint's original (pre-WhatsApp) behavior.
+    ``channel``, when given, forces every row into that one worker: the
+    voice dialer (apps/api/workers/campaign_dialer.py) or the WhatsApp
+    dispatcher (apps/api/workers/whatsapp_dispatcher.py). When omitted (the
+    web app's Campaigns page never sends it), each row's own ``call``/
+    ``whatsapp`` columns decide its channel(s) instead — see
+    ``_create_campaigns_from_rows``.
+
+    ``start_mode`` controls whether the resulting campaign(s) begin outreach
+    immediately, sit as a draft until manually started (the default), or
+    begin at a future ``scheduled_start_at``.
     """
+    if start_mode == "scheduled" and (
+        scheduled_start_at is None or scheduled_start_at <= datetime.now(UTC)
+    ):
+        raise HTTPException(status_code=400, detail="scheduled_start_at must be in the future")
+    parsed_template_params = _parse_template_params_form(template_params)
+
     filename = (file.filename or "").lower()
     raw = await file.read()
     if filename.endswith(".csv"):
-        rows = _iter_csv_rows(raw)
+        rows = list(_iter_csv_rows(raw))
     elif filename.endswith(".xlsx"):
-        rows = _iter_xlsx_rows(raw)
+        rows = list(_iter_xlsx_rows(raw))
     else:
         raise HTTPException(status_code=400, detail="Only .csv or .xlsx files are supported")
 
@@ -1266,8 +1468,20 @@ async def create_campaign(
         select(func.count()).select_from(CallCampaign).where(CallCampaign.org_id == org_id)
     )
     await enforce_plan_limit(db, org_id, "max_campaigns", campaign_count_result.scalar_one())
-    return await _create_campaign_from_rows(
-        db, org_id=org_id, name=name, criteria=criteria, channel=channel, rows=rows
+    resolved_status = {"draft": "draft", "now": "running", "scheduled": "scheduled"}[start_mode]
+    return await _create_campaigns_from_rows(
+        db,
+        org_id=org_id,
+        name=name,
+        criteria=criteria,
+        forced_channel=channel,
+        rows=rows,
+        status=resolved_status,
+        scheduled_start_at=scheduled_start_at if start_mode == "scheduled" else None,
+        template_name=template_name,
+        template_language=template_language,
+        template_params=parsed_template_params,
+        custom_message=custom_message,
     )
 
 
@@ -1306,7 +1520,14 @@ async def list_campaigns(
         .order_by(CallCampaign.created_at.desc())
     )
     if channel:
-        stmt = stmt.where(CallCampaign.channel == channel)
+        # CallCampaign.channel is a display-only summary ("voice"/"whatsapp"/
+        # "mixed") — filtering on it directly would wrongly exclude "mixed"
+        # campaigns that do contain a target of the requested channel.
+        stmt = stmt.where(
+            select(CampaignTarget.id)
+            .where(CampaignTarget.campaign_id == CallCampaign.id, CampaignTarget.channel == channel)
+            .exists()
+        )
 
     rows = (await db.execute(stmt)).all()
     return [
@@ -1318,25 +1539,22 @@ async def list_campaigns(
     ]
 
 
-_SAMPLE_CAMPAIGN_ROWS = [
-    {"name": "Asha Verma", "phone": "+919876543210"},
-    {"name": "Rohit Singh", "phone": "+919812345678"},
-]
+_SAMPLE_CAMPAIGN_ROWS = _SAMPLE_IMPORT_ROWS
 
 
 @router.get("/campaigns/sample.csv")
 async def sample_campaign_csv(x_admin_token: str | None = Header(None)) -> StreamingResponse:
-    """Blank-data template for POST /campaigns' contact-list upload — just
-    name/phone, since the campaign's channel (voice or WhatsApp) is picked
-    once via the form's Channel select, not per row. Registered ahead of GET
-    /campaigns/{campaign_id} so its literal path isn't swallowed by that
-    route's UUID path param.
+    """Blank-data template for POST /campaigns' contact-list upload — each
+    row picks its own channel(s) via the call/whatsapp columns, so one list
+    can mix call-only, WhatsApp-only, and both-channel contacts. Registered
+    ahead of GET /campaigns/{campaign_id} so its literal path isn't
+    swallowed by that route's UUID path param.
     """
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["name", "phone"])
+    writer.writerow(["name", "phone", "call", "whatsapp"])
     for row in _SAMPLE_CAMPAIGN_ROWS:
-        writer.writerow([row["name"], row["phone"]])
+        writer.writerow([row["name"], row["phone"], row["call"], row["whatsapp"]])
     buf.seek(0)
 
     return _csv_streaming_response(buf.getvalue(), "campaign-contacts-sample.csv")
@@ -1348,9 +1566,9 @@ async def sample_campaign_xlsx(x_admin_token: str | None = Header(None)) -> Stre
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Contacts"
-    sheet.append(["name", "phone"])
+    sheet.append(["name", "phone", "call", "whatsapp"])
     for row in _SAMPLE_CAMPAIGN_ROWS:
-        sheet.append([row["name"], row["phone"]])
+        sheet.append([row["name"], row["phone"], row["call"], row["whatsapp"]])
     for cell in sheet["B"][1:]:
         cell.number_format = "@"
 
@@ -1410,10 +1628,34 @@ async def resume_campaign(
     db: DbDep,
     x_admin_token: str | None = Header(None),
 ) -> CampaignStatusUpdateOut:
+    """Starts a campaign now — covers draft, scheduled, and paused campaigns
+    alike, since "resume" just means "the dialer/dispatcher may act on this
+    campaign starting now"."""
     campaign = await db.get(CallCampaign, campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
     campaign.status = "running"
+    # Manually starting a scheduled campaign early shouldn't leave a stale
+    # future timestamp displayed once it's already running.
+    campaign.scheduled_start_at = None
+    await db.commit()
+    return CampaignStatusUpdateOut(id=campaign.id, status=campaign.status)
+
+
+@router.post("/campaigns/{campaign_id}/schedule", response_model=CampaignStatusUpdateOut)
+async def schedule_campaign(
+    campaign_id: UUID,
+    payload: CampaignScheduleIn,
+    db: DbDep,
+    x_admin_token: str | None = Header(None),
+) -> CampaignStatusUpdateOut:
+    campaign = await db.get(CallCampaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if payload.scheduled_start_at <= datetime.now(UTC):
+        raise HTTPException(status_code=400, detail="scheduled_start_at must be in the future")
+    campaign.status = "scheduled"
+    campaign.scheduled_start_at = payload.scheduled_start_at
     await db.commit()
     return CampaignStatusUpdateOut(id=campaign.id, status=campaign.status)
 

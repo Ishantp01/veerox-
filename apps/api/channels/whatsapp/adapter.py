@@ -23,7 +23,6 @@ from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.agent import agent_core, appointment_booked_this_turn
 from apps.api.core.transcribe import transcribe
-from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
 from apps.api.db.models.user import User
@@ -192,10 +191,9 @@ async def _find_open_campaign_target(db: AsyncSession, phone: str) -> UUID | Non
     """
     stmt = (
         select(CampaignTarget.id)
-        .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
         .where(
             CampaignTarget.phone == phone,
-            CallCampaign.channel == "whatsapp",
+            CampaignTarget.channel == "whatsapp",
             CampaignTarget.status == "completed",
             CampaignTarget.qualified.is_(None),
         )

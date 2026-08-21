@@ -16,7 +16,9 @@ export interface FollowUpRuleCreateInput {
   name: string;
   trigger_config: { status: string; delay_hours: number };
   channel?: string;
-  message_template: string;
+  message_template?: string;
+  template_name?: string;
+  template_language?: string;
 }
 
 /** POST /follow-up-rules → FollowUpRule */

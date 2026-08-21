@@ -19,6 +19,13 @@ class CampaignTarget(Base):
     org_id: Mapped[UUID] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str] = mapped_column(String(32), nullable=False)
+    # "voice" or "whatsapp" — which worker (campaign_dialer.py /
+    # whatsapp_dispatcher.py) owns this specific target. A row that resolves
+    # to both channels on upload produces two CampaignTarget rows (one per
+    # channel) under the SAME CallCampaign, not two campaigns. This column is
+    # the routing authority for both workers' claim/requeue/reclaim queries —
+    # CallCampaign.channel is display-only (see call_campaign.py).
+    channel: Mapped[str] = mapped_column(String(10), nullable=False, server_default="voice")
     # pending -> calling -> completed | failed
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
     # Null until the AI reaches a verdict (call may still fail before that).

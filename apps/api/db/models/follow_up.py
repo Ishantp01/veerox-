@@ -28,7 +28,15 @@ class FollowUpRule(Base):
     trigger_type: Mapped[str] = mapped_column(String(30), nullable=False, server_default="status_change")
     trigger_config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     channel: Mapped[str] = mapped_column(String(16), nullable=False, server_default="whatsapp")
-    message_template: Mapped[str] = mapped_column(Text, nullable=False)
+    # Nullable: a rule may be template-only (see template_name below) instead
+    # of free text.
+    message_template: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When set, materialized tasks send via this pre-approved Meta template
+    # instead of (or, if message_template is also set, is used for) the
+    # free-text path — see workers/follow_up_dispatcher.py's _execute_task,
+    # which already has this exact branch for appointment-reminder tasks.
+    template_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    template_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -98,4 +106,5 @@ class FollowUpTask(Base):
     # _execute_task. Used by appointment reminders, which must reach the
     # recipient even outside the 24h free-form-text session window.
     template_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    template_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     template_params: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)

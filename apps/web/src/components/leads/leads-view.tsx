@@ -17,10 +17,13 @@ import type { LeadQualificationStatus, LeadStatus } from "@/lib/types";
 
 interface ImportLeadsResult {
   campaign: { name: string; channel: string };
+  campaigns: { name: string; channel: string }[];
   imported: number;
   skipped: number;
   errors: { row: number; reason: string }[];
 }
+
+type LeadImportStartMode = "draft" | "now" | "scheduled";
 
 const INTENT_SEARCH_DEBOUNCE_MS = 300;
 
@@ -60,7 +63,9 @@ async function downloadSampleImportFile(format: "csv" | "xlsx"): Promise<void> {
  */
 async function importLeadsFile(
   file: File,
-  channel?: "voice" | "whatsapp"
+  channel?: "voice" | "whatsapp",
+  startMode: LeadImportStartMode = "draft",
+  scheduledStartAt?: string
 ): Promise<ImportLeadsResult> {
   const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8002";
   const token =
@@ -72,6 +77,8 @@ async function importLeadsFile(
   const qs = channel ? `?channel=${encodeURIComponent(channel)}` : "";
   const form = new FormData();
   form.append("file", file);
+  form.append("start_mode", startMode);
+  if (scheduledStartAt) form.append("scheduled_start_at", scheduledStartAt);
 
   const res = await fetch(`${base}/admin/leads/import${qs}`, {
     method: "POST",
@@ -121,6 +128,8 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
   );
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importStartMode, setImportStartMode] = useState<LeadImportStartMode>("draft");
+  const [importScheduledAt, setImportScheduledAt] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
@@ -167,21 +176,41 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
     e.target.value = ""; // allow re-selecting the same file next time
     if (!file) return;
 
+    if (importStartMode === "scheduled" && !importScheduledAt) {
+      toast({
+        title: "Pick a date and time",
+        description: "Choose when this campaign should start, or switch to Draft/Start now.",
+        variant: "error",
+      });
+      return;
+    }
+
     setImporting(true);
     try {
-      const result = await importLeadsFile(file, effectiveChannel);
+      const scheduledIso =
+        importStartMode === "scheduled" ? new Date(importScheduledAt).toISOString() : undefined;
+      const result = await importLeadsFile(file, effectiveChannel, importStartMode, scheduledIso);
       // Leads-page import creates a Lead per contact immediately (status
       // "qualified", editable like any lead) — unlike the Campaigns page,
       // which only creates a Lead once the AI actually qualifies someone.
       // It also still stages the usual campaign for AI outreach in the
-      // background (routers/admin.py::_create_campaign_from_rows,
-      // auto_qualify=True) — that part is unchanged.
+      // background (routers/admin.py::_create_campaigns_from_rows,
+      // auto_qualify=True) — one campaign per upload, even for a mixed
+      // call+WhatsApp file. Outreach only begins once the campaign is
+      // started — see importStartMode.
+      const campaignName = `"${result.campaign.name}"`;
+      const outreachText =
+        importStartMode === "now"
+          ? `The AI is now reaching out via ${campaignName}.`
+          : importStartMode === "scheduled"
+            ? `Outreach via ${campaignName} is scheduled to begin at the time you chose.`
+            : `Outreach via ${campaignName} is saved as a draft — start it from the Campaigns page when ready.`;
       toast({
         title: "Import complete",
         description:
           result.skipped > 0
-            ? `Added ${result.imported} lead(s), marked Qualified (${result.skipped} row(s) skipped). The AI will also reach out via campaign "${result.campaign.name}".`
-            : `Added ${result.imported} lead(s), marked Qualified. The AI will also reach out via campaign "${result.campaign.name}".`,
+            ? `Added ${result.imported} lead(s), marked Qualified (${result.skipped} row(s) skipped). ${outreachText}`
+            : `Added ${result.imported} lead(s), marked Qualified. ${outreachText}`,
         variant: result.skipped > 0 ? "info" : "success",
       });
       await refetch();
@@ -272,6 +301,24 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
               <FileSpreadsheet size={15} aria-hidden />
               Sample XLSX
             </Button>
+            <Select
+              value={importStartMode}
+              onChange={(v) => setImportStartMode(v as LeadImportStartMode)}
+              aria-label="When to start outreach for imported leads"
+            >
+              <option value="draft">Save as draft</option>
+              <option value="now">Start now</option>
+              <option value="scheduled">Schedule for…</option>
+            </Select>
+            {importStartMode === "scheduled" && (
+              <input
+                type="datetime-local"
+                value={importScheduledAt}
+                onChange={(e) => setImportScheduledAt(e.target.value)}
+                aria-label="Scheduled start date and time"
+                className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+            )}
             <Button
               variant="outline"
               size="md"

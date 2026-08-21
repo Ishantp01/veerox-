@@ -14,6 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui";
+import { ChannelBadge } from "@/components/conversations/channel-badge";
 import { formatDateTime, formatPhone } from "@/lib/format";
 import { useCampaign } from "@/lib/hooks";
 import { CampaignStatusBadge, CampaignTargetStatusBadge } from "./campaign-status-badge";
@@ -40,7 +41,18 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
       <PageHeader
         title={campaign?.name ?? "Campaign"}
         description={campaign ? `Criteria: ${campaign.criteria}` : undefined}
-        action={campaign && <CampaignStatusBadge status={campaign.status} />}
+        action={
+          campaign && (
+            <div className="flex items-center gap-2">
+              {campaign.status === "scheduled" && campaign.scheduled_start_at && (
+                <span className="text-xs text-slate-400 dark:text-slate-500">
+                  Starts {formatDateTime(campaign.scheduled_start_at)}
+                </span>
+              )}
+              <CampaignStatusBadge status={campaign.status} />
+            </div>
+          )
+        }
       />
 
       <QueryBoundary
@@ -53,7 +65,7 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
           <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
-                <SkeletonRows rows={5} cols={5} />
+                <SkeletonRows rows={5} cols={6} />
               </tbody>
             </Table>
           </div>
@@ -66,6 +78,7 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
               <TableRow isHeader>
                 <TableHeader>Name</TableHeader>
                 <TableHeader>Phone</TableHeader>
+                <TableHeader>Channel</TableHeader>
                 <TableHeader>Status</TableHeader>
                 <TableHeader>Qualified</TableHeader>
                 <TableHeader>Reason</TableHeader>
@@ -80,6 +93,9 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
                   </TableCell>
                   <TableCell>
                     <span className="font-mono text-xs text-slate-600 dark:text-slate-400">{formatPhone(t.phone)}</span>
+                  </TableCell>
+                  <TableCell>
+                    <ChannelBadge channel={t.channel} />
                   </TableCell>
                   <TableCell>
                     <CampaignTargetStatusBadge status={t.status} />

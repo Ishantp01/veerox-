@@ -5,14 +5,16 @@ import { ArrowRight, Megaphone, MessageCircle, Phone } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, EmptyState, Skeleton } from "@/components/ui";
 import { useReportsCampaigns } from "@/lib/hooks";
 
-const BAR_COLOR: Record<"voice" | "whatsapp", string> = {
+const BAR_COLOR: Record<"voice" | "whatsapp" | "mixed", string> = {
   voice: "bg-blue-500",
   whatsapp: "bg-green-500",
+  mixed: "bg-slate-400",
 };
 
-const ICON_TINT: Record<"voice" | "whatsapp", string> = {
+const ICON_TINT: Record<"voice" | "whatsapp" | "mixed", string> = {
   voice: "bg-blue-500/20 text-blue-500",
   whatsapp: "bg-green-500/20 text-green-500",
+  mixed: "bg-slate-400/20 text-slate-500",
 };
 
 /**
@@ -57,7 +59,7 @@ export function TopCampaigns() {
           <div className="flex flex-col gap-4">
             {top.map((c) => {
               const pct = Math.round((c.qualification_rate ?? 0) * 100);
-              const Icon = c.channel === "voice" ? Phone : MessageCircle;
+              const Icon = c.channel === "voice" ? Phone : c.channel === "whatsapp" ? MessageCircle : Megaphone;
               return (
                 <div key={c.id}>
                   <div className="mb-2 flex items-center justify-between">

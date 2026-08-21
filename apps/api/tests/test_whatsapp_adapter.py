@@ -230,3 +230,64 @@ async def test_status_only_payload_is_ignored(
     }
     await adapter_module.process_inbound(payload)
     assert called == {"agent": False, "send": False}
+
+
+@pytest.mark.asyncio
+async def test_find_open_campaign_target_resolves_whatsapp_target_on_mixed_campaign(
+    seeded_db: AsyncSession,
+) -> None:
+    """Regression guard: a campaign holding both voice and WhatsApp targets
+    (CallCampaign.channel == "mixed") must still resolve an inbound WhatsApp
+    reply to that contact's WhatsApp target specifically — not miss it by
+    filtering on the now-display-only CallCampaign.channel, and not
+    accidentally match the same contact's voice target instead."""
+    from apps.api.db.models.call_campaign import CallCampaign
+    from apps.api.db.models.campaign_target import CampaignTarget
+
+    campaign = CallCampaign(org_id=ORG_ID, name="Mixed campaign", criteria="n/a", channel="mixed")
+    seeded_db.add(campaign)
+    await seeded_db.flush()
+
+    phone = "+919876543210"
+    voice_target = CampaignTarget(
+        campaign_id=campaign.id, org_id=ORG_ID, phone=phone,
+        channel="voice", status="completed", qualified=None,
+    )
+    wa_target = CampaignTarget(
+        campaign_id=campaign.id, org_id=ORG_ID, phone=phone,
+        channel="whatsapp", status="completed", qualified=None,
+    )
+    seeded_db.add_all([voice_target, wa_target])
+    await seeded_db.commit()
+
+    resolved_id = await adapter_module._find_open_campaign_target(seeded_db, phone)
+
+    assert resolved_id == wa_target.id
+    assert resolved_id != voice_target.id
+
+
+@pytest.mark.asyncio
+async def test_find_open_campaign_target_none_when_only_voice_target_open(
+    seeded_db: AsyncSession,
+) -> None:
+    from apps.api.db.models.call_campaign import CallCampaign
+    from apps.api.db.models.campaign_target import CampaignTarget
+
+    campaign = CallCampaign(
+        org_id=ORG_ID, name="Voice-only campaign", criteria="n/a", channel="voice"
+    )
+    seeded_db.add(campaign)
+    await seeded_db.flush()
+
+    phone = "+919876543211"
+    seeded_db.add(
+        CampaignTarget(
+            campaign_id=campaign.id, org_id=ORG_ID, phone=phone,
+            channel="voice", status="completed", qualified=None,
+        )
+    )
+    await seeded_db.commit()
+
+    resolved_id = await adapter_module._find_open_campaign_target(seeded_db, phone)
+
+    assert resolved_id is None

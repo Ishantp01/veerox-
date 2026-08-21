@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-CampaignStatus = Literal["running", "paused", "completed"]
+CampaignStatus = Literal["draft", "scheduled", "running", "paused", "completed"]
 TargetStatus = Literal["pending", "calling", "completed", "failed"]
 CampaignChannel = Literal["voice", "whatsapp"]
 
@@ -18,6 +18,7 @@ class CampaignTargetOut(BaseModel):
     campaign_id: UUID
     name: str | None
     phone: str
+    channel: CampaignChannel
     status: str
     qualified: bool | None
     disposition_reason: str | None
@@ -42,8 +43,16 @@ class CampaignOut(BaseModel):
     org_id: UUID
     name: str
     criteria: str
+    # Display-only summary of this campaign's target channels — "voice",
+    # "whatsapp", or "mixed" when it has both. Routing is per-target
+    # (CampaignTargetOut.channel), not read from here.
     channel: str
     status: str
+    scheduled_start_at: datetime | None = None
+    template_name: str | None = None
+    template_language: str | None = None
+    template_params: list[str] | None = None
+    custom_message: str | None = None
     created_at: datetime
     counts: CampaignCounts
 
@@ -54,6 +63,7 @@ class CampaignDetailOut(CampaignOut):
 
 class CampaignCreateResult(BaseModel):
     campaign: CampaignOut
+    campaigns: list[CampaignOut] = []
     imported: int
     skipped: int
     errors: list[dict[str, str | int]]
@@ -62,3 +72,7 @@ class CampaignCreateResult(BaseModel):
 class CampaignStatusUpdateOut(BaseModel):
     id: UUID
     status: str
+
+
+class CampaignScheduleIn(BaseModel):
+    scheduled_start_at: datetime

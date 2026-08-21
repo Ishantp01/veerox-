@@ -67,7 +67,12 @@ async def test_create_campaign_stages_targets_not_leads(
 
     response = await client.post(
         "/admin/campaigns",
-        data={"name": "July outreach", "criteria": "Wants a demo and has budget"},
+        data={
+            "name": "July outreach",
+            "criteria": "Wants a demo and has budget",
+            "channel": "voice",
+            "start_mode": "now",
+        },
         files={"file": ("leads.csv", csv_body, "text/csv")},
         headers=ADMIN_HEADERS,
     )
@@ -104,7 +109,7 @@ async def test_create_campaign_rejects_phone_without_country_code(
 
     response = await client.post(
         "/admin/campaigns",
-        data={"name": "Format check", "criteria": "n/a"},
+        data={"name": "Format check", "criteria": "n/a", "channel": "voice"},
         files={"file": ("leads.csv", csv_body, "text/csv")},
         headers=ADMIN_HEADERS,
     )
@@ -128,7 +133,7 @@ async def test_create_campaign_reports_missing_phone_rows(
 
     response = await client.post(
         "/admin/campaigns",
-        data={"name": "Bad list", "criteria": "n/a"},
+        data={"name": "Bad list", "criteria": "n/a", "channel": "voice"},
         files={"file": ("leads.csv", csv_body, "text/csv")},
         headers=ADMIN_HEADERS,
     )
@@ -144,7 +149,7 @@ async def test_list_and_get_campaign(client: AsyncClient, db_session: AsyncSessi
     await _seed_org(db_session)
     create_resp = await client.post(
         "/admin/campaigns",
-        data={"name": "Q3 leads", "criteria": "Must want a callback"},
+        data={"name": "Q3 leads", "criteria": "Must want a callback", "channel": "voice"},
         files={"file": ("leads.csv", "name,phone\nA,+910000000052\n", "text/csv")},
         headers=ADMIN_HEADERS,
     )
@@ -176,7 +181,7 @@ async def test_pause_and_resume_campaign(
     await _seed_org(db_session)
     create_resp = await client.post(
         "/admin/campaigns",
-        data={"name": "Pausable", "criteria": "n/a"},
+        data={"name": "Pausable", "criteria": "n/a", "channel": "voice"},
         files={"file": ("leads.csv", "name,phone\nA,+910000000053\n", "text/csv")},
         headers=ADMIN_HEADERS,
     )

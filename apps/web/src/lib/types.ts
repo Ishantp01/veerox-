@@ -124,7 +124,9 @@ export interface FollowUpRule {
   trigger_type: "status_change";
   trigger_config: { status?: string; delay_hours?: number };
   channel: string;
-  message_template: string;
+  message_template: string | null;
+  template_name: string | null;
+  template_language: string | null;
   active: boolean;
   created_at: string;
 }
@@ -317,7 +319,7 @@ export interface CallingSettings {
 // Calling campaigns — bulk-upload a lead list, the background dialer
 // (apps/api/workers/campaign_dialer.py) calls each one, and the AI's
 // qualify_lead tool call decides whether a CRM Lead row gets written.
-export type CampaignStatus = "running" | "paused" | "completed";
+export type CampaignStatus = "draft" | "scheduled" | "running" | "paused" | "completed";
 export type CampaignTargetStatus = "pending" | "calling" | "completed" | "failed";
 
 export interface CampaignCounts {
@@ -333,8 +335,15 @@ export interface Campaign {
   org_id: string;
   name: string;
   criteria: string;
-  channel: "voice" | "whatsapp";
+  /** Display-only summary of this campaign's target channels — "mixed" when
+   * it has both. Routing is per-target, see CampaignTarget.channel. */
+  channel: "voice" | "whatsapp" | "mixed";
   status: CampaignStatus;
+  scheduled_start_at: string | null;
+  template_name: string | null;
+  template_language: string | null;
+  template_params: string[] | null;
+  custom_message: string | null;
   created_at: string;
   counts: CampaignCounts;
 }
@@ -344,6 +353,7 @@ export interface CampaignTarget {
   campaign_id: string;
   name: string | null;
   phone: string;
+  channel: "voice" | "whatsapp";
   status: CampaignTargetStatus;
   qualified: boolean | null;
   disposition_reason: string | null;
@@ -359,6 +369,7 @@ export interface CampaignDetail extends Campaign {
 
 export interface CampaignCreateResult {
   campaign: Campaign;
+  campaigns: Campaign[];
   imported: number;
   skipped: number;
   errors: { row: number; reason: string }[];
@@ -379,7 +390,7 @@ export interface ReportsTimeseriesPoint {
 export interface ReportsCampaignRow {
   id: string;
   name: string;
-  channel: "voice" | "whatsapp";
+  channel: "voice" | "whatsapp" | "mixed";
   status: CampaignStatus;
   counts: CampaignCounts;
   qualification_rate: number | null;

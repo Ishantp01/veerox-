@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from apps.api.db.base import Base
@@ -18,12 +18,37 @@ class CallCampaign(Base):
     # Free-text qualification bar the agent evaluates each prospect against
     # (e.g. "must confirm interest in a demo and have budget above $5,000").
     criteria: Mapped[str] = mapped_column(Text, nullable=False)
-    # Which outreach worker drives this campaign's targets — the voice dialer
-    # (apps/api/workers/campaign_dialer.py) or the WhatsApp dispatcher
-    # (apps/api/workers/whatsapp_dispatcher.py). "voice" default preserves the
-    # behavior of campaigns created before this column existed.
+    # Display-only summary of which channel(s) this campaign's targets use —
+    # "voice", "whatsapp", or "mixed" when it has both. NOT read by either
+    # worker: routing is decided per-target by CampaignTarget.channel, since
+    # one upload's rows can resolve to different channels each. Computed once
+    # at creation time in admin.py's _create_campaign_from_rows from the
+    # distinct channels actually inserted.
     channel: Mapped[str] = mapped_column(String(10), nullable=False, server_default="voice")
-    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="running")
+    # draft (created, inert) -> scheduled (has a future scheduled_start_at) ->
+    # running (the only status either worker acts on) -> paused | completed.
+    # Defaults to "draft" so uploading a list never starts outreach on its
+    # own — an explicit start/schedule action is required.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="draft")
+    scheduled_start_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # WhatsApp-only: when set, the dispatcher sends this pre-approved Meta
+    # template as the first-touch message instead of free text, sidestepping
+    # the 24h customer-service-window restriction on cold outbound contacts.
+    template_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    template_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Ordered per-placeholder source for the template's {{1}}, {{2}}, ...
+    # body variables. Each entry is either a dynamic token resolved fresh at
+    # send time — "{{contact_name}}" (CampaignTarget.name), "{{send_date}}",
+    # "{{send_time}}" (both in IST, resolved the moment the message actually
+    # sends, not when the campaign was created) — or literal custom text
+    # used as-is. See workers/whatsapp_dispatcher.py's
+    # _resolve_template_body_params.
+    template_params: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Optional free-text follow-up sent right after the template (or after
+    # the default opening message, if no template is set).
+    custom_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

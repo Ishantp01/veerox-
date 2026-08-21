@@ -42,7 +42,9 @@ export {
   useCreateCampaign,
   usePauseCampaign,
   useResumeCampaign,
+  useScheduleCampaign,
   type CreateCampaignInput,
+  type CampaignStartMode,
 } from "./useCampaigns";
 export { useReportsTimeseries, useReportsCampaigns } from "./useReports";
 export {

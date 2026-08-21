@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Badge, Table, TableCell, TableHeader, TableRow } from "@/components/ui";
+import { Table, TableCell, TableHeader, TableRow } from "@/components/ui";
+import { CampaignChannelBadge } from "@/components/conversations/channel-badge";
 import { CampaignStatusBadge } from "@/components/campaigns/campaign-status-badge";
 import { formatPercent } from "@/lib/format";
 import type { ReportsCampaignRow } from "@/lib/types";
@@ -33,9 +34,7 @@ export function CampaignsConversionTable({ rows }: { rows: ReportsCampaignRow[] 
                   <Link href={href}>{nameCell}</Link>
                 </TableCell>
                 <TableCell>
-                  <Badge variant={row.channel === "voice" ? "voice" : "whatsapp"}>
-                    {row.channel === "voice" ? "Voice" : "WhatsApp"}
-                  </Badge>
+                  <CampaignChannelBadge channel={row.channel} />
                 </TableCell>
                 <TableCell>
                   <CampaignStatusBadge status={row.status} />

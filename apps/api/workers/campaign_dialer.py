@@ -29,6 +29,7 @@ from apps.api.db.models.org import Org
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
+from apps.api.workers.campaign_scheduling import promote_scheduled_campaigns
 
 logger = structlog.get_logger(__name__)
 
@@ -45,17 +46,14 @@ async def _requeue_stuck_targets() -> None:
     """Requeue targets left ``calling`` by a previous process (crash/restart
     mid-call) so a campaign never stalls forever on one dropped call.
 
-    Scoped to voice campaigns only — ``CampaignTarget.status`` values are
+    Scoped to voice targets only — ``CampaignTarget.status`` values are
     shared with the WhatsApp dispatcher (apps/api/workers/
     whatsapp_dispatcher.py), which has its own requeue-on-startup pass.
     """
     async with AsyncSessionLocal() as db:
-        voice_target_ids = select(CampaignTarget.id).join(
-            CallCampaign, CallCampaign.id == CampaignTarget.campaign_id
-        ).where(CampaignTarget.status == "calling", CallCampaign.channel == "voice")
         stmt = (
             update(CampaignTarget)
-            .where(CampaignTarget.id.in_(voice_target_ids))
+            .where(CampaignTarget.status == "calling", CampaignTarget.channel == "voice")
             .values(status="pending")
         )
         result = await db.execute(stmt)
@@ -69,17 +67,13 @@ async def _reclaim_stale_calls(db) -> None:
 
     Runs every tick so a bad number or a call that never connects doesn't
     permanently wedge the sequential dialer — no restart required. Scoped to
-    voice campaigns; see ``_requeue_stuck_targets`` for why.
+    voice targets; see ``_requeue_stuck_targets`` for why.
     """
     cutoff = datetime.now(UTC) - timedelta(seconds=_STALE_CALL_TIMEOUT_SECS)
-    stmt = (
-        select(CampaignTarget)
-        .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
-        .where(
-            CampaignTarget.status == "calling",
-            CampaignTarget.called_at < cutoff,
-            CallCampaign.channel == "voice",
-        )
+    stmt = select(CampaignTarget).where(
+        CampaignTarget.status == "calling",
+        CampaignTarget.called_at < cutoff,
+        CampaignTarget.channel == "voice",
     )
     stale = (await db.execute(stmt)).scalars().all()
     for target in stale:
@@ -99,14 +93,13 @@ async def _reclaim_stale_calls(db) -> None:
 async def _count_calls_in_flight(db) -> int:
     """How many voice calls are currently in progress — bounds concurrency.
 
-    Scoped to voice campaigns so in-progress WhatsApp conversations (which
+    Scoped to voice targets so in-progress WhatsApp conversations (which
     share the "calling" status value) never count against the phone dialer.
     """
     stmt = (
         select(func.count())
         .select_from(CampaignTarget)
-        .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
-        .where(CampaignTarget.status == "calling", CallCampaign.channel == "voice")
+        .where(CampaignTarget.status == "calling", CampaignTarget.channel == "voice")
     )
     return (await db.execute(stmt)).scalar_one()
 
@@ -131,6 +124,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None]]
     plan would never stop an already-running campaign from dialing.
     """
     async with AsyncSessionLocal() as db:
+        await promote_scheduled_campaigns(db)
         await _reclaim_stale_calls(db)
         capacity = settings.max_concurrent_calls - await _count_calls_in_flight(db)
         if capacity <= 0:
@@ -157,7 +151,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None]]
             .where(
                 CampaignTarget.status == "pending",
                 CallCampaign.status == "running",
-                CallCampaign.channel == "voice",
+                CampaignTarget.channel == "voice",
             )
             .order_by(CampaignTarget.created_at)
             .limit(max(capacity * 4, 50))

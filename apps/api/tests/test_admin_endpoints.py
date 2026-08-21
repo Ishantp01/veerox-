@@ -442,6 +442,7 @@ async def test_import_leads_csv_stages_campaign_and_creates_qualified_leads(
 
     response = await client.post(
         "/admin/leads/import",
+        params={"channel": "voice"},
         files={"file": ("leads.csv", csv_body, "text/csv")},
         headers=ADMIN_HEADERS,
     )
@@ -451,7 +452,9 @@ async def test_import_leads_csv_stages_campaign_and_creates_qualified_leads(
     assert body["imported"] == 2
     assert body["skipped"] == 0
     assert body["campaign"]["channel"] == "voice"
-    assert body["campaign"]["status"] == "running"
+    # New uploads default to "draft" — outreach doesn't start on its own
+    # anymore (see apps/api/db/models/call_campaign.py).
+    assert body["campaign"]["status"] == "draft"
 
     targets = (await db_session.execute(select(CampaignTarget))).scalars().all()
     assert {t.phone for t in targets} == {"+910000000010", "+910000000011"}
@@ -495,6 +498,7 @@ async def test_import_leads_csv_reports_row_errors(
 
     response = await client.post(
         "/admin/leads/import",
+        params={"channel": "voice"},
         files={"file": ("leads.csv", csv_body, "text/csv")},
         headers=ADMIN_HEADERS,
     )
@@ -506,6 +510,75 @@ async def test_import_leads_csv_reports_row_errors(
     reasons = {e["reason"] for e in body["errors"]}
     assert "missing phone" in reasons
     assert any("country code" in r for r in reasons)
+
+
+async def test_import_leads_csv_unrouted_rows_reported_not_defaulted(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Regression guard for the silent-default-to-voice bug: a row with no
+    'call'/'whatsapp' columns and no 'channel' column, uploaded without a
+    forced channel, must be reported as a per-row error — not silently
+    routed to voice (which used to make "WhatsApp list uploaded, nothing
+    sent" a silent failure)."""
+    await _seed_org(db_session)
+    csv_body = "name,phone\nAsha,+910000000014\n"
+
+    response = await client.post(
+        "/admin/leads/import",
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 400
+
+    targets = (await db_session.execute(select(CampaignTarget))).scalars().all()
+    assert targets == []
+
+
+async def test_import_leads_csv_mixed_call_whatsapp_columns_creates_one_campaign(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """One upload, per-row call/whatsapp columns — some rows call-only, some
+    WhatsApp-only, some both — produces exactly ONE campaign, marked
+    'mixed', with one CampaignTarget per (row, channel) pair. A row marked
+    both channels produces two targets under that same campaign."""
+    await _seed_org(db_session)
+    csv_body = (
+        "name,phone,call,whatsapp\n"
+        "CallOnly,+910000000015,yes,no\n"
+        "WhatsAppOnly,+910000000016,no,yes\n"
+        "Both,+910000000017,yes,yes\n"
+        "Neither,+910000000018,no,no\n"
+    )
+
+    response = await client.post(
+        "/admin/leads/import",
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["imported"] == 4  # "Both" row counts twice, once per channel
+    assert body["skipped"] == 1  # the "Neither" row
+    assert len(body["campaigns"]) == 1
+    assert body["campaigns"][0]["channel"] == "mixed"
+    assert body["campaign"]["channel"] == "mixed"
+
+    campaign = (await db_session.execute(select(CallCampaign))).scalar_one()
+    assert campaign.channel == "mixed"
+    targets = (
+        await db_session.execute(
+            select(CampaignTarget).where(CampaignTarget.campaign_id == campaign.id)
+        )
+    ).scalars().all()
+    by_phone_channel = {(t.phone, t.channel) for t in targets}
+    assert by_phone_channel == {
+        ("+910000000015", "voice"),
+        ("+910000000016", "whatsapp"),
+        ("+910000000017", "voice"),
+        ("+910000000017", "whatsapp"),
+    }
 
 
 async def test_import_leads_csv_decodes_cp1252_fallback(
@@ -521,6 +594,7 @@ async def test_import_leads_csv_decodes_cp1252_fallback(
 
     response = await client.post(
         "/admin/leads/import",
+        params={"channel": "voice"},
         files={"file": ("leads.csv", csv_bytes, "text/csv")},
         headers=ADMIN_HEADERS,
     )
@@ -586,6 +660,7 @@ async def test_import_leads_xlsx_stages_campaign_and_creates_qualified_leads(
 
     response = await client.post(
         "/admin/leads/import",
+        params={"channel": "voice"},
         files={
             "file": (
                 "leads.xlsx",

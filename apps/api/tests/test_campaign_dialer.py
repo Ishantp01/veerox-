@@ -54,6 +54,7 @@ async def _seed_target(
         campaign_id=campaign.id,
         org_id=ORG_ID,
         phone="+919000000001",
+        channel=campaign_channel,
         status=status,
         attempt_count=attempt_count,
         **kwargs,

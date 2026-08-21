@@ -34,11 +34,23 @@ export function useCampaign(id: string | undefined | null) {
   });
 }
 
+export type CampaignStartMode = "draft" | "now" | "scheduled";
+
 export interface CreateCampaignInput {
   name: string;
   criteria: string;
   file: File;
+  /** Omitted on the Campaigns page — channel is resolved per-row from the
+   * file's call/whatsapp columns instead. Still supported for callers that
+   * want to force every row into one channel. */
   channel?: "voice" | "whatsapp";
+  startMode: CampaignStartMode;
+  scheduledStartAt?: string;
+  templateName?: string;
+  templateLanguage?: string;
+  /** Ordered per-{{1}}/{{2}}/... values — see template-param-mapper.tsx. */
+  templateParams?: string[];
+  customMessage?: string;
 }
 
 /**
@@ -59,6 +71,14 @@ async function createCampaign(input: CreateCampaignInput): Promise<CampaignCreat
   form.append("criteria", input.criteria);
   form.append("file", input.file);
   if (input.channel) form.append("channel", input.channel);
+  form.append("start_mode", input.startMode);
+  if (input.scheduledStartAt) form.append("scheduled_start_at", input.scheduledStartAt);
+  if (input.templateName) form.append("template_name", input.templateName);
+  if (input.templateLanguage) form.append("template_language", input.templateLanguage);
+  if (input.templateParams && input.templateParams.length > 0) {
+    form.append("template_params", JSON.stringify(input.templateParams));
+  }
+  if (input.customMessage) form.append("custom_message", input.customMessage);
 
   const res = await fetch(`${base}/admin/campaigns`, {
     method: "POST",
@@ -110,4 +130,21 @@ export function usePauseCampaign() {
 
 export function useResumeCampaign() {
   return useCampaignStatusMutation("resume");
+}
+
+/** POST /admin/campaigns/{id}/schedule → { id, status } */
+export function useScheduleCampaign() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ id: string; status: string }, Error, { id: string; scheduledStartAt: string }>({
+    mutationFn: ({ id, scheduledStartAt }) =>
+      apiFetch<{ id: string; status: string }>(`/admin/campaigns/${id}/schedule`, {
+        method: "POST",
+        body: JSON.stringify({ scheduled_start_at: scheduledStartAt }),
+      }),
+    onSuccess: (_, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.campaign(id) });
+    },
+  });
 }

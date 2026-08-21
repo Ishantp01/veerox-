@@ -88,6 +88,11 @@ class LeadImportRow(BaseModel):
     phone: str
     name: str | None = None
     intent: str | None = None
+    # Per-row channel selection, mirroring the CSV/xlsx 'call'/'whatsapp'
+    # columns. Only consulted when the request's own `channel` is omitted —
+    # see LeadBulkImportIn.channel.
+    call: bool | None = None
+    whatsapp: bool | None = None
 
 
 class LeadBulkImportIn(BaseModel):
@@ -97,7 +102,13 @@ class LeadBulkImportIn(BaseModel):
 
     leads: list[LeadImportRow]
     # Which worker reaches out to the resulting campaign targets. Defaults to
-    # "voice" (in the endpoint) when omitted.
+    # "voice" (in the endpoint) when omitted and no row sets call/whatsapp.
     channel: str | None = None
     campaign_name: str | None = None
     criteria: str | None = None
+    start_mode: Literal["draft", "now", "scheduled"] = "draft"
+    scheduled_start_at: datetime | None = None
+    template_name: str | None = None
+    template_language: str | None = None
+    template_params: list[str] | None = None
+    custom_message: str | None = None

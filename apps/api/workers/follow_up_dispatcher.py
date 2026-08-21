@@ -132,6 +132,9 @@ async def _materialize_rule_tasks() -> None:
                                 rule_id=rule.id,
                                 run_at=datetime.now(UTC) + timedelta(hours=delay_hours),
                                 status="pending",
+                                template_name=rule.template_name,
+                                template_language=rule.template_language,
+                                template_params=[] if rule.template_name else None,
                             )
                         )
                         await db.flush()
@@ -218,6 +221,7 @@ async def _execute_task(task_id: UUID) -> None:
             await wa_client.send_template(
                 lead.phone,
                 task.template_name,
+                task.template_language or "en_US",
                 body_params=task.template_params or [],
                 phone_number_id=phone_number_id,
             )
