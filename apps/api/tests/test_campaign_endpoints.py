@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -16,26 +17,23 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
-from apps.api.db.models import CampaignTarget, Lead, Org
+from apps.api.core.security import generate_login_token, hash_token
+from apps.api.db.models import AccountUser, CallCampaign, CampaignTarget, Lead, Org, OrgMembership, Plan
 from apps.api.deps import get_db, get_redis_dep
+from apps.api.tests.conftest import FakeRedis
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 ADMIN_HEADERS = {"X-Admin-Token": settings.admin_token}
 
 
-class _FakeRedis:
-    async def get(self, key: str) -> str | None:
-        return None
-
-
 @pytest_asyncio.fixture
-async def fake_redis() -> _FakeRedis:
-    return _FakeRedis()
+async def fake_redis() -> FakeRedis:
+    return FakeRedis()
 
 
 @pytest_asyncio.fixture
 async def client(
-    db_session: AsyncSession, fake_redis: _FakeRedis
+    db_session: AsyncSession, fake_redis: FakeRedis
 ) -> AsyncGenerator[AsyncClient, None]:
     from apps.api.main import create_app
 
@@ -44,7 +42,7 @@ async def client(
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
 
-    async def override_get_redis() -> AsyncGenerator[_FakeRedis, None]:
+    async def override_get_redis() -> AsyncGenerator[FakeRedis, None]:
         yield fake_redis
 
     app.dependency_overrides[get_db] = override_get_db
@@ -143,6 +141,56 @@ async def test_create_campaign_reports_missing_phone_rows(
     assert body["imported"] == 0
     assert body["skipped"] == 1
     assert body["errors"][0]["reason"] == "missing phone"
+
+
+async def test_create_campaign_limit_resets_after_plan_renewal(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    org = Org(id=ORG_ID, name="Test Org")
+    db_session.add(org)
+    plan = Plan(
+        code="starter",
+        name="Starter",
+        price_cents=0,
+        limits={"max_campaigns": 1},
+    )
+    db_session.add(plan)
+    await db_session.flush()
+    org.plan_id = plan.id
+    org.plan_started_at = datetime.now(UTC)
+    login_token = generate_login_token()
+    account = AccountUser(email="admin@example.com", token_hash=hash_token(login_token))
+    db_session.add(account)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=account.id, role="admin"))
+    db_session.add(
+        CallCampaign(
+            org_id=ORG_ID,
+            name="Before renewal",
+            criteria="n/a",
+            channel="voice",
+            created_at=datetime.now(UTC) - timedelta(days=1),
+        )
+    )
+    await db_session.commit()
+    login = await client.post("/auth/login", json={"token": login_token})
+    headers = {"X-Session-Token": login.json()["token"]}
+
+    response = await client.post(
+        "/admin/campaigns",
+        data={"name": "After renewal", "criteria": "n/a", "channel": "voice"},
+        files={"file": ("leads.csv", "name,phone\nA,+910000000054\n", "text/csv")},
+        headers=headers,
+    )
+    assert response.status_code == 200
+
+    blocked = await client.post(
+        "/admin/campaigns",
+        data={"name": "Second current campaign", "criteria": "n/a", "channel": "voice"},
+        files={"file": ("leads.csv", "name,phone\nB,+910000000055\n", "text/csv")},
+        headers=headers,
+    )
+    assert blocked.status_code == 402
 
 
 async def test_list_and_get_campaign(client: AsyncClient, db_session: AsyncSession) -> None:

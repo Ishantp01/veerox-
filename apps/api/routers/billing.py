@@ -119,6 +119,9 @@ async def get_billing_usage(org: CurrentOrgDep, db: DbDep) -> BillingUsageOut:
     usage = await get_credit_usage(db, org.org_id)
     return BillingUsageOut(
         period_start=usage.period_start.isoformat(),
+        campaigns=UsageMetricOut(
+            used=usage.campaigns, limit=limits.get("max_campaigns")
+        ),
         call_minutes=UsageMetricOut(
             used=usage.call_minutes, limit=limits.get("max_call_minutes")
         ),

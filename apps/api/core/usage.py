@@ -21,6 +21,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.message import Message
 from apps.api.db.models.org import Org
@@ -32,6 +33,7 @@ class CreditUsage:
     its last recharge — not a calendar boundary."""
 
     period_start: datetime
+    campaigns: float
     call_minutes: float
     whatsapp_messages: float
 
@@ -53,7 +55,12 @@ async def get_credit_usage(db: AsyncSession, org_id: UUID) -> CreditUsage:
     )
     row = org_result.one_or_none()
     if row is None:
-        return CreditUsage(period_start=datetime.now(UTC), call_minutes=0.0, whatsapp_messages=0.0)
+        return CreditUsage(
+            period_start=datetime.now(UTC),
+            campaigns=0.0,
+            call_minutes=0.0,
+            whatsapp_messages=0.0,
+        )
     plan_started_at, created_at = row
     # Reported for display only; the filters below key off plan_started_at.
     period_start = plan_started_at or created_at
@@ -92,8 +99,17 @@ async def get_credit_usage(db: AsyncSession, org_id: UUID) -> CreditUsage:
     )
     whatsapp_count = whatsapp_count_result.scalar_one()
 
+    campaign_filters = [CallCampaign.org_id == org_id]
+    if plan_started_at is not None:
+        campaign_filters.append(CallCampaign.created_at >= plan_started_at)
+    campaign_count_result = await db.execute(
+        select(func.count()).select_from(CallCampaign).where(*campaign_filters)
+    )
+    campaign_count = campaign_count_result.scalar_one()
+
     return CreditUsage(
         period_start=period_start,
+        campaigns=float(campaign_count),
         call_minutes=float(call_seconds) / 60.0,
         whatsapp_messages=float(whatsapp_count),
     )

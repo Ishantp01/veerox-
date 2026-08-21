@@ -27,6 +27,7 @@ export interface UsageMetric {
 export interface BillingUsage {
   /** Start of the credit period — the org's last recharge, not a month. */
   period_start: string;
+  campaigns: UsageMetric;
   call_minutes: UsageMetric;
   whatsapp_messages: UsageMetric;
 }

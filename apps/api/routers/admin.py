@@ -1263,6 +1263,7 @@ async def _create_campaign_from_rows(
         template_language=template_language,
         template_params=template_params,
         custom_message=custom_message,
+        created_at=datetime.now(UTC),
     )
     db.add(campaign)
     await db.flush()
@@ -1464,10 +1465,8 @@ async def create_campaign(
         raise HTTPException(status_code=400, detail="Only .csv or .xlsx files are supported")
 
     org_id = org
-    campaign_count_result = await db.execute(
-        select(func.count()).select_from(CallCampaign).where(CallCampaign.org_id == org_id)
-    )
-    await enforce_plan_limit(db, org_id, "max_campaigns", campaign_count_result.scalar_one())
+    usage = await get_credit_usage(db, org_id)
+    await enforce_plan_limit(db, org_id, "max_campaigns", usage.campaigns)
     resolved_status = {"draft": "draft", "now": "running", "scheduled": "scheduled"}[start_mode]
     return await _create_campaigns_from_rows(
         db,

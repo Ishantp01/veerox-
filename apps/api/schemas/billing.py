@@ -74,6 +74,7 @@ class BillingUsageOut(BaseModel):
     # Start of the *credit* period — the org's last recharge, not a
     # calendar month boundary.
     period_start: str
+    campaigns: UsageMetricOut
     call_minutes: UsageMetricOut
     whatsapp_messages: UsageMetricOut
 

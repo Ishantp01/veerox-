@@ -14,7 +14,6 @@ import {
   useIsOutOfCredit,
   type UsageMetric,
 } from "@/lib/hooks/useBilling";
-import { useCampaigns } from "@/lib/hooks/useCampaigns";
 
 const STATUS_BADGE: Record<string, "success" | "danger" | "neutral"> = {
   active: "success",
@@ -49,7 +48,6 @@ function UsageBar({ label, metric, unit }: { label: string; metric: UsageMetric;
 export default function BillingPage() {
   const { data, isLoading, isError, error, refetch } = useBillingStatus();
   const usage = useBillingUsage();
-  const campaigns = useCampaigns();
   const { user } = useAuth();
   const router = useRouter();
 
@@ -147,18 +145,7 @@ export default function BillingPage() {
                       )}
                       <UsageBar label="Call minutes" metric={usage.data.call_minutes} unit="min" />
                       <UsageBar label="WhatsApp messages" metric={usage.data.whatsapp_messages} />
-                      {data.plan && campaigns.data && (
-                        <UsageBar
-                          label="Campaigns"
-                          metric={{
-                            used: campaigns.data.length,
-                            limit:
-                              typeof data.plan.limits.max_campaigns === "number"
-                                ? data.plan.limits.max_campaigns
-                                : null,
-                          }}
-                        />
-                      )}
+                      <UsageBar label="Campaigns" metric={usage.data.campaigns} />
                     </CardContent>
                   </Card>
                 )}

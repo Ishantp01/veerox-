@@ -17,6 +17,7 @@ from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.usage import get_credit_usage
 from apps.api.db.models import (
     AccountUser,
+    CallCampaign,
     Conversation,
     Message,
     Org,
@@ -86,6 +87,28 @@ async def test_credit_usage_counts_only_since_last_recharge(db_session: AsyncSes
     assert usage.whatsapp_messages == 0.0
 
 
+async def test_credit_usage_counts_campaigns_only_since_last_recharge(
+    db_session: AsyncSession,
+) -> None:
+    org = await _seed_org(db_session)
+    db_session.add(
+        CallCampaign(
+            org_id=ORG_ID,
+            name="Old campaign",
+            criteria="n/a",
+            channel="voice",
+            created_at=datetime.now(UTC) - timedelta(days=1),
+        )
+    )
+    await db_session.flush()
+
+    org.plan_started_at = datetime.now(UTC)
+    await db_session.commit()
+
+    usage = await get_credit_usage(db_session, ORG_ID)
+    assert usage.campaigns == 0.0
+
+
 async def test_credit_usage_does_not_reset_on_calendar_month(db_session: AsyncSession) -> None:
     """Credits are recharge-based, not monthly: usage from before the current
     calendar month still counts as long as it's after the last recharge."""
@@ -147,6 +170,8 @@ async def test_billing_usage_endpoint_reflects_plan_limits(
     response = await client.get("/billing/usage", headers={"X-Session-Token": token})
     assert response.status_code == 200
     body = response.json()
+    assert body["campaigns"]["used"] == 0
+    assert body["campaigns"]["limit"] is None
     assert body["whatsapp_messages"]["used"] == 3
     assert body["whatsapp_messages"]["limit"] == 5
 
