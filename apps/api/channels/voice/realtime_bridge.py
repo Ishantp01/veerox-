@@ -114,7 +114,23 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
         "audio": {
             "input": {
                 "format": {"type": "audio/pcmu"},
-                "turn_detection": {"type": "server_vad", "silence_duration_ms": 500},
+                # Defaults (threshold 0.5, no prefix_padding_ms, no noise
+                # reduction) are tuned for close-mic audio and false-trigger
+                # on phone-line background noise/crosstalk, which then gets
+                # transcribed as bogus user speech and fed to the model as if
+                # it were real input. threshold raised + prefix_padding_ms
+                # added to require a clearer, sustained speech onset before
+                # treating it as a turn; far_field noise_reduction is
+                # OpenAI's profile for telephony/speakerphone-style audio
+                # (as opposed to near_field headset audio) and filters
+                # background noise before VAD/transcription ever see it.
+                "turn_detection": {
+                    "type": "server_vad",
+                    "threshold": 0.6,
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 500,
+                },
+                "noise_reduction": {"type": "far_field"},
                 "transcription": {"model": "whisper-1"},
             },
             "output": {
