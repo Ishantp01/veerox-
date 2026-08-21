@@ -288,9 +288,10 @@ async def voice_stream(ws: WebSocket) -> None:
                         "type": "response.create",
                         "response": {
                             "instructions": (
-                                "Greet the caller warmly in one short sentence, then ask "
-                                "which language they're comfortable speaking in before "
-                                "anything else."
+                                "Greet the caller warmly in one short, bilingual sentence "
+                                "(e.g. a Hindi and English greeting together) so they can "
+                                "reply in whichever language they're comfortable in - do not "
+                                "ask them to choose a language."
                             ),
                         },
                     }
