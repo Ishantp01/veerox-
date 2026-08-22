@@ -124,7 +124,7 @@ export function NewTemplateDialog() {
                   </p>
                 )}
                 <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                  Filling in a body below submits this to Meta under this exact name — it can't be
+                  Filling in a body below submits this to Meta under this exact name — it can&apos;t be
                   changed once submitted.
                 </p>
               </div>
@@ -183,7 +183,7 @@ export function NewTemplateDialog() {
                   No variables — add one for each {`{{1}}, {{2}}, ...`} placeholder in the
                   template body, in order. Meta requires an example value for each (e.g.
                   &quot;Asha&quot;, not a label like &quot;Customer name&quot;) to approve the
-                  template — what's typed here is sent to Meta as that example.
+                  template — what&apos;s typed here is sent to Meta as that example.
                 </p>
               ) : (
                 <div className="flex flex-col gap-2">
