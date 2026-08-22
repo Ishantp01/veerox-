@@ -29,7 +29,10 @@ from apps.api.db.models.org import Org
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
-from apps.api.workers.campaign_scheduling import promote_scheduled_campaigns
+from apps.api.workers.campaign_scheduling import (
+    complete_finished_campaigns,
+    promote_scheduled_campaigns,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -125,6 +128,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None]]
     """
     async with AsyncSessionLocal() as db:
         await promote_scheduled_campaigns(db)
+        await complete_finished_campaigns(db)
         await _reclaim_stale_calls(db)
         capacity = settings.max_concurrent_calls - await _count_calls_in_flight(db)
         if capacity <= 0:

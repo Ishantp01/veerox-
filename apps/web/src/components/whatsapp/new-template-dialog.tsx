@@ -13,6 +13,7 @@ import {
   DialogFooter,
   Input,
   Label,
+  Select,
   Textarea,
   useToast,
 } from "@/components/ui";
@@ -33,7 +34,7 @@ export function NewTemplateDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [language, setLanguage] = useState("en_US");
-  const [category, setCategory] = useState("");
+  const [category, setCategory] = useState("UTILITY");
   const [bodyPreview, setBodyPreview] = useState("");
   const [paramLabels, setParamLabels] = useState<string[]>([]);
   const [fieldErrors, setFieldErrors] = useState<TemplateFieldErrors>({});
@@ -43,7 +44,7 @@ export function NewTemplateDialog() {
   function reset() {
     setName("");
     setLanguage("en_US");
-    setCategory("");
+    setCategory("UTILITY");
     setBodyPreview("");
     setParamLabels([]);
     setFieldErrors({});
@@ -72,7 +73,15 @@ export function NewTemplateDialog() {
       },
       {
         onSuccess: () => {
-          toast({ title: "Template created", variant: "success" });
+          toast({
+            title: bodyPreview
+              ? "Submitted to Meta for review"
+              : "Template saved (not submitted to Meta)",
+            description: bodyPreview
+              ? "Check back for the approval status — usually minutes to 24h."
+              : undefined,
+            variant: "success",
+          });
           reset();
           setOpen(false);
         },
@@ -115,7 +124,8 @@ export function NewTemplateDialog() {
                   </p>
                 )}
                 <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                  Must exactly match the name approved in WhatsApp Manager.
+                  Filling in a body below submits this to Meta under this exact name — it can't be
+                  changed once submitted.
                 </p>
               </div>
               <div>
@@ -140,13 +150,21 @@ export function NewTemplateDialog() {
               </div>
             </div>
             <div>
-              <Label htmlFor="template-category">Category (optional)</Label>
-              <Input
+              <Label htmlFor="template-category">Category</Label>
+              <Select
                 id="template-category"
                 value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                placeholder="marketing / utility / authentication"
-              />
+                onChange={setCategory}
+                className="w-full"
+              >
+                <option value="UTILITY">Utility</option>
+                <option value="MARKETING">Marketing</option>
+                <option value="AUTHENTICATION">Authentication</option>
+              </Select>
+              <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                Required by Meta when a body is filled in below — Meta rejects mismatched or
+                misleading categories, so pick the closest fit.
+              </p>
             </div>
             <div>
               <div className="mb-1.5 flex items-center justify-between">
@@ -163,7 +181,9 @@ export function NewTemplateDialog() {
               {paramLabels.length === 0 ? (
                 <p className="text-xs text-slate-400 dark:text-slate-500">
                   No variables — add one for each {`{{1}}, {{2}}, ...`} placeholder in the
-                  template body, in order, with a short label (e.g. &quot;Customer name&quot;).
+                  template body, in order. Meta requires an example value for each (e.g.
+                  &quot;Asha&quot;, not a label like &quot;Customer name&quot;) to approve the
+                  template — what's typed here is sent to Meta as that example.
                 </p>
               ) : (
                 <div className="flex flex-col gap-2">
@@ -179,7 +199,7 @@ export function NewTemplateDialog() {
                             prev.map((l, i) => (i === index ? e.target.value : l)),
                           )
                         }
-                        placeholder={`Label for {{${index + 1}}}`}
+                        placeholder={`Example value for {{${index + 1}}}, e.g. "Asha"`}
                       />
                       <Button
                         type="button"
@@ -196,13 +216,17 @@ export function NewTemplateDialog() {
               )}
             </div>
             <div>
-              <Label htmlFor="template-body-preview">Body preview (optional)</Label>
+              <Label htmlFor="template-body-preview">Body</Label>
               <Textarea
                 id="template-body-preview"
                 rows={3}
                 value={bodyPreview}
                 onChange={(e) => setBodyPreview(e.target.value)}
-                placeholder="Paste the approved template body here for reference."
+                placeholder={
+                  'Write the template body here, e.g. "Hi {{1}}, your appointment is on {{2}}." ' +
+                  "Filling this in submits the template to Meta for review. Leave blank to just " +
+                  "save a local record without submitting anything."
+                }
                 aria-invalid={fieldErrors.bodyPreview ? true : undefined}
                 aria-describedby={fieldErrors.bodyPreview ? "template-body-preview-error" : undefined}
               />

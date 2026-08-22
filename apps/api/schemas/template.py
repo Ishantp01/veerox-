@@ -33,6 +33,12 @@ class TemplateOut(BaseModel):
     meta_status: str | None = None
 
 
+class TemplateSyncResult(BaseModel):
+    created: list[TemplateOut]
+    skipped: int
+    total_on_meta: int
+
+
 class TemplateUpdateIn(BaseModel):
     name: str | None = None
     language: str | None = None

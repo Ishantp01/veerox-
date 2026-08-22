@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, Trash2 } from "lucide-react";
+import { FileText, RefreshCw, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import {
@@ -15,9 +15,10 @@ import {
   TableCell,
   TableHeader,
   TableRow,
+  useToast,
 } from "@/components/ui";
 import { NewTemplateDialog } from "@/components/whatsapp/new-template-dialog";
-import { useDeleteTemplate, useTemplates, useUpdateTemplate } from "@/lib/hooks";
+import { useDeleteTemplate, useSyncTemplates, useTemplates, useUpdateTemplate } from "@/lib/hooks";
 
 const STATUS_VARIANT: Record<string, BadgeVariant> = {
   APPROVED: "success",
@@ -44,13 +45,58 @@ export default function TemplatesPage() {
   const templates = useTemplates();
   const updateTemplate = useUpdateTemplate();
   const deleteTemplate = useDeleteTemplate();
+  const syncTemplates = useSyncTemplates();
+  const { toast } = useToast();
+
+  function handleSync() {
+    syncTemplates.mutate(undefined, {
+      onSuccess: (result) => {
+        toast({
+          title:
+            result.created.length > 0
+              ? `Added ${result.created.length} template(s) from Meta`
+              : "Already up to date",
+          description:
+            result.created.length > 0
+              ? result.created.map((t) => t.name).join(", ")
+              : `All ${result.total_on_meta} template(s) on Meta already have a local row.`,
+        });
+      },
+      onError: (err) =>
+        toast({ title: "Could not sync from Meta", description: err.message, variant: "error" }),
+    });
+  }
+
+  function handleDelete(id: string, name: string) {
+    deleteTemplate.mutate(id, {
+      onSuccess: () =>
+        toast({
+          title: "Removed from this list",
+          description: `Still exists on Meta — Sync from Meta will bring "${name}" back.`,
+        }),
+      onError: (err) =>
+        toast({ title: "Could not delete template", description: err.message, variant: "error" }),
+    });
+  }
 
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="WhatsApp Templates"
         description="Meta-approved templates, saved once and picked from a dropdown when sending — no more retyping the name, language, or parameters."
-        action={<NewTemplateDialog />}
+        action={
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={handleSync}
+              loading={syncTemplates.isPending}
+            >
+              {!syncTemplates.isPending && <RefreshCw size={15} aria-hidden />}
+              Sync from Meta
+            </Button>
+            <NewTemplateDialog />
+          </div>
+        }
       />
 
       <Card>
@@ -126,7 +172,7 @@ export default function TemplatesPage() {
                           variant="ghost"
                           size="sm"
                           aria-label={`Delete ${template.name}`}
-                          onClick={() => deleteTemplate.mutate(template.id)}
+                          onClick={() => handleDelete(template.id, template.name)}
                         >
                           <Trash2 size={14} aria-hidden />
                         </Button>

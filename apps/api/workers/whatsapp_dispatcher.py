@@ -36,7 +36,10 @@ from apps.api.db.models.org import Org
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
-from apps.api.workers.campaign_scheduling import promote_scheduled_campaigns
+from apps.api.workers.campaign_scheduling import (
+    complete_finished_campaigns,
+    promote_scheduled_campaigns,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -103,6 +106,7 @@ async def _claim_targets() -> list[_ClaimedTarget]:
     """
     async with AsyncSessionLocal() as db:
         await promote_scheduled_campaigns(db)
+        await complete_finished_campaigns(db)
         # Over-fetch beyond `_BATCH_SIZE` since some candidates may belong to
         # an over-limit org and get skipped rather than claimed.
         stmt = (

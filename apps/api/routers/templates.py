@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import structlog
 from uuid import UUID
 
@@ -13,7 +14,7 @@ from apps.api.channels.whatsapp import client as wa_client
 from apps.api.core.tools import _default_org_id
 from apps.api.db.models import WhatsAppTemplate
 from apps.api.deps import DbDep, RedisDep, verify_admin_or_session
-from apps.api.schemas.template import TemplateCreate, TemplateOut, TemplateUpdateIn
+from apps.api.schemas.template import TemplateCreate, TemplateOut, TemplateSyncResult, TemplateUpdateIn
 
 logger = structlog.get_logger(__name__)
 
@@ -77,8 +78,51 @@ async def list_templates(
     ]
 
 
+_VALID_META_CATEGORIES = {"MARKETING", "UTILITY", "AUTHENTICATION"}
+
+
 @router.post("/whatsapp-templates", response_model=TemplateOut, status_code=201)
 async def create_template(payload: TemplateCreate, db: DbDep) -> WhatsAppTemplate:
+    """Create a local template row — and, when ``body_preview`` (the actual
+    template body) is given, submit it to Meta for review first.
+
+    Submitting requires a valid category and, per placeholder, an example
+    value — ``param_labels`` doubles as that example list (Meta only needs
+    *an* example per ``{{n}}``, not a human label, so whatever's typed in
+    those boxes is sent as-is). A campaign still can't use the template
+    until Meta approves it (``meta_status`` flips PENDING -> APPROVED on the
+    list endpoint) — this only registers it for review.
+
+    Leaving ``body_preview`` blank skips Meta entirely and just saves a
+    local row, for cataloging a template that already exists on the WABA
+    without re-submitting it (the ``/whatsapp-templates/sync`` endpoint is
+    the better way to do that now, but this is kept for a manual/offline
+    entry).
+    """
+    if payload.body_preview:
+        category = (payload.category or "UTILITY").strip().upper()
+        if category not in _VALID_META_CATEGORIES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"category must be one of {', '.join(sorted(_VALID_META_CATEGORIES))} "
+                    "to submit a template to Meta"
+                ),
+            )
+        try:
+            await wa_client.create_template(
+                name=payload.name,
+                body_text=payload.body_preview,
+                category=category,
+                language_code=payload.language,
+                example_params=[p for p in payload.param_labels if p.strip()] or None,
+            )
+        except httpx.HTTPStatusError as exc:
+            message = wa_client.friendly_error_message(wa_client._meta_error_detail(exc))
+            raise HTTPException(
+                status_code=400, detail=f"Meta rejected this template: {message}"
+            ) from exc
+
     template = WhatsAppTemplate(
         org_id=_default_org_id(),
         name=payload.name,
@@ -92,6 +136,83 @@ async def create_template(payload: TemplateCreate, db: DbDep) -> WhatsAppTemplat
     await db.commit()
     await db.refresh(template)
     return template
+
+
+_BODY_PLACEHOLDER_RE = re.compile(r"\{\{\s*(\d+)\s*\}\}")
+
+
+def _body_component(meta_template: dict) -> dict | None:
+    for component in meta_template.get("components") or []:
+        if component.get("type") == "BODY":
+            return component
+    return None
+
+
+@router.post("/whatsapp-templates/sync", response_model=TemplateSyncResult)
+async def sync_templates_from_meta(db: DbDep) -> TemplateSyncResult:
+    """Pull every template that exists on the WABA in Meta and add a local
+    row for any that don't have one yet (matched by name+language).
+
+    Templates only ever get made directly in Meta Business Manager — this
+    app has no "submit to Meta" flow — so without this, a template created
+    there is invisible on the WhatsApp Templates page (and unusable in a
+    campaign) until someone manually re-types its name/language/params here.
+    Existing local rows are left untouched (their ``param_labels`` are
+    hand-edited to be human-readable, e.g. "Name"/"Date" — Meta only gives us
+    an example value, not a label, so we never overwrite what's there).
+    """
+    org_id = _default_org_id()
+    meta_templates = await wa_client.list_templates()
+
+    existing = (
+        (
+            await db.execute(
+                select(WhatsAppTemplate.name, WhatsAppTemplate.language).where(
+                    WhatsAppTemplate.org_id == org_id
+                )
+            )
+        )
+        .all()
+    )
+    existing_keys = {(name, language) for name, language in existing}
+
+    created: list[WhatsAppTemplate] = []
+    for meta_template in meta_templates:
+        name = meta_template.get("name")
+        language = meta_template.get("language")
+        if not name or not language or (name, language) in existing_keys:
+            continue
+
+        body = _body_component(meta_template)
+        body_text = body.get("text") if body else None
+        placeholder_count = (
+            len(set(_BODY_PLACEHOLDER_RE.findall(body_text))) if body_text else 0
+        )
+        category = meta_template.get("category")
+
+        template = WhatsAppTemplate(
+            org_id=org_id,
+            name=name,
+            language=language,
+            category=category.title() if category else None,
+            param_labels=[f"Param {i}" for i in range(1, placeholder_count + 1)],
+            body_preview=body_text,
+            active=True,
+        )
+        db.add(template)
+        created.append(template)
+        existing_keys.add((name, language))
+
+    if created:
+        await db.commit()
+        for template in created:
+            await db.refresh(template)
+
+    return TemplateSyncResult(
+        created=[TemplateOut.model_validate(t) for t in created],
+        skipped=len(meta_templates) - len(created),
+        total_on_meta=len(meta_templates),
+    )
 
 
 @router.patch("/whatsapp-templates/{template_id}", response_model=TemplateOut)

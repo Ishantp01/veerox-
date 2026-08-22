@@ -271,12 +271,17 @@ async def list_templates() -> list[dict[str, Any]]:
     ``REJECTED``) next to the locally-saved template rows, which otherwise
     have no status field of their own — creating a row in our DB is just a
     local metadata cache, it never touches Meta (see ``routers/templates.py``).
+
+    ``components`` is included so callers (the ``/whatsapp-templates/sync``
+    endpoint) can read the BODY component's text/placeholder count for
+    templates that don't have a local row yet — Meta is the only source for
+    that, our local row is created *from* this data, not the other way round.
     """
     url = (
         f"{_GRAPH_BASE}/{settings.meta_graph_api_version}"
         f"/{settings.meta_whatsapp_business_account_id}/message_templates"
     )
-    params = {"fields": "name,language,status,category", "limit": 200}
+    params = {"fields": "name,language,status,category,components", "limit": 200}
     try:
         r = await _http.get(url, params=params, headers=_auth_headers())
         r.raise_for_status()

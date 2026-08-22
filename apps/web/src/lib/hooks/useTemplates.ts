@@ -80,3 +80,23 @@ export function useDeleteTemplate() {
     },
   });
 }
+
+export interface TemplateSyncResult {
+  created: Template[];
+  skipped: number;
+  total_on_meta: number;
+}
+
+/** POST /whatsapp-templates/sync → adds a local row for every template that
+ * exists on Meta but doesn't have one yet. */
+export function useSyncTemplates() {
+  const queryClient = useQueryClient();
+
+  return useMutation<TemplateSyncResult, Error, void>({
+    mutationFn: () =>
+      apiFetch<TemplateSyncResult>("/whatsapp-templates/sync", { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["whatsapp-templates"] });
+    },
+  });
+}

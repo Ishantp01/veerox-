@@ -76,9 +76,11 @@ export {
   useCreateTemplate,
   useUpdateTemplate,
   useDeleteTemplate,
+  useSyncTemplates,
   type TemplateFilters,
   type TemplateCreateInput,
   type TemplateUpdateInput,
+  type TemplateSyncResult,
 } from "./useTemplates";
 export {
   useBillingStatus,
