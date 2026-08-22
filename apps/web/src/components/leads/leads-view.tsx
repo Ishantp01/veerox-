@@ -128,8 +128,6 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
   );
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [importStartMode, setImportStartMode] = useState<LeadImportStartMode>("draft");
-  const [importScheduledAt, setImportScheduledAt] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
@@ -176,35 +174,19 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
     e.target.value = ""; // allow re-selecting the same file next time
     if (!file) return;
 
-    if (importStartMode === "scheduled" && !importScheduledAt) {
-      toast({
-        title: "Pick a date and time",
-        description: "Choose when this campaign should start, or switch to Draft/Start now.",
-        variant: "error",
-      });
-      return;
-    }
-
     setImporting(true);
     try {
-      const scheduledIso =
-        importStartMode === "scheduled" ? new Date(importScheduledAt).toISOString() : undefined;
-      const result = await importLeadsFile(file, effectiveChannel, importStartMode, scheduledIso);
+      const result = await importLeadsFile(file, effectiveChannel);
       // Leads-page import creates a Lead per contact immediately (status
       // "qualified", editable like any lead) — unlike the Campaigns page,
       // which only creates a Lead once the AI actually qualifies someone.
       // It also still stages the usual campaign for AI outreach in the
       // background (routers/admin.py::_create_campaigns_from_rows,
       // auto_qualify=True) — one campaign per upload, even for a mixed
-      // call+WhatsApp file. Outreach only begins once the campaign is
-      // started — see importStartMode.
+      // call+WhatsApp file. Always saved as a draft here; start it from the
+      // Campaigns page when ready.
       const campaignName = `"${result.campaign.name}"`;
-      const outreachText =
-        importStartMode === "now"
-          ? `The AI is now reaching out via ${campaignName}.`
-          : importStartMode === "scheduled"
-            ? `Outreach via ${campaignName} is scheduled to begin at the time you chose.`
-            : `Outreach via ${campaignName} is saved as a draft — start it from the Campaigns page when ready.`;
+      const outreachText = `Outreach via ${campaignName} is saved as a draft — start it from the Campaigns page when ready.`;
       toast({
         title: "Import complete",
         description:
@@ -301,24 +283,6 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
               <FileSpreadsheet size={15} aria-hidden />
               Sample XLSX
             </Button>
-            <Select
-              value={importStartMode}
-              onChange={(v) => setImportStartMode(v as LeadImportStartMode)}
-              aria-label="When to start outreach for imported leads"
-            >
-              <option value="draft">Save as draft</option>
-              <option value="now">Start now</option>
-              <option value="scheduled">Schedule for…</option>
-            </Select>
-            {importStartMode === "scheduled" && (
-              <input
-                type="datetime-local"
-                value={importScheduledAt}
-                onChange={(e) => setImportScheduledAt(e.target.value)}
-                aria-label="Scheduled start date and time"
-                className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-              />
-            )}
             <Button
               variant="outline"
               size="md"
