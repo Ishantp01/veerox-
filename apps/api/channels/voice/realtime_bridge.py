@@ -287,6 +287,7 @@ async def voice_stream(ws: WebSocket) -> None:
             # just because qualify_lead didn't fire before they hung up.
             await voice_adapter.attach_campaign_conversation(campaign_target_id, conversation_id)
         instructions = await _system_instructions(campaign_target_id, org_id)
+        state.base_instructions = instructions
 
         # No OpenAI-Beta header on the GA endpoint — sending it alongside a GA
         # model name causes the connection to be rejected outright.
@@ -304,11 +305,9 @@ async def voice_stream(ws: WebSocket) -> None:
                         "type": "response.create",
                         "response": {
                             "instructions": (
-                                "Greet the caller warmly in one short, simple sentence using "
-                                "just a neutral greeting word (e.g. \"Hello!\") rather than a "
-                                "full sentence in any specific language - keep it minimal so "
-                                "it doesn't anchor the conversation to one language. Do not "
-                                "ask them to choose a language."
+                                "Begin the call now: greet the caller and ask which language "
+                                "they'd be comfortable speaking in, exactly as your "
+                                "instructions describe for your first reply."
                             ),
                         },
                     }

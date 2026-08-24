@@ -3,5 +3,6 @@
     "allow": [
       "Bash(.venv/Scripts/python -c ' *)"
     ]
-  }
+  },
+  "plansDirectory": ".claude/plans"
 }

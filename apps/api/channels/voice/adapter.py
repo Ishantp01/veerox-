@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.voice import elevenlabs_client
+from apps.api.channels.voice import language_detect
 from apps.api.config import settings
 from apps.api.core.memory import persist_turn
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
@@ -66,6 +67,16 @@ class CallState:
     eleven_session: elevenlabs_client.ElevenLabsTTSSession | None = field(default=None, repr=False)
     eleven_forward_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
     eleven_text_buffer: str = ""
+    # The system instructions realtime_bridge.py sent in the initial
+    # session.update — kept so the one-shot language-detection hint (see
+    # _apply_language_hint below) can append to the real instructions
+    # instead of overwriting them with a guessed placeholder.
+    base_instructions: str = ""
+    # Set once language_detect has run on the caller's first transcript of
+    # the call, whether or not it resolved to anything — this fires at most
+    # once per call, never on later turns (mid-call language switching stays
+    # an explicit caller request, handled entirely by the model itself).
+    language_hint_sent: bool = False
 
 
 def realtime_tools() -> list[dict[str, Any]]:
@@ -318,6 +329,35 @@ async def _teardown_elevenlabs_turn(state: CallState) -> None:
     state.eleven_text_buffer = ""
 
 
+async def _apply_language_hint(oai_ws: Any, state: CallState, text: str, log: Any) -> None:
+    """One-shot: run language_detect on the caller's first transcript of the
+    call and, if it resolves, nudge the session with the detected language
+    instead of leaving the model to guess unaided. Runs as a background
+    task (see its call site) so the LLM-fallback branch never stalls audio
+    handling on the hot event-processing path."""
+    language = await language_detect.detect_caller_language(text)
+    if language is None:
+        return
+    updated_instructions = (
+        f"{state.base_instructions}\n\n"
+        f"Live language signal: the caller's own words indicate their language "
+        f"is {language} - use it for your very next reply and the rest of the "
+        f"call unless they explicitly ask you to switch."
+    )
+    try:
+        await oai_ws.send(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "realtime", "instructions": updated_instructions},
+                }
+            )
+        )
+        log.info("voice_language_hint_applied", language=language)
+    except Exception:  # noqa: BLE001
+        log.warning("voice_language_hint_send_failed", exc_info=True)
+
+
 async def handle_openai_event(
     event: dict[str, Any],
     call_ws: WebSocket,
@@ -355,6 +395,12 @@ async def handle_openai_event(
     elif etype == "conversation.item.input_audio_transcription.completed":
         state.pending_user_transcript = (event.get("transcript") or "").strip()
         log.info("voice_user_transcript", text=state.pending_user_transcript)
+        if not state.language_hint_sent:
+            state.language_hint_sent = True
+            if state.pending_user_transcript:
+                asyncio.create_task(
+                    _apply_language_hint(oai_ws, state, state.pending_user_transcript, log)
+                )
 
     elif etype in ("response.audio_transcript.done", "response.output_audio_transcript.done"):
         assistant_text = (event.get("transcript") or "").strip()
