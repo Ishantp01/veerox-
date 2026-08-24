@@ -17,12 +17,15 @@ def setup_logging() -> None:
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
     ]
 
     try:
         import orjson
 
-        json_renderer = structlog.processors.JSONRenderer(serializer=orjson.dumps)
+        json_renderer = structlog.processors.JSONRenderer(
+            serializer=lambda *args, **kwargs: orjson.dumps(*args, **kwargs).decode()
+        )
     except ImportError:
         json_renderer = structlog.processors.JSONRenderer()
 
