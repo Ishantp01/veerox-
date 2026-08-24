@@ -4,13 +4,20 @@ import { Trash2 } from "lucide-react";
 import {
   Badge,
   Button,
+  Select,
   Table,
   TableCell,
   TableHeader,
   TableRow,
   useToast,
 } from "@/components/ui";
-import { useAdminPlans, useDeletePlan, useUpdatePlan, type AdminPlan } from "@/lib/hooks/useAdminPlans";
+import {
+  PLAN_RESOURCE_TYPE_OPTIONS,
+  useAdminPlans,
+  useDeletePlan,
+  useUpdatePlan,
+  type AdminPlan,
+} from "@/lib/hooks/useAdminPlans";
 import { NewPlanDialog } from "./new-plan-dialog";
 
 function formatRupees(cents: number): string {
@@ -71,6 +78,38 @@ function BooleanLimitCell({ plan, field }: { plan: AdminPlan; field: string }) {
   );
 }
 
+function ResourceTypeCell({ plan }: { plan: AdminPlan }) {
+  const updatePlan = useUpdatePlan();
+  const { toast } = useToast();
+  const value = plan.resource_type ?? "";
+
+  function handleChange(next: string) {
+    if (next === value) return;
+    updatePlan.mutate(
+      { code: plan.code, resource_type: next || null },
+      {
+        onError: (err) =>
+          toast({ title: "Could not update plan type", description: err.message, variant: "error" }),
+      }
+    );
+  }
+
+  return (
+    <Select
+      value={value}
+      onChange={handleChange}
+      aria-label={`Plan type for ${plan.name}`}
+      className="w-48"
+    >
+      {PLAN_RESOURCE_TYPE_OPTIONS.map((opt) => (
+        <option key={opt.value} value={opt.value}>
+          {opt.label}
+        </option>
+      ))}
+    </Select>
+  );
+}
+
 /**
  * Platform-wide plan catalog editor — every field here affects billing/limits
  * for all orgs on that plan, not just the viewer's own org (see
@@ -105,6 +144,7 @@ export function PlanAdminTable() {
           <thead>
             <TableRow isHeader>
               <TableHeader>Plan</TableHeader>
+              <TableHeader>Type</TableHeader>
               <TableHeader>Price / renewal</TableHeader>
               <TableHeader>Team members</TableHeader>
               <TableHeader>Campaigns</TableHeader>
@@ -124,6 +164,9 @@ export function PlanAdminTable() {
                       inactive
                     </Badge>
                   )}
+                </TableCell>
+                <TableCell>
+                  <ResourceTypeCell plan={plan} />
                 </TableCell>
                 <TableCell>{formatRupees(plan.price_cents)}</TableCell>
                 <TableCell>

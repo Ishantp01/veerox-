@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from apps.api.db.base import Base
@@ -27,6 +28,15 @@ class Org(Base):
     plan_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Org-specific effective resource limits, overriding Plan.limits once
+    # populated — this is what lets a single-resource recharge (see
+    # routers/billing.py `_activate_paid_payment`) top up e.g. call minutes
+    # without disturbing WhatsApp messages/team members/campaigns. NULL
+    # means "never touched by a recharge under this scheme yet" — every
+    # metric falls back to the current plan's `limits` wholesale, so
+    # existing orgs are unaffected until their next recharge (see
+    # deps.py `effective_limits`).
+    resource_limits: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

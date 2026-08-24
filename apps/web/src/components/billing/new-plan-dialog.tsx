@@ -13,9 +13,10 @@ import {
   DialogFooter,
   Input,
   Label,
+  Select,
   useToast,
 } from "@/components/ui";
-import { useCreatePlan } from "@/lib/hooks/useAdminPlans";
+import { PLAN_RESOURCE_TYPE_OPTIONS, useCreatePlan } from "@/lib/hooks/useAdminPlans";
 
 const EMPTY = {
   code: "",
@@ -26,24 +27,44 @@ const EMPTY = {
   maxCallMinutes: "",
   maxWhatsappMessages: "",
   automatedFollowups: false,
+  resourceType: "",
 };
 
-const planSchema = z.object({
+// Blank means "not included in this plan" (stored as 0, same convention as
+// explicitly typing 0 — see choose-plan-cards.tsx, which hides a 0-valued
+// limit from the feature list entirely). Left blank is just friendlier than
+// forcing every admin to type "0" for a resource a plan doesn't grant.
+const limitField = z
+  .string()
+  .trim()
+  .transform((v) => (v === "" ? 0 : Number(v)))
+  .pipe(z.number().nonnegative("Must be zero or greater"));
+
+const planFields = z.object({
   code: z.string().trim().min(1, "Code is required"),
   name: z.string().trim().min(1, "Name is required"),
   priceRupees: z.coerce.number().nonnegative("Price must be zero or greater"),
-  maxSeats: z.coerce.number().nonnegative("Must be zero or greater"),
-  maxCampaigns: z.coerce.number().nonnegative("Must be zero or greater"),
-  maxCallMinutes: z.coerce.number().nonnegative("Must be zero or greater"),
-  maxWhatsappMessages: z.coerce.number().nonnegative("Must be zero or greater"),
+  maxSeats: limitField,
+  maxCampaigns: limitField,
+  maxCallMinutes: limitField,
+  maxWhatsappMessages: limitField,
 });
 
-type PlanFieldErrors = Partial<Record<keyof typeof planSchema.shape, string>>;
+const planSchema = planFields.refine(
+  (data) =>
+    [data.maxSeats, data.maxCampaigns, data.maxCallMinutes, data.maxWhatsappMessages].some(
+      (v) => v > 0
+    ),
+  { message: "Set at least one limit above zero — a plan with nothing in it can't be purchased." }
+);
+
+type PlanFieldErrors = Partial<Record<keyof typeof planFields.shape, string>>;
 
 export function NewPlanDialog() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [fieldErrors, setFieldErrors] = useState<PlanFieldErrors>({});
+  const [formError, setFormError] = useState<string | null>(null);
   const createPlan = useCreatePlan();
   const { toast } = useToast();
 
@@ -52,14 +73,21 @@ export function NewPlanDialog() {
     const parsed = planSchema.safeParse(form);
     if (!parsed.success) {
       const errors: PlanFieldErrors = {};
+      let topLevelError: string | null = null;
       for (const issue of parsed.error.issues) {
+        if (issue.path.length === 0) {
+          topLevelError = issue.message;
+          continue;
+        }
         const key = issue.path[0] as keyof PlanFieldErrors;
         if (!errors[key]) errors[key] = issue.message;
       }
       setFieldErrors(errors);
+      setFormError(topLevelError);
       return;
     }
     setFieldErrors({});
+    setFormError(null);
     createPlan.mutate(
       {
         code: parsed.data.code,
@@ -72,12 +100,14 @@ export function NewPlanDialog() {
           max_whatsapp_messages: parsed.data.maxWhatsappMessages,
           automated_followups: form.automatedFollowups,
         },
+        resource_type: form.resourceType || null,
       },
       {
         onSuccess: () => {
           toast({ title: "Plan created", variant: "success" });
           setForm(EMPTY);
           setFieldErrors({});
+          setFormError(null);
           setOpen(false);
         },
         onError: (err) =>
@@ -155,9 +185,39 @@ export function NewPlanDialog() {
                 </p>
               )}
             </div>
-            <p className="-mb-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
-              Limits
-            </p>
+            <div>
+              <Label htmlFor="plan-resource-type">Plan type</Label>
+              <Select
+                id="plan-resource-type"
+                value={form.resourceType}
+                onChange={(value) => setForm((f) => ({ ...f, resourceType: value }))}
+                className="w-full"
+              >
+                {PLAN_RESOURCE_TYPE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </Select>
+              <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+                {form.resourceType
+                  ? "A recharge SKU: buying it only tops up this one resource — the other limits below are ignored."
+                  : "A full plan: buying it replaces every resource below with the values you set here."}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+                Limits
+              </p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Leave a limit blank for &quot;not included&quot; — at least one must be set.
+              </p>
+            </div>
+            {formError && (
+              <p role="alert" className="-mt-2 text-xs text-red-600">
+                {formError}
+              </p>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="plan-seats">Team members</Label>
@@ -167,7 +227,7 @@ export function NewPlanDialog() {
                   min={0}
                   value={form.maxSeats}
                   onChange={(e) => setForm((f) => ({ ...f, maxSeats: e.target.value }))}
-                  placeholder="5"
+                  placeholder="Not included"
                   aria-invalid={fieldErrors.maxSeats ? true : undefined}
                   aria-describedby={fieldErrors.maxSeats ? "plan-seats-error" : undefined}
                 />
@@ -185,6 +245,7 @@ export function NewPlanDialog() {
                   min={0}
                   value={form.maxCampaigns}
                   onChange={(e) => setForm((f) => ({ ...f, maxCampaigns: e.target.value }))}
+                  placeholder="Not included"
                   aria-invalid={fieldErrors.maxCampaigns ? true : undefined}
                   aria-describedby={fieldErrors.maxCampaigns ? "plan-campaigns-error" : undefined}
                 />
@@ -204,6 +265,7 @@ export function NewPlanDialog() {
                   min={0}
                   value={form.maxCallMinutes}
                   onChange={(e) => setForm((f) => ({ ...f, maxCallMinutes: e.target.value }))}
+                  placeholder="Not included"
                   aria-invalid={fieldErrors.maxCallMinutes ? true : undefined}
                   aria-describedby={fieldErrors.maxCallMinutes ? "plan-call-minutes-error" : undefined}
                 />
@@ -223,6 +285,7 @@ export function NewPlanDialog() {
                   onChange={(e) =>
                     setForm((f) => ({ ...f, maxWhatsappMessages: e.target.value }))
                   }
+                  placeholder="Not included"
                   aria-invalid={fieldErrors.maxWhatsappMessages ? true : undefined}
                   aria-describedby={
                     fieldErrors.maxWhatsappMessages ? "plan-whatsapp-error" : undefined

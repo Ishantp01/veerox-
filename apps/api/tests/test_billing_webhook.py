@@ -122,6 +122,66 @@ async def test_webhook_is_idempotent_on_duplicate_event_id(
     assert len(events) == 1
 
 
+async def test_webhook_duplicate_delivery_does_not_double_apply_recharge(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The dup-event-id guard (BillingEvent.provider_event_id) must stop a
+    redelivered webhook from applying a resource recharge twice — not just
+    from creating a second BillingEvent row."""
+    plan = await _seed_org_and_plan(db_session)
+    org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
+    org.plan_id = plan.id
+    recharge_plan = Plan(
+        code="call-minutes-1000",
+        name="1000 Call Minutes",
+        price_cents=99900,
+        limits={"max_call_minutes": 1000},
+        resource_type="max_call_minutes",
+    )
+    db_session.add(recharge_plan)
+    await db_session.flush()
+    db_session.add(
+        BillingPayment(
+            org_id=ORG_ID,
+            provider="razorpay",
+            provider_order_id="order_recharge_dup",
+            plan_id=recharge_plan.id,
+            amount_cents=99900,
+            status="created",
+        )
+    )
+    await db_session.commit()
+
+    event = _fake_event(
+        "payment.captured",
+        payment={"id": "pay_recharge_dup", "order_id": "order_recharge_dup"},
+    )
+
+    with patch("apps.api.routers.billing.settings.razorpay_key_id", "rzp_test_x"), patch(
+        "apps.api.routers.billing.settings.razorpay_key_secret", "secret_x"
+    ), patch("apps.api.routers.billing.settings.razorpay_webhook_secret", "whsec_test"), patch(
+        "apps.api.routers.billing.razorpay.Client"
+    ) as mock_client_cls:
+        mock_client_cls.return_value.utility.verify_webhook_signature.return_value = True
+        first = await client.post(
+            "/billing/webhook",
+            json=event,
+            headers={"X-Razorpay-Signature": "fake", "X-Razorpay-Event-Id": "evt_recharge_dup"},
+        )
+        second = await client.post(
+            "/billing/webhook",
+            json=event,
+            headers={"X-Razorpay-Signature": "fake", "X-Razorpay-Event-Id": "evt_recharge_dup"},
+        )
+
+    assert first.status_code == 204
+    assert second.status_code == 204
+
+    org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
+    # Exactly one application of the +1000 recharge, not two.
+    assert org.resource_limits["max_call_minutes"] == 1000
+
+
 async def test_webhook_payment_failed_marks_payment_failed_without_downgrading_org(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

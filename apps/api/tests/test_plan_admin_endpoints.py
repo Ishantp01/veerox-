@@ -126,3 +126,40 @@ async def test_create_free_plan(client: AsyncClient) -> None:
         headers=ADMIN_HEADERS,
     )
     assert response.status_code == 201
+
+
+async def test_create_plan_with_resource_type_round_trips(client: AsyncClient) -> None:
+    create_response = await client.post(
+        "/billing/plans",
+        json={
+            "code": "call-minutes-topup",
+            "name": "1000 Call Minutes",
+            "price_cents": 99900,
+            "limits": {"max_call_minutes": 1000},
+            "resource_type": "max_call_minutes",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert create_response.status_code == 201
+    assert create_response.json()["resource_type"] == "max_call_minutes"
+
+    list_response = await client.get("/billing/plans", headers=ADMIN_HEADERS)
+    assert list_response.status_code == 200
+    plan = next(p for p in list_response.json() if p["code"] == "call-minutes-topup")
+    assert plan["resource_type"] == "max_call_minutes"
+
+
+async def test_create_full_plan_defaults_resource_type_to_none(client: AsyncClient) -> None:
+    response = await client.post(
+        "/billing/plans",
+        json={
+            "code": "full-bundle",
+            "name": "Full Bundle",
+            "price_cents": 490000,
+            "limits": {"max_seats": 5},
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 201
+    assert response.json()["resource_type"] is None
+

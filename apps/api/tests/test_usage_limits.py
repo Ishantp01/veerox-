@@ -225,6 +225,50 @@ async def test_outbound_whatsapp_blocked_when_past_due(
     assert response.status_code == 402
 
 
+async def test_team_member_recharge_raises_effective_seat_cap(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A `resource_type="max_team_members"` recharge must raise the seat cap
+    enforced via the "max_seats" key everywhere else (routers/team.py) —
+    the translation between the two names must not break enforcement."""
+    from apps.api.deps import is_over_plan_limit
+
+    org = await _seed_org(db_session)
+    plan = Plan(code="pro", name="Pro", price_cents=490000, limits={"max_seats": 2})
+    db_session.add(plan)
+    await db_session.flush()
+    org.plan_id = plan.id
+    await db_session.commit()
+
+    assert await is_over_plan_limit(db_session, ORG_ID, "max_seats", 2) is True
+
+    # Simulate what _apply_resource_recharge does for a
+    # resource_type="max_team_members" SKU: bump the real "max_seats" key.
+    org.resource_limits = {"max_seats": 3}
+    await db_session.commit()
+
+    assert await is_over_plan_limit(db_session, ORG_ID, "max_seats", 2) is False
+    assert await is_over_plan_limit(db_session, ORG_ID, "max_seats", 3) is True
+
+
+async def test_is_over_plan_limit_unlimited_with_no_plan_and_no_recharge(
+    db_session: AsyncSession,
+) -> None:
+    """Regression guard: an org with no plan assigned yet AND no recharge on
+    record must stay unlimited (not even billing_status is consulted) —
+    this is the documented backstop the outer-join rewrite in deps.py must
+    preserve exactly."""
+    from apps.api.deps import is_over_plan_limit
+
+    org = await _seed_org(db_session)
+    org.billing_status = "past_due"
+    await db_session.commit()
+
+    assert org.plan_id is None
+    assert org.resource_limits is None
+    assert await is_over_plan_limit(db_session, ORG_ID, "max_whatsapp_messages", 999999) is False
+
+
 async def test_outbound_whatsapp_allowed_under_plan_limit(
     client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

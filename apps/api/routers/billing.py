@@ -54,9 +54,17 @@ from apps.api.db.models.billing_event import BillingEvent
 from apps.api.db.models.billing_payment import BillingPayment
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
-from apps.api.db.models.plan import Plan
+from apps.api.db.models.plan import RESOURCE_TYPE_LIMIT_KEY, Plan
 from apps.api.db.models.platform_settings import PlatformSettings
-from apps.api.deps import CurrentOrg, CurrentOrgDep, DbDep, RedisDep, require_role, verify_platform_admin
+from apps.api.deps import (
+    CurrentOrg,
+    CurrentOrgDep,
+    DbDep,
+    RedisDep,
+    effective_limits,
+    require_role,
+    verify_platform_admin,
+)
 from apps.api.schemas.billing import (
     BillingStatusOut,
     BillingUsageOut,
@@ -109,12 +117,11 @@ async def get_billing_usage(org: CurrentOrgDep, db: DbDep) -> BillingUsageOut:
     org_result = await db.execute(select(Org).where(Org.id == org.org_id))
     target_org = org_result.scalar_one()
 
-    limits: dict[str, Any] = {}
+    plan: Plan | None = None
     if target_org.plan_id is not None:
         plan_result = await db.execute(select(Plan).where(Plan.id == target_org.plan_id))
         plan = plan_result.scalar_one_or_none()
-        if plan is not None:
-            limits = plan.limits
+    limits = effective_limits(target_org, plan)
 
     usage = await get_credit_usage(db, org.org_id)
     return BillingUsageOut(
@@ -138,6 +145,7 @@ def _plan_admin_out(plan: Plan) -> PlanAdminOut:
         price_cents=plan.price_cents,
         limits=plan.limits,
         is_active=plan.is_active,
+        resource_type=plan.resource_type,
     )
 
 
@@ -273,6 +281,7 @@ async def create_plan(payload: PlanCreateIn, db: DbDep, _admin: PlatformAdminDep
         price_cents=payload.price_cents,
         limits=payload.limits,
         is_active=payload.is_active,
+        resource_type=payload.resource_type,
     )
     db.add(plan)
     await db.commit()
@@ -383,6 +392,7 @@ async def list_available_plans(org: CurrentOrgDep, db: DbDep) -> list[PlanOut]:
             name=plan.name,
             price_cents=plan.price_cents,
             limits=plan.limits,
+            resource_type=plan.resource_type,
         )
         for plan in result.scalars().all()
     ]
@@ -419,7 +429,8 @@ async def get_billing_status(org: CurrentOrgDep, db: DbDep) -> BillingStatusOut:
             code=plan.code,
             name=plan.name,
             price_cents=plan.price_cents,
-            limits=plan.limits,
+            limits=effective_limits(target_org, plan),
+            resource_type=plan.resource_type,
         )
 
     # Ordered by period_start (when the recharge landed), not period_end —
@@ -459,9 +470,14 @@ async def create_checkout_session(
         # their own success_url (no external redirect needed).
         org_result = await db.execute(select(Org).where(Org.id == org.org_id))
         target_org = org_result.scalar_one()
-        target_org.plan_id = plan.id
-        target_org.billing_status = "active"
-        target_org.plan_started_at = datetime.now(UTC)
+        if plan.resource_type is None:
+            target_org.plan_id = plan.id
+            target_org.billing_status = "active"
+            target_org.plan_started_at = datetime.now(UTC)
+            target_org.resource_limits = dict(plan.limits)
+        else:
+            await _apply_resource_recharge(db, target_org, plan)
+            target_org.billing_status = "active"
         await db.commit()
         return CheckoutSessionOut(checkout_url=payload.success_url)
 
@@ -510,16 +526,57 @@ async def create_checkout_session(
     )
 
 
+async def _apply_resource_recharge(
+    db: AsyncSession, target_org: Org, purchased_plan: Plan
+) -> None:
+    """Tops up exactly the one resource `purchased_plan.resource_type` names
+    on `target_org.resource_limits`, additively — leaving every other
+    resource, `plan_id`, and `plan_started_at` untouched. Not moving
+    `plan_started_at` is what makes this additive rather than a reset:
+    usage already counted since the org's last full reset keeps counting
+    against the other (unchanged) limits, while this one limit goes up by
+    exactly the recharged amount (core/usage.py).
+
+    The first time an org's `resource_limits` is touched, it's seeded from
+    the org's *current* plan (not the purchased recharge SKU) so resources
+    never recharged individually keep reading whatever the base plan
+    already granted them.
+    """
+    key = RESOURCE_TYPE_LIMIT_KEY[purchased_plan.resource_type]
+    amount = purchased_plan.limits.get(purchased_plan.resource_type, 0)
+
+    if target_org.resource_limits is None:
+        base_plan: Plan | None = None
+        if target_org.plan_id is not None:
+            base_plan_result = await db.execute(
+                select(Plan).where(Plan.id == target_org.plan_id)
+            )
+            base_plan = base_plan_result.scalar_one_or_none()
+        target_org.resource_limits = dict(base_plan.limits) if base_plan is not None else {}
+
+    # Reassign a new dict — plain JSON columns don't track in-place mutation.
+    new_limits = dict(target_org.resource_limits)
+    new_limits[key] = new_limits.get(key, 0) + amount
+    target_org.resource_limits = new_limits
+
+
 async def _activate_paid_payment(
     db: AsyncSession, payment: BillingPayment, razorpay_payment_id: str
 ) -> None:
-    """Marks a BillingPayment paid and recharges the org's credits.
+    """Marks a BillingPayment paid and applies its plan to the org.
     Idempotent — both verify_payment (client-side) and the webhook
     (server-side) can call this for the same order without double-applying.
 
-    Resetting `plan_started_at` is what actually restores credit: usage is
-    counted from that timestamp forward (core/usage.py), so moving it to
-    now zeroes the org's consumed call minutes/messages.
+    A full-subscription plan (Plan.resource_type is None) replaces the org's
+    plan_id and resets plan_started_at, same as always — resetting
+    plan_started_at is what restores credit, since usage is counted from
+    that timestamp forward (core/usage.py), so moving it to now zeroes the
+    org's consumed call minutes/messages/etc. across every resource at once.
+
+    A single-resource recharge (Plan.resource_type set) instead only tops up
+    that one resource via `_apply_resource_recharge` — plan_id and
+    plan_started_at are deliberately left untouched, since resetting them
+    would reset every other resource's usage window too.
     """
     if payment.status == "paid":
         return
@@ -529,16 +586,33 @@ async def _activate_paid_payment(
     now = datetime.now(UTC)
     payment.period_start = now
     # Left null deliberately: credits don't expire on a timer, so there is
-    # no end date to record. Org.plan_started_at (set below) is what usage
-    # is measured from.
+    # no end date to record. Org.plan_started_at (set below, for a full
+    # plan) is what usage is measured from.
     payment.period_end = None
 
     org_result = await db.execute(select(Org).where(Org.id == payment.org_id))
     target_org = org_result.scalar_one_or_none()
-    if target_org is not None:
-        target_org.plan_id = payment.plan_id
+    if target_org is None:
+        return
+
+    plan_result = await db.execute(select(Plan).where(Plan.id == payment.plan_id))
+    purchased_plan = plan_result.scalar_one_or_none()
+    if purchased_plan is None:
+        logger.warning(
+            "billing_payment_activation_missing_plan",
+            org_id=str(payment.org_id),
+            plan_id=str(payment.plan_id),
+        )
+        return
+
+    if purchased_plan.resource_type is None:
+        target_org.plan_id = purchased_plan.id
         target_org.billing_status = "active"
         target_org.plan_started_at = now
+        target_org.resource_limits = dict(purchased_plan.limits)
+    else:
+        await _apply_resource_recharge(db, target_org, purchased_plan)
+        target_org.billing_status = "active"
 
 
 @router.post("/verify-payment", status_code=204)

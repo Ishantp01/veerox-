@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID
 
 import redis.asyncio as aioredis
@@ -16,6 +16,10 @@ from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.org_membership import OrgMembership
 from apps.api.db.session import get_session
 from apps.api.redis_client import get_redis
+
+if TYPE_CHECKING:
+    from apps.api.db.models.org import Org
+    from apps.api.db.models.plan import Plan
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -146,19 +150,32 @@ async def _org_is_platform_admin_owned(db: AsyncSession, org_id: UUID) -> bool:
 _BLOCKED_BILLING_STATUSES = ("past_due", "canceled", "incomplete")
 
 
+def effective_limits(org: Org, plan: Plan | None) -> dict[str, Any]:
+    """The org's real, currently-in-effect resource limits — `Org.resource_limits`
+    once a recharge has populated it (it takes full precedence, key by key
+    against the plan, since it's already seeded as a complete snapshot on
+    every full-plan purchase — see routers/billing.py `_activate_paid_payment`),
+    falling back to the catalog `Plan.limits` wholesale for an org that has
+    never been touched by the new recharge logic (resource_limits is None)."""
+    if org.resource_limits is not None:
+        return org.resource_limits
+    return dict(plan.limits) if plan is not None else {}
+
+
 async def is_over_plan_limit(
     db: AsyncSession, org_id: UUID, metric: str, current_count: float
 ) -> bool:
     """True if the org should be blocked from consuming `metric` right now —
-    either its billing has lapsed, or `current_count` has reached the plan's
-    limit for `metric` (a key in `Plan.limits`, e.g.
-    "max_seats"/"max_call_minutes").
+    either its billing has lapsed, or `current_count` has reached the org's
+    effective limit for `metric` (a key in `Plan.limits`/`Org.resource_limits`,
+    e.g. "max_seats"/"max_call_minutes" — see `effective_limits`).
 
     Credits are recharge-based: `current_count` comes from core/usage.py,
     which measures usage since the org's last recharge and never resets on
     a calendar boundary. So reaching the limit blocks the metric until the
-    org buys the plan again via POST /billing/checkout-session — that's the
-    normal way an org ends up blocked here.
+    org buys the plan (or the relevant resource recharge) again via
+    POST /billing/checkout-session — that's the normal way an org ends up
+    blocked here.
 
     A `billing_status` outside ("trialing", "active") blocks *every* metric
     rather than just the one being checked. Nothing downgrades an org on a
@@ -166,10 +183,13 @@ async def is_over_plan_limit(
     run out, not when a date passes); this state is now only reached by a
     failed payment or a deliberate admin action.
 
-    Orgs with no plan assigned yet (pre-backfill edge case, or a customer who
-    hasn't finished onboarding) are treated as unlimited rather than blocked
-    — enforcement here is a defensive backstop, the primary gate is the
-    frontend's onboarding redirect to /choose-plan.
+    Orgs with no plan assigned yet AND no recharge on record (pre-backfill
+    edge case, or a customer who hasn't finished onboarding) are treated as
+    unlimited rather than blocked — enforcement here is a defensive
+    backstop, the primary gate is the frontend's onboarding redirect to
+    /choose-plan. Note this check must run *before* the billing_status check
+    below, to keep byte-for-byte the same "unlimited, status not even
+    consulted" behavior a plan-less org has always had.
 
     Non-raising so background workers (campaign_dialer.py,
     whatsapp_dispatcher.py) can skip claiming a target without an
@@ -183,15 +203,17 @@ async def is_over_plan_limit(
         return False
 
     result = await db.execute(
-        select(Plan, Org.billing_status).join(Org, Org.plan_id == Plan.id).where(Org.id == org_id)
+        select(Plan, Org).outerjoin(Plan, Org.plan_id == Plan.id).where(Org.id == org_id)
     )
     row = result.first()
     if row is None:
         return False
-    plan, billing_status = row
-    if billing_status in _BLOCKED_BILLING_STATUSES:
+    plan, target_org = row
+    if plan is None and target_org.resource_limits is None:
+        return False
+    if target_org.billing_status in _BLOCKED_BILLING_STATUSES:
         return True
-    limit = plan.limits.get(metric)
+    limit = effective_limits(target_org, plan).get(metric)
     return limit is not None and current_count >= limit
 
 

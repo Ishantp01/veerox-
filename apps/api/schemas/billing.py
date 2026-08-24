@@ -10,6 +10,9 @@ class PlanOut(BaseModel):
     name: str
     price_cents: int
     limits: dict[str, Any]
+    # None = a full subscription plan. One of Plan.PLAN_RESOURCE_TYPES = a
+    # single-resource recharge/top-up SKU (see apps/api/db/models/plan.py).
+    resource_type: str | None = None
 
 
 class PlanAdminOut(BaseModel):
@@ -18,6 +21,7 @@ class PlanAdminOut(BaseModel):
     price_cents: int
     limits: dict[str, Any]
     is_active: bool
+    resource_type: str | None = None
 
 
 class RegenerateAdminTokenOut(BaseModel):
@@ -44,6 +48,7 @@ class PlanCreateIn(BaseModel):
     price_cents: int
     limits: dict[str, Any]
     is_active: bool = True
+    resource_type: str | None = None
 
 
 class PlanUpdateIn(BaseModel):
@@ -53,6 +58,7 @@ class PlanUpdateIn(BaseModel):
     price_cents: int | None = None
     limits: dict[str, Any] | None = None
     is_active: bool | None = None
+    resource_type: str | None = None
 
 
 class BillingStatusOut(BaseModel):

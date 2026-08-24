@@ -7,6 +7,7 @@ no-webhook payment confirmation path used for local/test-mode development
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 from httpx import AsyncClient
@@ -225,6 +226,260 @@ async def test_verify_payment_rejects_bad_signature(
 
     org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
     assert org.plan_id is None
+
+
+async def test_verify_payment_full_plan_resets_all_resources(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Locks in the unchanged existing behavior for resource_type=None: a
+    full-plan payment still replaces plan_id, resets plan_started_at, and
+    now also snapshots the plan's limits into org.resource_limits."""
+    headers = await _seed_org_and_login(client, db_session)
+    plan = Plan(
+        code="pro",
+        name="Pro",
+        price_cents=490000,
+        limits={
+            "max_call_minutes": 2000,
+            "max_whatsapp_messages": 5000,
+            "max_seats": 10,
+            "max_campaigns": 20,
+        },
+    )
+    db_session.add(plan)
+    await db_session.flush()
+    db_session.add(
+        BillingPayment(
+            org_id=ORG_ID,
+            provider="razorpay",
+            provider_order_id="order_full",
+            plan_id=plan.id,
+            amount_cents=490000,
+            status="created",
+        )
+    )
+    await db_session.commit()
+
+    with patch("apps.api.routers.billing.settings.razorpay_key_id", "rzp_test_x"), patch(
+        "apps.api.routers.billing.settings.razorpay_key_secret", "secret_x"
+    ), patch("apps.api.routers.billing.razorpay.Client") as mock_client_cls:
+        mock_client_cls.return_value.utility.verify_payment_signature.return_value = True
+        response = await client.post(
+            "/billing/verify-payment",
+            json={
+                "razorpay_payment_id": "pay_full",
+                "razorpay_order_id": "order_full",
+                "razorpay_signature": "fakesig",
+            },
+            headers=headers,
+        )
+    assert response.status_code == 204
+
+    org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
+    assert org.plan_id == plan.id
+    assert org.plan_started_at is not None
+    assert org.resource_limits == plan.limits
+
+
+async def test_verify_payment_recharge_only_bumps_targeted_resource(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The core Scenario 1 case: a Call-Minutes-only recharge must add to
+    call minutes and leave WhatsApp messages, team members, and campaigns
+    completely untouched from what the org's base plan already granted."""
+    headers = await _seed_org_and_login(client, db_session)
+    base_plan = Plan(
+        code="pro",
+        name="Pro",
+        price_cents=490000,
+        limits={
+            "max_call_minutes": 500,
+            "max_whatsapp_messages": 3000,
+            "max_seats": 5,
+            "max_campaigns": 10,
+        },
+    )
+    db_session.add(base_plan)
+    await db_session.flush()
+    org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
+    org.plan_id = base_plan.id
+    org.plan_started_at = datetime.now(UTC)
+    pre_recharge_plan_started_at = org.plan_started_at
+
+    recharge_plan = Plan(
+        code="call-minutes-1000",
+        name="1000 Call Minutes",
+        price_cents=99900,
+        limits={"max_call_minutes": 1000},
+        resource_type="max_call_minutes",
+    )
+    db_session.add(recharge_plan)
+    await db_session.flush()
+    db_session.add(
+        BillingPayment(
+            org_id=ORG_ID,
+            provider="razorpay",
+            provider_order_id="order_recharge_call",
+            plan_id=recharge_plan.id,
+            amount_cents=99900,
+            status="created",
+        )
+    )
+    await db_session.commit()
+
+    with patch("apps.api.routers.billing.settings.razorpay_key_id", "rzp_test_x"), patch(
+        "apps.api.routers.billing.settings.razorpay_key_secret", "secret_x"
+    ), patch("apps.api.routers.billing.razorpay.Client") as mock_client_cls:
+        mock_client_cls.return_value.utility.verify_payment_signature.return_value = True
+        response = await client.post(
+            "/billing/verify-payment",
+            json={
+                "razorpay_payment_id": "pay_recharge_call",
+                "razorpay_order_id": "order_recharge_call",
+                "razorpay_signature": "fakesig",
+            },
+            headers=headers,
+        )
+    assert response.status_code == 204
+
+    org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
+    # Only call minutes moved — 500 (base plan) + 1000 (recharge) = 1500.
+    assert org.resource_limits == {
+        "max_call_minutes": 1500,
+        "max_whatsapp_messages": 3000,
+        "max_seats": 5,
+        "max_campaigns": 10,
+    }
+    # plan_id and plan_started_at are untouched — moving plan_started_at
+    # would reset the usage window for every resource, not just this one.
+    assert org.plan_id == base_plan.id
+    assert org.plan_started_at == pre_recharge_plan_started_at
+
+
+async def test_verify_payment_whatsapp_recharge_does_not_affect_call_minutes(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    headers = await _seed_org_and_login(client, db_session)
+    base_plan = Plan(
+        code="pro",
+        name="Pro",
+        price_cents=490000,
+        limits={
+            "max_call_minutes": 1500,
+            "max_whatsapp_messages": 3000,
+            "max_seats": 5,
+            "max_campaigns": 10,
+        },
+    )
+    db_session.add(base_plan)
+    await db_session.flush()
+    org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
+    org.plan_id = base_plan.id
+    await db_session.commit()
+
+    recharge_plan = Plan(
+        code="whatsapp-5000",
+        name="5000 WhatsApp Messages",
+        price_cents=149900,
+        limits={"max_whatsapp_messages": 5000},
+        resource_type="max_whatsapp_messages",
+    )
+    db_session.add(recharge_plan)
+    await db_session.flush()
+    db_session.add(
+        BillingPayment(
+            org_id=ORG_ID,
+            provider="razorpay",
+            provider_order_id="order_recharge_whatsapp",
+            plan_id=recharge_plan.id,
+            amount_cents=149900,
+            status="created",
+        )
+    )
+    await db_session.commit()
+
+    with patch("apps.api.routers.billing.settings.razorpay_key_id", "rzp_test_x"), patch(
+        "apps.api.routers.billing.settings.razorpay_key_secret", "secret_x"
+    ), patch("apps.api.routers.billing.razorpay.Client") as mock_client_cls:
+        mock_client_cls.return_value.utility.verify_payment_signature.return_value = True
+        response = await client.post(
+            "/billing/verify-payment",
+            json={
+                "razorpay_payment_id": "pay_recharge_whatsapp",
+                "razorpay_order_id": "order_recharge_whatsapp",
+                "razorpay_signature": "fakesig",
+            },
+            headers=headers,
+        )
+    assert response.status_code == 204
+
+    org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
+    assert org.resource_limits == {
+        "max_call_minutes": 1500,
+        "max_whatsapp_messages": 8000,
+        "max_seats": 5,
+        "max_campaigns": 10,
+    }
+
+
+async def test_verify_payment_recharge_for_metric_absent_on_current_plan(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The org's current plan never included WhatsApp at all (key absent).
+    Recharging WhatsApp should land at exactly the recharged amount, not
+    error or silently no-op."""
+    headers = await _seed_org_and_login(client, db_session)
+    base_plan = Plan(
+        code="call-only",
+        name="Call Only",
+        price_cents=490000,
+        limits={"max_call_minutes": 1000},
+    )
+    db_session.add(base_plan)
+    await db_session.flush()
+    org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
+    org.plan_id = base_plan.id
+    await db_session.commit()
+
+    recharge_plan = Plan(
+        code="whatsapp-2000",
+        name="2000 WhatsApp Messages",
+        price_cents=99900,
+        limits={"max_whatsapp_messages": 2000},
+        resource_type="max_whatsapp_messages",
+    )
+    db_session.add(recharge_plan)
+    await db_session.flush()
+    db_session.add(
+        BillingPayment(
+            org_id=ORG_ID,
+            provider="razorpay",
+            provider_order_id="order_recharge_new_channel",
+            plan_id=recharge_plan.id,
+            amount_cents=99900,
+            status="created",
+        )
+    )
+    await db_session.commit()
+
+    with patch("apps.api.routers.billing.settings.razorpay_key_id", "rzp_test_x"), patch(
+        "apps.api.routers.billing.settings.razorpay_key_secret", "secret_x"
+    ), patch("apps.api.routers.billing.razorpay.Client") as mock_client_cls:
+        mock_client_cls.return_value.utility.verify_payment_signature.return_value = True
+        response = await client.post(
+            "/billing/verify-payment",
+            json={
+                "razorpay_payment_id": "pay_recharge_new_channel",
+                "razorpay_order_id": "order_recharge_new_channel",
+                "razorpay_signature": "fakesig",
+            },
+            headers=headers,
+        )
+    assert response.status_code == 204
+
+    org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
+    assert org.resource_limits["max_whatsapp_messages"] == 2000
+    assert org.resource_limits["max_call_minutes"] == 1000
 
 
 async def test_available_plans_reflects_admin_catalog_not_hardcoded(

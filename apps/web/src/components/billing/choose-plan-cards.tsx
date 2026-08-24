@@ -36,14 +36,23 @@ function planFeatures(
     ...Object.keys(LIMIT_LABELS).filter((k) => k in limits),
     ...Object.keys(limits).filter((k) => !(k in LIMIT_LABELS)),
   ];
-  return ordered.map((key) => {
-    const value = limits[key];
-    const label = LIMIT_LABELS[key] ?? key.replace(/_/g, " ");
-    // Boolean feature flags (e.g. automated_followups) read as a plain
-    // label — "Automated follow-ups" / struck-through — not "true campaigns".
-    const text = typeof value === "boolean" ? label : `${formatLimitValue(value)} ${label}`;
-    return { key, text, included: value !== false };
-  });
+  return ordered
+    // A numeric limit of 0 means the plan never included that resource at
+    // all (the recharge-SKU convention — see routers/billing.py), not "zero
+    // remaining" — so it doesn't belong in the feature list at all, for any
+    // of the four resources, not just WhatsApp.
+    .filter((key) => {
+      const value = limits[key];
+      return !(typeof value === "number" && value === 0);
+    })
+    .map((key) => {
+      const value = limits[key];
+      const label = LIMIT_LABELS[key] ?? key.replace(/_/g, " ");
+      // Boolean feature flags (e.g. automated_followups) read as a plain
+      // label — "Automated follow-ups" / struck-through — not "true campaigns".
+      const text = typeof value === "boolean" ? label : `${formatLimitValue(value)} ${label}`;
+      return { key, text, included: value !== false };
+    });
 }
 
 /**
