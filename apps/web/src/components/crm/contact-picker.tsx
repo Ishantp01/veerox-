@@ -1,13 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Search, User, X } from "lucide-react";
-import { Input } from "@/components/ui";
-import { useContacts } from "@/lib/hooks";
+import { Search, User, UserPlus, X } from "lucide-react";
+import { Button, Input } from "@/components/ui";
+import { useContacts, useCreateContact } from "@/lib/hooks";
 import { formatPhone } from "@/lib/format";
 import type { Contact } from "@/lib/types";
 
 const SEARCH_DEBOUNCE_MS = 250;
+
+// Same E.164-ish shape new-contact-dialog.tsx validates on the standalone
+// "New Contact" form — kept identical so a number rejected there is
+// rejected here too.
+const PHONE_PATTERN = /^\+\d{8,15}$/;
 
 export interface ContactPickerProps {
   value: Contact | null;
@@ -21,15 +26,59 @@ export function ContactPicker({ value, onChange, placeholder }: ContactPickerPro
   const [qInput, setQInput] = useState("");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
+  const [addingNew, setAddingNew] = useState(false);
+  const [newPhone, setNewPhone] = useState("");
+  const [newName, setNewName] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const createContact = useCreateContact();
 
   useEffect(() => {
     const t = setTimeout(() => setQ(qInput.trim()), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [qInput]);
 
+  function resetAddForm() {
+    setAddingNew(false);
+    setNewPhone("");
+    setNewName("");
+    setAddError(null);
+  }
+
+  useEffect(() => {
+    resetAddForm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+
   const { data, isLoading } = useContacts(q || undefined);
   const results = q ? (data ?? []) : [];
+
+  function startAddNew() {
+    setNewPhone(/^[+\d]/.test(q) ? q : "+91");
+    setNewName(/^[+\d]/.test(q) ? "" : q);
+    setAddError(null);
+    setAddingNew(true);
+  }
+
+  function handleCreateNew() {
+    const phone = newPhone.trim();
+    if (!PHONE_PATTERN.test(phone)) {
+      setAddError("Enter a valid E.164 number, e.g. +919876543210");
+      return;
+    }
+    createContact.mutate(
+      { name: newName.trim() || null, phone },
+      {
+        onSuccess: (contact) => {
+          onChange(contact);
+          setOpen(false);
+          setQInput("");
+          resetAddForm();
+        },
+        onError: (err) => setAddError(err.message),
+      },
+    );
+  }
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -82,7 +131,53 @@ export function ContactPicker({ value, onChange, placeholder }: ContactPickerPro
           {isLoading ? (
             <p className="px-3.5 py-3 text-xs text-slate-400">Searching…</p>
           ) : results.length === 0 ? (
-            <p className="px-3.5 py-3 text-xs text-slate-400">No contacts found.</p>
+            <div className="p-3">
+              {addingNew ? (
+                <div className="flex flex-col gap-2">
+                  <Input
+                    autoFocus
+                    type="tel"
+                    inputMode="tel"
+                    maxLength={16}
+                    value={newPhone}
+                    onChange={(e) => setNewPhone(e.target.value)}
+                    placeholder="+91XXXXXXXXXX"
+                  />
+                  <Input
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="Name (optional)"
+                  />
+                  {addError && <p className="text-xs text-red-600">{addError}</p>}
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      loading={createContact.isPending}
+                      onClick={handleCreateNew}
+                    >
+                      Add &amp; select
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={resetAddForm}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs text-slate-400">No contacts found for &quot;{q}&quot;.</p>
+                  <button
+                    type="button"
+                    onClick={startAddNew}
+                    className="flex items-center gap-1.5 self-start rounded-md px-1 py-0.5 text-xs font-medium text-primary-600 hover:bg-primary-50/60 dark:text-primary-400 dark:hover:bg-primary-500/10"
+                  >
+                    <UserPlus size={13} aria-hidden />
+                    Add as new contact
+                  </button>
+                </div>
+              )}
+            </div>
           ) : (
             <ul className="max-h-56 overflow-y-auto">
               {results.map((contact) => (

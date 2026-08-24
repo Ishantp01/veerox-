@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from datetime import datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, update
 
-from apps.api.core.tools import _APPOINTMENT_REMINDER_TEMPLATE_NAME, find_conflicting_appointment
-from apps.api.db.models import Appointment, FollowUpTask
+from apps.api.core.tools import (
+    _APPOINTMENT_REMINDER_TEMPLATE_NAME,
+    _get_or_create_user_by_phone,
+    _normalize_phone,
+    DEFAULT_BOOKING_TIMEZONE,
+    find_conflicting_appointment,
+    schedule_appointment_reminders,
+    send_appointment_confirmation,
+)
+from apps.api.db.models import Appointment, Contact, FollowUpTask, Lead
 from apps.api.deps import DbDep, RequestOrgDep, verify_admin_or_session
 from apps.api.schemas.appointment import (
     APPOINTMENT_STATUSES,
@@ -58,18 +67,71 @@ async def create_appointment(
         raise HTTPException(
             status_code=409, detail="Another appointment is scheduled too close to this time"
         )
+
+    # Resolve who to notify (reminders + immediate confirmation, below) from
+    # whichever of contact_id/lead_id the caller supplied. A contact with no
+    # Lead yet gets one created here (intent="booking", channel="dashboard")
+    # so it has somewhere to attach the reminder FollowUpTasks — mirroring
+    # what core.tools.book_appointment does for AI-driven bookings, so a
+    # manually-booked appointment notifies the customer identically.
+    lead_id = payload.lead_id
+    notify_phone: str | None = None
+    notify_name: str | None = None
+    if lead_id is not None:
+        lead = await db.get(Lead, lead_id)
+        if lead is None or lead.org_id != org_id:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        notify_phone = lead.phone
+        notify_name = lead.name
+    elif payload.contact_id is not None:
+        contact = await db.get(Contact, payload.contact_id)
+        if contact is None or contact.org_id != org_id:
+            raise HTTPException(status_code=404, detail="Contact not found")
+        user = await _get_or_create_user_by_phone(
+            db, org_id=org_id, phone=contact.phone, name=contact.name
+        )
+        new_lead = Lead(
+            org_id=org_id,
+            user_id=user.id,
+            contact_id=contact.id,
+            name=contact.name,
+            phone=_normalize_phone(contact.phone),
+            intent="booking",
+            channel="dashboard",
+        )
+        db.add(new_lead)
+        await db.flush()  # populate new_lead.id for the Appointment FK below
+        lead_id = new_lead.id
+        notify_phone = contact.phone
+        notify_name = contact.name
+
     appointment = Appointment(
         org_id=org_id,
         contact_id=payload.contact_id,
-        lead_id=payload.lead_id,
+        lead_id=lead_id,
         scheduled_at=payload.scheduled_at,
         duration_minutes=payload.duration_minutes,
         assigned_user_id=payload.assigned_user_id,
         notes=payload.notes,
     )
     db.add(appointment)
+
+    local_dt = payload.scheduled_at.astimezone(ZoneInfo(DEFAULT_BOOKING_TIMEZONE))
+    date_str = local_dt.date().isoformat()
+    time_str = local_dt.strftime("%H:%M")
+    if lead_id is not None:
+        schedule_appointment_reminders(
+            db, org_id, lead_id, notify_name, date_str, time_str, payload.scheduled_at
+        )
+
     await db.commit()
     await db.refresh(appointment)
+
+    if lead_id is not None:
+        await send_appointment_confirmation(
+            db, org_id, appointment.id, notify_phone, notify_name, date_str, time_str
+        )
+
     return appointment
 
 

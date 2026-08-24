@@ -526,27 +526,8 @@ async def book_appointment(
     # sent hours after booking usually is. Offsets that have already passed
     # by booking time (e.g. booking 10 minutes out) are skipped rather than
     # firing immediately.
-    reminder_params = [
-        booking_user.name if booking_user and booking_user.name else "there",
-        date,
-        _format_display_time(time),
-    ]
-    now = datetime.now(UTC)
-    for offset_minutes in _APPOINTMENT_REMINDER_OFFSETS_MINUTES:
-        reminder_at = scheduled_at - timedelta(minutes=offset_minutes)
-        if reminder_at <= now:
-            continue
-        db.add(
-            FollowUpTask(
-                org_id=org_id,
-                lead_id=lead.id,
-                rule_id=None,
-                run_at=reminder_at,
-                status="pending",
-                template_name=_APPOINTMENT_REMINDER_TEMPLATE_NAME,
-                template_params=reminder_params,
-            )
-        )
+    booking_name = booking_user.name if booking_user and booking_user.name else None
+    schedule_appointment_reminders(db, org_id, lead.id, booking_name, date, time, scheduled_at)
 
     await db.commit()
 
@@ -568,32 +549,9 @@ async def book_appointment(
     # case for a call-initiated booking. Best-effort: a failed send must not
     # undo the booking that already committed above.
     target_phone = booking_user.phone if booking_user else None
-    if target_phone:
-        org = await db.get(Org, org_id)
-        phone_number_id = org.whatsapp_phone_number_id if org else None
-        try:
-            await wa_client.send_template(
-                _normalize_phone(target_phone),
-                _APPOINTMENT_TEMPLATE_NAME,
-                body_params=[
-                    booking_user.name if booking_user and booking_user.name else "there",
-                    date,
-                    _format_display_time(time),
-                ],
-                phone_number_id=phone_number_id,
-            )
-        except httpx.HTTPError:
-            logger.warning(
-                "book_appointment_confirmation_send_error",
-                appointment_id=str(appointment.id),
-                exc_info=True,
-            )
-    else:
-        logger.warning(
-            "book_appointment_confirmation_send_failed",
-            appointment_id=str(appointment.id),
-            reason="no_phone_number_available",
-        )
+    await send_appointment_confirmation(
+        db, org_id, appointment.id, target_phone, booking_name, date, time
+    )
 
     return {
         "status": "ok",
@@ -799,6 +757,81 @@ _APPOINTMENT_REMINDER_TEMPLATE_NAME = "appointment_reminder"
 # Reminders fire this many minutes before the appointment (see
 # book_appointment) — 1 hour, 30 minutes, and 5 minutes out.
 _APPOINTMENT_REMINDER_OFFSETS_MINUTES = (60, 30, 5)
+
+
+def schedule_appointment_reminders(
+    db: AsyncSession,
+    org_id: UUID,
+    lead_id: UUID,
+    name: str | None,
+    date: str,
+    time: str,
+    scheduled_at: datetime,
+) -> None:
+    """Queue the pre-appointment reminder FollowUpTasks (see
+    ``_APPOINTMENT_REMINDER_OFFSETS_MINUTES``) for a just-booked appointment.
+
+    Shared by ``book_appointment`` (AI-driven bookings) and the CRM's manual
+    "New Appointment" dialog (``routers/appointments.py``) so both paths get
+    identical reminder behavior. Only queues ``db.add`` calls — the caller is
+    responsible for committing.
+    """
+    reminder_params = [name or "there", date, _format_display_time(time)]
+    now = datetime.now(UTC)
+    for offset_minutes in _APPOINTMENT_REMINDER_OFFSETS_MINUTES:
+        reminder_at = scheduled_at - timedelta(minutes=offset_minutes)
+        if reminder_at <= now:
+            continue
+        db.add(
+            FollowUpTask(
+                org_id=org_id,
+                lead_id=lead_id,
+                rule_id=None,
+                run_at=reminder_at,
+                status="pending",
+                template_name=_APPOINTMENT_REMINDER_TEMPLATE_NAME,
+                template_params=reminder_params,
+            )
+        )
+
+
+async def send_appointment_confirmation(
+    db: AsyncSession,
+    org_id: UUID,
+    appointment_id: UUID,
+    phone: str | None,
+    name: str | None,
+    date: str,
+    time: str,
+) -> None:
+    """Best-effort immediate WhatsApp confirmation for a just-booked
+    appointment, via the pre-approved ``appointment_confirmation`` template
+    (works even with no open 24h session). A failed send must not undo the
+    booking that already committed — callers invoke this after ``db.commit``.
+    """
+    if not phone:
+        logger.warning(
+            "appointment_confirmation_send_failed",
+            appointment_id=str(appointment_id),
+            reason="no_phone_number_available",
+        )
+        return
+
+    org = await db.get(Org, org_id)
+    phone_number_id = org.whatsapp_phone_number_id if org else None
+    try:
+        await wa_client.send_template(
+            _normalize_phone(phone),
+            _APPOINTMENT_TEMPLATE_NAME,
+            body_params=[name or "there", date, _format_display_time(time)],
+            phone_number_id=phone_number_id,
+        )
+    except httpx.HTTPError:
+        logger.warning(
+            "appointment_confirmation_send_error",
+            appointment_id=str(appointment_id),
+            exc_info=True,
+        )
 
 
 async def send_whatsapp_message(

@@ -7,12 +7,14 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
-from apps.api.db.models import Appointment, FollowUpTask, Lead, Org, User
+from apps.api.core import tools
+from apps.api.db.models import Appointment, Contact, FollowUpTask, Lead, Org, User
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 ADMIN_HEADERS = {"X-Admin-Token": settings.admin_token}
@@ -99,6 +101,55 @@ async def test_updating_notes_only_leaves_reminder_pending(
 
     await db_session.refresh(reminder)
     assert reminder.status == "pending"
+
+
+async def test_create_appointment_with_contact_notifies_and_schedules_reminder(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Booking from the CRM's New Appointment dialog (contact_id, no lead_id)
+    must notify the customer identically to an AI-driven booking: a Lead is
+    created to hang the reminder off, reminder FollowUpTasks are queued, and
+    an immediate WhatsApp confirmation is sent."""
+    sent: list[tuple[str, str, list[str] | None]] = []
+
+    async def _fake_send_template(
+        to_e164: str, template_name: str, body_params: list[str] | None = None, **kwargs: object
+    ) -> dict[str, object]:
+        sent.append((to_e164, template_name, body_params))
+        return {}
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
+    await _seed_org(db_session)
+    contact = Contact(org_id=ORG_ID, name="Asha", phone="+910000000099")
+    db_session.add(contact)
+    await db_session.commit()
+    await db_session.refresh(contact)
+
+    scheduled_at = datetime.now(UTC) + timedelta(days=2)
+    response = await client.post(
+        "/appointments",
+        json={"contact_id": str(contact.id), "scheduled_at": scheduled_at.isoformat()},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["contact_id"] == str(contact.id)
+    assert body["lead_id"] is not None
+
+    lead_stmt = select(Lead).where(Lead.id == uuid.UUID(body["lead_id"]))
+    lead = (await db_session.execute(lead_stmt)).scalar_one()
+    assert lead.contact_id == contact.id
+    assert lead.phone == "+910000000099"
+
+    reminder_stmt = select(FollowUpTask).where(FollowUpTask.lead_id == lead.id)
+    reminders = (await db_session.execute(reminder_stmt)).scalars().all()
+    assert len(reminders) == 3
+    assert all(r.template_name == "appointment_reminder" for r in reminders)
+
+    assert len(sent) == 1
+    assert sent[0][0] == "+910000000099"
+    assert sent[0][1] == "appointment_confirmation"
 
 
 async def test_create_appointment_rejects_slot_within_30_minutes(
