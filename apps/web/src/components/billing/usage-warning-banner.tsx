@@ -17,7 +17,10 @@ const LOW_CREDIT_THRESHOLD = 0.8;
 function lowOrEmptyMetric(usage: BillingUsage): { label: string; isOut: boolean } | null {
   for (const { key, label } of CREDIT_METRICS) {
     const metric = usage[key];
-    if (metric.limit === null) continue;
+    // null = unlimited, 0 = the plan never included this channel at all —
+    // neither can meaningfully "run low" or be "used up" (same convention
+    // as choose-plan-cards.tsx / isAnyCreditExhausted).
+    if (metric.limit === null || metric.limit === 0) continue;
     if (isMetricExhausted(metric)) return { label, isOut: true };
     if (metric.used / metric.limit >= LOW_CREDIT_THRESHOLD) return { label, isOut: false };
   }

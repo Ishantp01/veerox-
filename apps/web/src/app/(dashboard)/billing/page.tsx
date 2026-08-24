@@ -53,6 +53,17 @@ export default function BillingPage() {
 
   const needsRecharge = useIsOutOfCredit();
 
+  // A limit of 0 means the plan never included that resource at all (same
+  // convention as choose-plan-cards.tsx's feature list) — showing "0 / 0"
+  // here would just be confusing, so those rows are hidden rather than
+  // rendered as an empty bar.
+  const teamMetric: UsageMetric | null = data?.plan
+    ? {
+        used: data.seat_count,
+        limit: typeof data.plan.limits.max_seats === "number" ? data.plan.limits.max_seats : null,
+      }
+    : null;
+
   return (
     <div className="mx-auto max-w-4xl">
       <PageHeader
@@ -132,20 +143,18 @@ export default function BillingPage() {
                       <CardTitle>Credits used since last renewal</CardTitle>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-4">
-                      {data.plan && (
-                        <UsageBar
-                          label="Team members"
-                          metric={{
-                            used: data.seat_count,
-                            limit: typeof data.plan.limits.max_seats === "number"
-                              ? data.plan.limits.max_seats
-                              : null,
-                          }}
-                        />
+                      {teamMetric && teamMetric.limit !== 0 && (
+                        <UsageBar label="Team members" metric={teamMetric} />
                       )}
-                      <UsageBar label="Call minutes" metric={usage.data.call_minutes} unit="min" />
-                      <UsageBar label="WhatsApp messages" metric={usage.data.whatsapp_messages} />
-                      <UsageBar label="Campaigns" metric={usage.data.campaigns} />
+                      {usage.data.call_minutes.limit !== 0 && (
+                        <UsageBar label="Call minutes" metric={usage.data.call_minutes} unit="min" />
+                      )}
+                      {usage.data.whatsapp_messages.limit !== 0 && (
+                        <UsageBar label="WhatsApp messages" metric={usage.data.whatsapp_messages} />
+                      )}
+                      {usage.data.campaigns.limit !== 0 && (
+                        <UsageBar label="Campaigns" metric={usage.data.campaigns} />
+                      )}
                     </CardContent>
                   </Card>
                 )}

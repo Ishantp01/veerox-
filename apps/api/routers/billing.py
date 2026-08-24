@@ -540,7 +540,12 @@ async def _apply_resource_recharge(
     The first time an org's `resource_limits` is touched, it's seeded from
     the org's *current* plan (not the purchased recharge SKU) so resources
     never recharged individually keep reading whatever the base plan
-    already granted them.
+    already granted them. An org with no current plan at all (its very
+    first purchase is a partial recharge) is seeded at 0 across every
+    resource instead — a missing key reads as *unlimited* elsewhere
+    (`effective_limits`/`is_over_plan_limit`), and a fresh org whose only
+    purchase was e.g. call minutes must not get free-unlimited WhatsApp/
+    seats/campaigns as a side effect of never having bought them.
     """
     key = RESOURCE_TYPE_LIMIT_KEY[purchased_plan.resource_type]
     amount = purchased_plan.limits.get(purchased_plan.resource_type, 0)
@@ -552,7 +557,11 @@ async def _apply_resource_recharge(
                 select(Plan).where(Plan.id == target_org.plan_id)
             )
             base_plan = base_plan_result.scalar_one_or_none()
-        target_org.resource_limits = dict(base_plan.limits) if base_plan is not None else {}
+        target_org.resource_limits = (
+            dict(base_plan.limits)
+            if base_plan is not None
+            else dict.fromkeys(set(RESOURCE_TYPE_LIMIT_KEY.values()), 0)
+        )
 
     # Reassign a new dict — plain JSON columns don't track in-place mutation.
     new_limits = dict(target_org.resource_limits)

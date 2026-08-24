@@ -482,6 +482,66 @@ async def test_verify_payment_recharge_for_metric_absent_on_current_plan(
     assert org.resource_limits["max_call_minutes"] == 1000
 
 
+async def test_verify_payment_first_ever_recharge_zeroes_out_other_resources(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A brand-new org (no plan_id, no resource_limits yet) whose very first
+    purchase is a partial recharge must not get free-unlimited WhatsApp/
+    seats/campaigns just because it never bought them — everything it
+    didn't buy should read as 0 (not included), not as an absent/unlimited
+    key."""
+    headers = await _seed_org_and_login(client, db_session)
+    recharge_plan = Plan(
+        code="call-minutes-1000",
+        name="1000 Call Minutes",
+        price_cents=99900,
+        limits={"max_call_minutes": 1000},
+        resource_type="max_call_minutes",
+    )
+    db_session.add(recharge_plan)
+    await db_session.flush()
+    db_session.add(
+        BillingPayment(
+            org_id=ORG_ID,
+            provider="razorpay",
+            provider_order_id="order_first_recharge",
+            plan_id=recharge_plan.id,
+            amount_cents=99900,
+            status="created",
+        )
+    )
+    await db_session.commit()
+
+    with patch("apps.api.routers.billing.settings.razorpay_key_id", "rzp_test_x"), patch(
+        "apps.api.routers.billing.settings.razorpay_key_secret", "secret_x"
+    ), patch("apps.api.routers.billing.razorpay.Client") as mock_client_cls:
+        mock_client_cls.return_value.utility.verify_payment_signature.return_value = True
+        response = await client.post(
+            "/billing/verify-payment",
+            json={
+                "razorpay_payment_id": "pay_first_recharge",
+                "razorpay_order_id": "order_first_recharge",
+                "razorpay_signature": "fakesig",
+            },
+            headers=headers,
+        )
+    assert response.status_code == 204
+
+    org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
+    assert org.plan_id is None
+    assert org.resource_limits == {
+        "max_call_minutes": 1000,
+        "max_whatsapp_messages": 0,
+        "max_seats": 0,
+        "max_campaigns": 0,
+    }
+
+    from apps.api.deps import is_over_plan_limit
+
+    assert await is_over_plan_limit(db_session, ORG_ID, "max_call_minutes", 0) is False
+    assert await is_over_plan_limit(db_session, ORG_ID, "max_whatsapp_messages", 0) is True
+
+
 async def test_available_plans_reflects_admin_catalog_not_hardcoded(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

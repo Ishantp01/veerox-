@@ -57,15 +57,19 @@ export function isMetricExhausted(metric: UsageMetric): boolean {
  * whether or not call minutes are left), so waiting for every credit to
  * empty would leave the org half-broken with no gate.
  *
- * Two kinds of metric are excluded, both because they can never "run out":
- * a `null` limit is unlimited on this plan, and a limit of `0` means the
- * plan never included that channel in the first place (e.g. the
- * WhatsApp-only plan with `max_call_minutes: 0`). Counting a zero-credit
- * channel as exhausted would gate those orgs permanently — and recharging
- * wouldn't help, since the new balance would be zero too. The API still
- * refuses those calls with a 402; they just don't lock the whole dashboard.
+ * A single zero-limit metric is excluded from that check — a `0` there just
+ * means the plan never included that one channel (e.g. a WhatsApp-only plan
+ * with `max_call_minutes: 0`), which the org chose on purpose, and gating
+ * the whole dashboard over a channel it never had would be wrong.
+ *
+ * But if *every* metered channel is `0` — call minutes and WhatsApp
+ * messages both — the org can't send anything at all, which is exactly the
+ * "out of credit" state this gate exists for, so that case always blocks
+ * regardless of usage. (A `null` limit is unlimited and never counts either
+ * way.)
  */
 export function isAnyCreditExhausted(usage: BillingUsage): boolean {
+  if (CREDIT_METRICS.every(({ key }) => usage[key].limit === 0)) return true;
   return CREDIT_METRICS.some(({ key }) => {
     const metric = usage[key];
     return metric.limit !== null && metric.limit > 0 && isMetricExhausted(metric);

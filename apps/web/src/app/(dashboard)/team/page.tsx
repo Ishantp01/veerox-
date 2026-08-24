@@ -54,6 +54,11 @@ export default function TeamPage() {
   const [exporting, setExporting] = useState(false);
 
   const maxMembers = billing.data?.plan?.limits.max_seats;
+  // A limit of 0 means the plan never included team members at all (same
+  // convention as the billing page's usage bars / choose-plan-cards) — the
+  // API still refuses any invite either way (apps/api/routers/team.py), but
+  // the header shouldn't advertise a confusing "0 / 0 team members used".
+  const hasSeatLimit = typeof maxMembers === "number" && maxMembers > 0;
   const memberLimitReached =
     typeof maxMembers === "number" && billing.data !== undefined && members.length >= maxMembers;
 
@@ -97,7 +102,7 @@ export default function TeamPage() {
       <PageHeader
         title="Team"
         description={
-          typeof maxMembers === "number"
+          hasSeatLimit
             ? `${members.length} / ${maxMembers} team members used`
             : "Everyone with access to your organization's dashboard."
         }
