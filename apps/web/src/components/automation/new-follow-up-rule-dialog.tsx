@@ -18,6 +18,12 @@ import {
   useToast,
 } from "@/components/ui";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
+import {
+  TemplateParamMapper,
+  guessTemplateParamSource,
+  resolveTemplateParams,
+  type TemplateParamSource,
+} from "@/components/whatsapp/template-param-mapper";
 import { useCreateFollowUpRule, useTemplates } from "@/lib/hooks";
 import type { LeadStatus } from "@/lib/types";
 
@@ -26,7 +32,7 @@ const ruleSchema = z.object({
   delayHours: z.coerce.number().nonnegative("Must be zero or greater"),
 });
 
-type RuleFieldErrors = Partial<Record<"name" | "delayHours" | "messageTemplate", string>>;
+type RuleFieldErrors = Partial<Record<"name" | "delayHours" | "messageTemplate" | "templateParams", string>>;
 
 export function NewFollowUpRuleDialog() {
   const [open, setOpen] = useState(false);
@@ -34,23 +40,40 @@ export function NewFollowUpRuleDialog() {
   const [status, setStatus] = useState<LeadStatus>("contacted");
   const [delayHours, setDelayHours] = useState("24");
   const [templateId, setTemplateId] = useState("");
+  const [paramSources, setParamSources] = useState<TemplateParamSource[]>([]);
+  const [paramCustomValues, setParamCustomValues] = useState<string[]>([]);
   const [messageTemplate, setMessageTemplate] = useState("");
   const [fieldErrors, setFieldErrors] = useState<RuleFieldErrors>({});
   const createRule = useCreateFollowUpRule();
   const { toast } = useToast();
 
   const { data: templatesData } = useTemplates({ active: true });
-  // Show every Meta-approved template — a template with {{1}}/{{2}} params
-  // is shown but disabled (not hidden), so it's clear why it can't be
-  // picked yet rather than silently missing from the list.
+  // Every Meta-approved template, including ones with {{1}}/{{2}} params —
+  // those are mapped below (the matched lead's name, the send date/time, or
+  // a fixed value) the same way a campaign's template params are, rather
+  // than being hidden/disabled.
   const templates = (templatesData ?? []).filter((t) => t.meta_status === "APPROVED");
   const selectedTemplate = templates.find((t) => t.id === templateId);
+
+  function handleTemplateChange(id: string) {
+    setTemplateId(id);
+    const template = templates.find((t) => t.id === id);
+    if (!template) {
+      setParamSources([]);
+      setParamCustomValues([]);
+      return;
+    }
+    setParamSources(template.param_labels.map(guessTemplateParamSource));
+    setParamCustomValues(template.param_labels.map(() => ""));
+  }
 
   function reset() {
     setName("");
     setStatus("contacted");
     setDelayHours("24");
     setTemplateId("");
+    setParamSources([]);
+    setParamCustomValues([]);
     setMessageTemplate("");
     setFieldErrors({});
   }
@@ -68,11 +91,21 @@ export function NewFollowUpRuleDialog() {
     if (!selectedTemplate && !messageTemplate.trim()) {
       errors.messageTemplate = "Choose a template and/or write a message";
     }
+    const hasEmptyCustomParam =
+      selectedTemplate?.param_labels.some(
+        (_, i) => (paramSources[i] ?? "custom") === "custom" && !(paramCustomValues[i] ?? "").trim()
+      ) ?? false;
+    if (hasEmptyCustomParam) {
+      errors.templateParams = "Fill in every custom placeholder value, or pick a different source";
+    }
     if (Object.keys(errors).length > 0 || !parsed.success) {
       setFieldErrors(errors);
       return;
     }
     setFieldErrors({});
+    const templateParams = selectedTemplate
+      ? resolveTemplateParams(selectedTemplate.param_labels, paramSources, paramCustomValues)
+      : undefined;
     createRule.mutate(
       {
         name: parsed.data.name,
@@ -80,6 +113,7 @@ export function NewFollowUpRuleDialog() {
         message_template: messageTemplate.trim() || undefined,
         template_name: selectedTemplate?.name,
         template_language: selectedTemplate?.language,
+        template_params: templateParams,
       },
       {
         onSuccess: () => {
@@ -169,16 +203,14 @@ export function NewFollowUpRuleDialog() {
               <Select
                 id="rule-template"
                 value={templateId}
-                onChange={(v) => setTemplateId(v)}
+                onChange={handleTemplateChange}
                 className="w-full"
               >
                 <option value="">No template — send the message below</option>
                 {templates.map((t) => (
-                  <option key={t.id} value={t.id} disabled={t.param_labels.length > 0}>
+                  <option key={t.id} value={t.id}>
                     {t.name} ({t.language})
-                    {t.param_labels.length > 0
-                      ? ` — needs ${t.param_labels.length} param(s), not supported here yet`
-                      : ""}
+                    {t.param_labels.length > 0 ? ` — ${t.param_labels.length} param(s)` : ""}
                   </option>
                 ))}
               </Select>
@@ -188,6 +220,25 @@ export function NewFollowUpRuleDialog() {
                   : "Reaches the contact even outside the 24h reply window — use this if leads matching this rule often haven't messaged you recently."}
               </p>
             </div>
+            {selectedTemplate && selectedTemplate.param_labels.length > 0 && (
+              <div>
+                <TemplateParamMapper
+                  paramLabels={selectedTemplate.param_labels}
+                  sources={paramSources}
+                  customValues={paramCustomValues}
+                  onSourceChange={(i, source) =>
+                    setParamSources((prev) => prev.map((s, idx) => (idx === i ? source : s)))
+                  }
+                  onCustomValueChange={(i, value) =>
+                    setParamCustomValues((prev) => prev.map((v, idx) => (idx === i ? value : v)))
+                  }
+                  nameSourceLabel="The matched lead's name"
+                />
+                {fieldErrors.templateParams && (
+                  <p className="mt-1.5 text-xs text-red-600">{fieldErrors.templateParams}</p>
+                )}
+              </div>
+            )}
             <div>
               <Label htmlFor="rule-message" required={!selectedTemplate}>
                 WhatsApp message

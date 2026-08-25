@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import httpx
 import structlog
@@ -39,6 +40,38 @@ _POLL_INTERVAL_SECS = 5
 _BATCH_SIZE = 20
 
 _DEFAULT_FOLLOW_UP_MESSAGE = "Following up as promised — is now still a good time to talk?"
+
+# Veerox's orgs are India-based — matches workers/whatsapp_dispatcher.py's
+# _SEND_TIME_ZONE, used the same way below to resolve "{{send_date}}"/
+# "{{send_time}}" tokens fresh at send time.
+_SEND_TIME_ZONE = ZoneInfo("Asia/Kolkata")
+
+
+def _resolve_template_body_params(config: list[str] | None, lead_name: str | None) -> list[str]:
+    """Turn a follow-up rule's configured per-placeholder tokens into the
+    actual ``body_params`` sent to Meta, resolved fresh for this specific
+    send — mirrors workers/whatsapp_dispatcher.py's identically-named
+    function for campaigns, with the matched Lead's name standing in for a
+    campaign's uploaded-file contact name.
+
+    Recognized tokens: "{{contact_name}}" (this task's ``Lead.name``),
+    "{{send_date}}"/"{{send_time}}" (IST, now). Anything else is used as a
+    literal fixed value for that slot.
+    """
+    if not config:
+        return []
+    now_ist = datetime.now(_SEND_TIME_ZONE)
+    resolved = []
+    for token in config:
+        if token == "{{contact_name}}":
+            resolved.append(lead_name or "there")
+        elif token == "{{send_date}}":
+            resolved.append(now_ist.strftime("%d %b %Y"))
+        elif token == "{{send_time}}":
+            resolved.append(now_ist.strftime("%I:%M %p"))
+        else:
+            resolved.append(token)
+    return resolved
 
 
 async def _materialize_lead_follow_up_at_tasks() -> None:
@@ -134,7 +167,7 @@ async def _materialize_rule_tasks() -> None:
                                 status="pending",
                                 template_name=rule.template_name,
                                 template_language=rule.template_language,
-                                template_params=[] if rule.template_name else None,
+                                template_params=rule.template_params if rule.template_name else None,
                             )
                         )
                         await db.flush()
@@ -218,11 +251,12 @@ async def _execute_task(task_id: UUID) -> None:
 
     try:
         if task.template_name:
+            body_params = _resolve_template_body_params(task.template_params, lead.name)
             await wa_client.send_template(
                 lead.phone,
                 task.template_name,
                 task.template_language or "en_US",
-                body_params=task.template_params or [],
+                body_params=body_params,
                 phone_number_id=phone_number_id,
             )
         else:

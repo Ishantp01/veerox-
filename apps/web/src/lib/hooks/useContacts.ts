@@ -53,3 +53,15 @@ export function useCreateContact() {
     },
   });
 }
+
+/** DELETE /crm/contacts/{id} — leads/appointments keep existing, just lose the contact link. */
+export function useDeleteContact() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ ok: boolean }, Error, string>({
+    mutationFn: (id) => apiFetch<{ ok: boolean }>(`/crm/contacts/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["contacts"] });
+    },
+  });
+}

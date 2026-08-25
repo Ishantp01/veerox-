@@ -74,3 +74,16 @@ async def update_contact(
     await db.commit()
     await db.refresh(contact)
     return contact
+
+
+@router.delete("/contacts/{contact_id}")
+async def delete_contact(contact_id: UUID, db: DbDep, org_id: RequestOrgDep) -> dict[str, bool]:
+    """Delete a contact. Leads/appointments that reference it (``ondelete="SET NULL"``
+    on their ``contact_id`` FK) are kept — they just lose the contact link, not deleted."""
+    stmt = select(Contact).where(Contact.id == contact_id, Contact.org_id == org_id)
+    contact = (await db.execute(stmt)).scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    await db.delete(contact)
+    await db.commit()
+    return {"ok": True}

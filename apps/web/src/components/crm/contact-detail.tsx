@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Building2, UserCheck } from "lucide-react";
+import { ArrowLeft, Building2, Trash2, UserCheck } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -10,6 +10,7 @@ import { ChannelBadge } from "@/components/conversations/channel-badge";
 import { IntentBadge } from "@/components/leads/intent-badge";
 import { StatusBadge } from "@/components/leads/status-badge";
 import {
+  Button,
   Card,
   CardContent,
   CardHeader,
@@ -20,8 +21,9 @@ import {
   TableCell,
   TableHeader,
   TableRow,
+  useToast,
 } from "@/components/ui";
-import { useContact } from "@/lib/hooks";
+import { useContact, useDeleteContact } from "@/lib/hooks";
 import { formatDateTime, formatPhone } from "@/lib/format";
 
 function leadHref(channel: string | null, id: string): string {
@@ -36,6 +38,22 @@ export interface ContactDetailProps {
 export function ContactDetail({ id }: ContactDetailProps) {
   const router = useRouter();
   const contact = useContact(id);
+  const deleteContact = useDeleteContact();
+  const { toast } = useToast();
+
+  function handleDelete() {
+    if (!contact.data) return;
+    const label = contact.data.name ?? formatPhone(contact.data.phone);
+    if (!window.confirm(`Delete ${label}? This can't be undone.`)) return;
+    deleteContact.mutate(id, {
+      onSuccess: () => {
+        toast({ title: "Contact deleted", variant: "success" });
+        router.push("/crm/contacts");
+      },
+      onError: (err) =>
+        toast({ title: "Could not delete contact", description: err.message, variant: "error" }),
+    });
+  }
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -59,6 +77,17 @@ export function ContactDetail({ id }: ContactDetailProps) {
             <PageHeader
               title={contact.data.name ?? formatPhone(contact.data.phone)}
               description={formatPhone(contact.data.phone)}
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDelete}
+                  loading={deleteContact.isPending}
+                >
+                  {!deleteContact.isPending && <Trash2 size={14} aria-hidden />}
+                  Delete contact
+                </Button>
+              }
             />
 
             <div className="flex flex-col gap-5">

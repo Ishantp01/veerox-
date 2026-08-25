@@ -127,6 +127,7 @@ export interface FollowUpRule {
   message_template: string | null;
   template_name: string | null;
   template_language: string | null;
+  template_params: string[] | null;
   active: boolean;
   created_at: string;
 }

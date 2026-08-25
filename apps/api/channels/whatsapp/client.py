@@ -84,7 +84,10 @@ def friendly_error_message(meta_error: dict[str, Any] | None) -> str:
 
     Prefers a known, human-worded explanation for common error codes; falls
     back to Meta's own message (its "(#code) " prefix stripped) when the
-    code isn't one we recognise.
+    code isn't one we recognise. Meta's top-level ``message`` is often a
+    generic label (e.g. "Invalid parameter" for every template validation
+    failure) while the actual explanation lives in ``error_data.details`` —
+    appended here when present so the real reason isn't lost.
     """
     if not meta_error:
         return "Message couldn't be sent."
@@ -94,10 +97,15 @@ def friendly_error_message(meta_error: dict[str, Any] | None) -> str:
     if hint:
         return hint
 
-    return (
+    message = (
         re.sub(r"^\(#\d+\)\s*", "", meta_error.get("message", "")).strip()
         or "Message couldn't be sent."
     )
+    error_data = meta_error.get("error_data")
+    details = error_data.get("details") if isinstance(error_data, dict) else None
+    if details and details.strip() and details.strip() not in message:
+        message = f"{message}: {details.strip()}"
+    return message
 
 
 async def send_text(to_e164: str, body: str, phone_number_id: str | None = None) -> dict[str, Any]:

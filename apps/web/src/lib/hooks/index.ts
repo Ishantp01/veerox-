@@ -51,6 +51,7 @@ export {
   useContacts,
   useContact,
   useCreateContact,
+  useDeleteContact,
   type ContactCreateInput,
 } from "./useContacts";
 export {

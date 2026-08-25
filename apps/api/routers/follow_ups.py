@@ -44,6 +44,7 @@ async def create_follow_up_rule(payload: FollowUpRuleCreate, db: DbDep) -> Follo
         message_template=payload.message_template,
         template_name=payload.template_name,
         template_language=payload.template_language,
+        template_params=payload.template_params,
         active=payload.active,
     )
     db.add(rule)

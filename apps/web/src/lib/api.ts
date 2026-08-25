@@ -27,6 +27,45 @@ function getAuthMode(): AuthMode {
 }
 
 /**
+ * Plain-language fallback per HTTP status, used whenever the backend's
+ * error text isn't safe to show a non-technical client as-is.
+ */
+const STATUS_FALLBACK: Record<number, string> = {
+  400: "That didn't go through — please check the details and try again.",
+  401: "Your session has expired. Please log in again.",
+  403: "You don't have permission to do that.",
+  404: "We couldn't find that — it may have been deleted or moved.",
+  409: "That already exists or conflicts with something else.",
+  422: "That didn't go through — please check the details and try again.",
+  429: "Too many requests — please wait a moment and try again.",
+  500: "Something went wrong on our end. Please try again in a moment.",
+  502: "Something went wrong on our end. Please try again in a moment.",
+  503: "The service is temporarily unavailable. Please try again shortly.",
+};
+const DEFAULT_FALLBACK = "Something went wrong. Please try again.";
+
+/** Backend error text that reads like it was written for a developer, not a client. */
+const TECHNICAL_MESSAGE_RE =
+  /traceback|exception|stack trace|nonetype|keyerror|valueerror|typeerror|sqlalchemy|psycopg|integrityerror|constraint|null value|undefined|internal server error|^api error \d+:|\{["'][a-z_]+["']:/i;
+
+/**
+ * Every toast in the app shows `err.message` from a failed `apiFetch` call
+ * verbatim (23+ call sites) — this is the one place all of them pass
+ * through, so it's the one place to catch a raw exception/DB error before
+ * it reaches a non-technical client. Curated backend messages (short,
+ * plain-English HTTPException details) pass through unchanged; anything
+ * that looks like developer-facing text gets swapped for a status-based
+ * fallback instead.
+ */
+function humanizeApiError(status: number, raw: string): string {
+  const trimmed = raw.trim();
+  const fallback = STATUS_FALLBACK[status] ?? DEFAULT_FALLBACK;
+  if (!trimmed) return fallback;
+  if (trimmed.length > 180 || TECHNICAL_MESSAGE_RE.test(trimmed)) return fallback;
+  return trimmed;
+}
+
+/**
  * Typed fetch wrapper for the Veerox API.
  *
  * - Prepends NEXT_PUBLIC_API_URL to `path`.
@@ -66,6 +105,7 @@ export async function apiFetch<T>(
     } catch {
       // ignore JSON parse failure — use the status message
     }
+    message = humanizeApiError(response.status, message);
     // Announce a plan-credit refusal to whoever is listening (the credit
     // modal), regardless of which page made the call — every feature route
     // goes through this wrapper, so the block can't be missed just because

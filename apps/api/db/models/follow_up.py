@@ -37,6 +37,12 @@ class FollowUpRule(Base):
     # which already has this exact branch for appointment-reminder tasks.
     template_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     template_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Ordered per-placeholder tokens for template_name's {{1}}, {{2}}, ...
+    # body — same "{{contact_name}}"/"{{send_date}}"/"{{send_time}}" tokens
+    # (or a literal fixed value) that workers/whatsapp_dispatcher.py resolves
+    # for campaigns; workers/follow_up_dispatcher.py resolves these the same
+    # way, fresh at send time, using the matched lead's name.
+    template_params: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

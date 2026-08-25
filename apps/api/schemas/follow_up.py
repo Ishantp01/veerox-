@@ -17,6 +17,7 @@ class FollowUpRuleCreate(BaseModel):
     message_template: str | None = None
     template_name: str | None = None
     template_language: str | None = None
+    template_params: list[str] | None = None
     active: bool = True
 
     @model_validator(mode="after")
@@ -38,6 +39,7 @@ class FollowUpRuleOut(BaseModel):
     message_template: str | None
     template_name: str | None = None
     template_language: str | None = None
+    template_params: list[str] | None = None
     active: bool
     created_at: datetime
 
@@ -48,6 +50,7 @@ class FollowUpRuleUpdateIn(BaseModel):
     message_template: str | None = None
     template_name: str | None = None
     template_language: str | None = None
+    template_params: list[str] | None = None
     active: bool | None = None
 
 

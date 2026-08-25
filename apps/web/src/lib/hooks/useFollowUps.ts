@@ -19,6 +19,7 @@ export interface FollowUpRuleCreateInput {
   message_template?: string;
   template_name?: string;
   template_language?: string;
+  template_params?: string[];
 }
 
 /** POST /follow-up-rules → FollowUpRule */
