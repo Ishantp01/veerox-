@@ -30,6 +30,8 @@ export interface SelectProps {
   className?: string;
   disabled?: boolean;
   "aria-label"?: string;
+  /** Native hover tooltip on the trigger button. */
+  title?: string;
 }
 
 function parseOptions(children: ReactNode): ParsedOption[] {
@@ -55,6 +57,7 @@ export function Select({
   className,
   disabled,
   "aria-label": ariaLabel,
+  title,
 }: SelectProps) {
   const options = parseOptions(children);
   const [open, setOpen] = useState(false);
@@ -145,6 +148,7 @@ export function Select({
         type="button"
         id={id}
         disabled={disabled}
+        title={title}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}

@@ -205,6 +205,44 @@ async def test_list_leads_filters_by_status(
     assert rows[0]["status"] == "contacted"
 
 
+async def test_list_leads_status_qualified_also_matches_qualification_status(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The leads-view filter only offers one "Qualified" option (not two
+    near-duplicate ones — see apps/web/src/components/leads/leads-view.tsx),
+    so status=qualified must match either field: the pipeline stage
+    (Lead.status) or the separate rep-review workflow
+    (Lead.qualification_status).
+    """
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000042")
+    db_session.add(user)
+    await db_session.flush()
+    db_session.add(
+        Lead(org_id=ORG_ID, user_id=user.id, intent="quote", status="qualified")
+    )
+    db_session.add(
+        Lead(
+            org_id=ORG_ID,
+            user_id=user.id,
+            intent="quote",
+            status="contacted",
+            qualification_status="qualified",
+        )
+    )
+    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", status="new"))
+    await db_session.commit()
+
+    response = await client.get(
+        "/admin/leads", params={"status": "qualified"}, headers=ADMIN_HEADERS
+    )
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 2
+    assert {row["status"] for row in rows} == {"qualified", "contacted"}
+
+
 async def test_new_lead_defaults_to_status_new(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -433,12 +471,16 @@ async def test_import_leads_csv_stages_campaign_and_creates_qualified_leads(
 ) -> None:
     """Leads-page imports (unlike the Campaigns page) do both: stage the
     usual CallCampaign + CampaignTarget rows for AI outreach (campaign
-    behavior is unchanged), AND immediately create a Lead per contact with
-    status="qualified" — an org uploading a trusted contact list shouldn't
-    have to wait for the AI to call each one before seeing them on the Leads
-    page."""
+    behavior is unchanged), AND immediately create a Lead per contact using
+    each row's own 'status' column — an org uploading a trusted contact list
+    shouldn't have to wait for the AI to call each one before seeing them on
+    the Leads page."""
     await _seed_org(db_session)
-    csv_body = "name,phone,intent\nAsha,+910000000010,Book a demo\nRavi,+910000000011,\n"
+    csv_body = (
+        "name,phone,intent,status\n"
+        "Asha,+910000000010,Book a demo,qualified\n"
+        "Ravi,+910000000011,,qualified\n"
+    )
 
     response = await client.post(
         "/admin/leads/import",
@@ -470,7 +512,7 @@ async def test_import_leads_csv_accepts_custom_campaign_name_and_channel(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     await _seed_org(db_session)
-    csv_body = "name,phone\nAsha,+910000000012\n"
+    csv_body = "name,phone,status\nAsha,+910000000012,new\n"
 
     response = await client.post(
         "/admin/leads/import",
@@ -494,7 +536,7 @@ async def test_import_leads_csv_reports_row_errors(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     await _seed_org(db_session)
-    csv_body = "name,phone\nNo Phone,\nBad Format,9179609989\n"
+    csv_body = "name,phone,status\nNo Phone,,new\nBad Format,9179609989,new\n"
 
     response = await client.post(
         "/admin/leads/import",
@@ -521,7 +563,7 @@ async def test_import_leads_csv_unrouted_rows_reported_not_defaulted(
     routed to voice (which used to make "WhatsApp list uploaded, nothing
     sent" a silent failure)."""
     await _seed_org(db_session)
-    csv_body = "name,phone\nAsha,+910000000014\n"
+    csv_body = "name,phone,status\nAsha,+910000000014,new\n"
 
     response = await client.post(
         "/admin/leads/import",
@@ -544,11 +586,11 @@ async def test_import_leads_csv_mixed_call_whatsapp_columns_creates_one_campaign
     both channels produces two targets under that same campaign."""
     await _seed_org(db_session)
     csv_body = (
-        "name,phone,call,whatsapp\n"
-        "CallOnly,+910000000015,yes,no\n"
-        "WhatsAppOnly,+910000000016,no,yes\n"
-        "Both,+910000000017,yes,yes\n"
-        "Neither,+910000000018,no,no\n"
+        "name,phone,call,whatsapp,status\n"
+        "CallOnly,+910000000015,yes,no,new\n"
+        "WhatsAppOnly,+910000000016,no,yes,new\n"
+        "Both,+910000000017,yes,yes,new\n"
+        "Neither,+910000000018,no,no,new\n"
     )
 
     response = await client.post(
@@ -590,7 +632,7 @@ async def test_import_leads_csv_decodes_cp1252_fallback(
     UnicodeDecodeError (500) instead of importing cleanly. See
     _decode_csv_bytes in routers/admin.py."""
     await _seed_org(db_session)
-    csv_bytes = "name,phone\nO’Brien,+919179609989\n".encode("cp1252")
+    csv_bytes = "name,phone,status\nO’Brien,+919179609989,new\n".encode("cp1252")
 
     response = await client.post(
         "/admin/leads/import",
@@ -611,11 +653,60 @@ async def test_import_leads_csv_rejects_missing_phone_column(
     await _seed_org(db_session)
     response = await client.post(
         "/admin/leads/import",
-        files={"file": ("leads.csv", "name,intent\nAsha,demo\n", "text/csv")},
+        files={"file": ("leads.csv", "name,intent,status\nAsha,demo,new\n", "text/csv")},
         headers=ADMIN_HEADERS,
     )
 
     assert response.status_code == 400
+
+
+async def test_import_leads_csv_rejects_missing_status_column(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Unlike POST /admin/campaigns (which never touches Lead.status), this
+    endpoint creates a Lead per row immediately, so 'status' is required —
+    same as 'phone' — rather than silently defaulting."""
+    await _seed_org(db_session)
+    response = await client.post(
+        "/admin/leads/import",
+        files={"file": ("leads.csv", "name,phone\nAsha,+910000000019\n", "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "status" in response.json()["detail"]
+
+
+async def test_import_leads_csv_uses_per_row_status_and_rejects_invalid_values(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    csv_body = (
+        "name,phone,status\n"
+        "New Lead,+910000000022,new\n"
+        "Contacted Lead,+910000000023,Converted\n"  # case-insensitive
+        "Bad Status,+910000000024,not-a-status\n"
+    )
+
+    response = await client.post(
+        "/admin/leads/import",
+        params={"channel": "voice"},
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["imported"] == 2
+    assert body["skipped"] == 1
+    assert "status must be one of" in body["errors"][0]["reason"]
+
+    leads = (await db_session.execute(select(Lead))).scalars().all()
+    by_phone = {lead.phone: lead.status for lead in leads}
+    assert by_phone == {
+        "+910000000022": "new",
+        "+910000000023": "converted",
+    }
 
 
 async def test_import_leads_rejects_unsupported_file_type(
@@ -652,9 +743,9 @@ async def test_import_leads_xlsx_stages_campaign_and_creates_qualified_leads(
     await _seed_org(db_session)
     xlsx_bytes = _make_xlsx_bytes(
         [
-            ["name", "phone", "intent"],
-            ["Asha", "+910000000020", "Book a demo"],
-            ["Ravi", "+910000000021", ""],
+            ["name", "phone", "intent", "status"],
+            ["Asha", "+910000000020", "Book a demo", "qualified"],
+            ["Ravi", "+910000000021", "", "qualified"],
         ]
     )
 

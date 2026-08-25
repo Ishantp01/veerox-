@@ -45,7 +45,13 @@ export default function SalesDashboardPage() {
             tint="emerald"
           />
           <StatCard label="Total leads" value={totalLeads} icon={Users} tint="purple" />
-          <StatCard label="Qualified leads" value={qualifiedCount} icon={BadgeCheck} tint="amber" />
+          <StatCard
+            label="Qualified leads"
+            value={qualifiedCount}
+            icon={BadgeCheck}
+            tint="amber"
+            sublabel="By review stage, not pipeline status"
+          />
         </div>
       )}
 
@@ -103,7 +109,10 @@ export default function SalesDashboardPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Qualification funnel</CardTitle>
+                <CardTitle>Review Stage funnel</CardTitle>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Rep-driven review, separate from the pipeline stages on the left.
+                </p>
               </CardHeader>
               <CardContent className="p-0">
                 <QueryBoundary

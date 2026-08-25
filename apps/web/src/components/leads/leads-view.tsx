@@ -28,14 +28,16 @@ type LeadImportStartMode = "draft" | "now" | "scheduled";
 const INTENT_SEARCH_DEBOUNCE_MS = 300;
 
 // status and qualification_status are independently editable (the lead
-// table's Qualification dropdown writes qualification_status only, never
+// table's Review Stage dropdown writes qualification_status only, never
 // touching status — see lead-table.tsx) — a lead marked "Qualified" there
-// commonly still has status "new"/"contacted". So "qualification_status:
-// qualified" is NOT redundant with the "status: qualified" option above it,
-// despite sharing a label — omitting it (as this used to) meant leads
-// qualified via that workflow had no way to be filtered for at all.
+// commonly still has status "new"/"contacted". The plain "Qualified" option
+// in the status group above (status:qualified) covers both: the backend's
+// _lead_status_clause ORs in qualification_status="qualified" too
+// (apps/api/routers/admin.py), so there's no separate "Qualified" entry
+// here — only "in_review"/"disqualified" have no pipeline-status
+// equivalent and need their own entry (rendered under a "— Review Stage —"
+// divider below so they don't read as more pipeline stages).
 const EXTRA_QUALIFICATION_FILTER_OPTIONS: LeadQualificationStatus[] = [
-  "qualified",
   "in_review",
   "disqualified",
 ];
@@ -177,22 +179,23 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
     setImporting(true);
     try {
       const result = await importLeadsFile(file, effectiveChannel);
-      // Leads-page import creates a Lead per contact immediately (status
-      // "qualified", editable like any lead) — unlike the Campaigns page,
-      // which only creates a Lead once the AI actually qualifies someone.
-      // It also still stages the usual campaign for AI outreach in the
-      // background (routers/admin.py::_create_campaigns_from_rows,
-      // auto_qualify=True) — one campaign per upload, even for a mixed
-      // call+WhatsApp file. Always saved as a draft here; start it from the
-      // Campaigns page when ready.
+      // Leads-page import creates a Lead per contact immediately, using each
+      // row's own "status" column (required — apps/api/routers/admin.py's
+      // import_leads_file) — unlike the Campaigns page, which only creates a
+      // Lead once the AI actually qualifies someone. It also still stages
+      // the usual campaign for AI outreach in the background
+      // (routers/admin.py::_create_campaigns_from_rows, auto_qualify=True)
+      // — one campaign per upload, even for a mixed call+WhatsApp file.
+      // Always saved as a draft here; start it from the Campaigns page when
+      // ready.
       const campaignName = `"${result.campaign.name}"`;
       const outreachText = `Outreach via ${campaignName} is saved as a draft — start it from the Campaigns page when ready.`;
       toast({
         title: "Import complete",
         description:
           result.skipped > 0
-            ? `Added ${result.imported} lead(s), marked Qualified (${result.skipped} row(s) skipped). ${outreachText}`
-            : `Added ${result.imported} lead(s), marked Qualified. ${outreachText}`,
+            ? `Added ${result.imported} lead(s) (${result.skipped} row(s) skipped). ${outreachText}`
+            : `Added ${result.imported} lead(s). ${outreachText}`,
         variant: result.skipped > 0 ? "info" : "success",
       });
       await refetch();
@@ -244,7 +247,8 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
             <Select
               value={stageFilter}
               onChange={(v) => setStageFilter(v)}
-              aria-label="Filter leads by status"
+              aria-label="Filter leads by pipeline status or review stage"
+              title="Status = pipeline stage. Review stage = a separate rep-driven review, independent of pipeline status."
             >
               <option value="">All statuses</option>
               {LEAD_STATUS_OPTIONS.map((s) => (
@@ -252,9 +256,16 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
                   {LEAD_STATUS_LABELS[s]}
                 </option>
               ))}
+              {/* Non-selectable section label — the options below filter by the
+                  separate qualification_status field, not the pipeline status
+                  above, so they're visually grouped apart rather than reading
+                  as more pipeline stages. */}
+              <option value="__review_stage_divider__" disabled>
+                — Review Stage —
+              </option>
               {EXTRA_QUALIFICATION_FILTER_OPTIONS.map((s) => (
                 <option key={s} value={`qual:${s}`}>
-                  Qualification: {LEAD_QUALIFICATION_LABELS[s]}
+                  {LEAD_QUALIFICATION_LABELS[s]}
                 </option>
               ))}
             </Select>

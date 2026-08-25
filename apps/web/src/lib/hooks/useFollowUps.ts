@@ -15,7 +15,11 @@ export function useFollowUpRules() {
 export interface FollowUpRuleCreateInput {
   name: string;
   trigger_config: { status: string; delay_hours: number };
-  channel?: string;
+  /** Which leads this rule targets, matched against the lead's own channel.
+   * "whatsapp" sends the message/template below; "voice" places an
+   * automated outbound call instead and needs neither. Defaults to
+   * "whatsapp" server-side when omitted. */
+  channel?: "whatsapp" | "voice";
   message_template?: string;
   template_name?: string;
   template_language?: string;

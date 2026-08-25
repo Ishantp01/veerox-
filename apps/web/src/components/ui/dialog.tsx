@@ -163,7 +163,7 @@ export function DialogContent({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cn(
-          "relative z-10 w-full max-w-lg animate-fade-up rounded-2xl border border-slate-200 bg-white shadow-card-lg focus-visible:outline-none dark:border-slate-800 dark:bg-slate-900",
+          "relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col animate-fade-up rounded-2xl border border-slate-200 bg-white shadow-card-lg focus-visible:outline-none dark:border-slate-800 dark:bg-slate-900",
           className,
         )}
         {...props}
@@ -208,7 +208,13 @@ export function DialogBody({
   ...props
 }: HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn("px-6 py-4 text-sm text-slate-600 dark:text-slate-400", className)} {...props}>
+    <div
+      className={cn(
+        "max-h-[60vh] overflow-y-auto px-6 py-4 text-sm text-slate-600 dark:text-slate-400",
+        className,
+      )}
+      {...props}
+    >
       {children}
     </div>
   );

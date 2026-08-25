@@ -134,7 +134,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
       },
       {
         onSuccess: () => {
-          toast({ title: "Qualification updated", variant: "success" });
+          toast({ title: "Review stage updated", variant: "success" });
         },
         onError: (err) => {
           toast({ title: "Update failed", description: err.message, variant: "error" });
@@ -203,6 +203,9 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                     <CalendarClock size={15} aria-hidden className="text-slate-400" />
                     <CardTitle>Status &amp; Follow-up</CardTitle>
                   </div>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Where this lead sits in your sales pipeline.
+                  </p>
                 </CardHeader>
                 <CardContent>
                   <div className="flex flex-col gap-4">
@@ -261,13 +264,17 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                 <CardHeader>
                   <div className="flex items-center gap-2">
                     <BadgeCheck size={15} aria-hidden className="text-slate-400" />
-                    <CardTitle>Qualification</CardTitle>
+                    <CardTitle>Review Stage</CardTitle>
                   </div>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    A separate, rep-driven review of whether this lead is worth pursuing —
+                    independent of the pipeline Status above.
+                  </p>
                 </CardHeader>
                 <CardContent>
                   <div className="flex flex-col gap-4">
                     <div>
-                      <Label htmlFor="qualification-status">Stage</Label>
+                      <Label htmlFor="qualification-status">Review stage</Label>
                       <Select
                         id="qualification-status"
                         value={qualificationStatus}
@@ -312,7 +319,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                       onClick={handleSaveQualification}
                     >
                       {!updateLead.isPending && <Save size={15} aria-hidden />}
-                      Save qualification
+                      Save review stage
                     </Button>
                   </div>
                 </CardContent>

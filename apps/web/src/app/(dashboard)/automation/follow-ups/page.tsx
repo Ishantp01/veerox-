@@ -20,6 +20,7 @@ import {
 } from "@/components/ui";
 import { NewFollowUpRuleDialog } from "@/components/automation/new-follow-up-rule-dialog";
 import { FollowUpTaskStatusBadge } from "@/components/automation/follow-up-task-status-badge";
+import { ChannelBadge } from "@/components/conversations/channel-badge";
 import {
   useCancelFollowUpTask,
   useDeleteFollowUpRule,
@@ -55,7 +56,7 @@ export default function FollowUpsPage() {
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="Automated Follow-up"
-        description="Rules that automatically re-engage leads over WhatsApp, plus every lead's own scheduled follow-up."
+        description="Rules that automatically re-engage leads over WhatsApp or a call, plus every lead's own scheduled follow-up."
         action={<NewFollowUpRuleDialog />}
       />
 
@@ -73,7 +74,7 @@ export default function FollowUpsPage() {
             loadingFallback={
               <table className="w-full border-collapse text-sm">
                 <tbody>
-                  <SkeletonRows rows={2} cols={5} />
+                  <SkeletonRows rows={2} cols={6} />
                 </tbody>
               </table>
             }
@@ -91,6 +92,9 @@ export default function FollowUpsPage() {
                 <thead>
                   <TableRow isHeader>
                     <TableHeader>Name</TableHeader>
+                    <TableHeader title="Which leads this rule matches — only ones captured over the same channel.">
+                      Channel
+                    </TableHeader>
                     <TableHeader>Trigger</TableHeader>
                     <TableHeader>Message</TableHeader>
                     <TableHeader>Active</TableHeader>
@@ -103,12 +107,21 @@ export default function FollowUpsPage() {
                       <TableCell className="font-semibold text-slate-800 dark:text-slate-100">
                         {rule.name}
                       </TableCell>
+                      <TableCell>
+                        <ChannelBadge channel={rule.channel === "voice" ? "voice" : "whatsapp"} />
+                      </TableCell>
                       <TableCell className="text-xs text-slate-600 dark:text-slate-400">
                         status = {rule.trigger_config.status ?? "—"}, wait{" "}
                         {rule.trigger_config.delay_hours ?? 0}h
                       </TableCell>
                       <TableCell className="max-w-xs truncate text-xs text-slate-500">
-                        {rule.message_template}
+                        {rule.channel === "voice" ? (
+                          <span className="text-slate-400 dark:text-slate-600">
+                            Automated call — no message
+                          </span>
+                        ) : (
+                          rule.message_template
+                        )}
                       </TableCell>
                       <TableCell>
                         <Button

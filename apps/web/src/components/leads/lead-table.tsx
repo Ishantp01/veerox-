@@ -20,11 +20,15 @@ export interface LeadTableProps {
 
 /**
  * Presentational lead table (UI plan §7.2) — aware of the Lead type but not of
- * fetching. Columns: Name, Phone, Intent, Status, Qualification, Created. Rows
+ * fetching. Columns: Name, Phone, Intent, Status, Review Stage, Created. Rows
  * navigate to `${detailBasePath}/${lead.id}` when provided (dashboard/CRM
- * detail view). Qualification is a second, independent field on the same
- * Lead row (see qualification-badge.tsx), edited inline here rather than on
- * a separate page since it's the same underlying data as `status`.
+ * detail view). "Review Stage" (Lead.qualification_status) is a second,
+ * independent field from "Status" (Lead.status) — a lead can be "Contacted"
+ * in the pipeline while already "Qualified" in review, or vice versa. Named
+ * differently from "Status" here (not just "Qualification") specifically so
+ * the two columns don't read as the same concept — see each header's
+ * `title` tooltip for the exact distinction. Edited inline here rather than
+ * on a separate page since it's the same underlying Lead row.
  */
 export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
   const router = useRouter();
@@ -39,8 +43,12 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
             <TableHeader>Phone</TableHeader>
             <TableHeader>Intent</TableHeader>
             <TableHeader>Tags</TableHeader>
-            <TableHeader>Status</TableHeader>
-            <TableHeader>Qualification</TableHeader>
+            <TableHeader title="Where this lead sits in your sales pipeline: New → Contacted → Qualified → Converted/Lost.">
+              Status
+            </TableHeader>
+            <TableHeader title="A separate, rep-driven review of whether this lead is worth pursuing — independent of the pipeline Status.">
+              Review Stage
+            </TableHeader>
             <TableHeader>Created</TableHeader>
           </TableRow>
         </thead>
@@ -107,7 +115,7 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
                       })
                     }
                     className={QUALIFICATION_SELECT_CLS}
-                    aria-label={`Qualification stage for ${lead.name ?? lead.phone ?? lead.id}`}
+                    aria-label={`Review stage for ${lead.name ?? lead.phone ?? lead.id}`}
                   >
                     {LEAD_QUALIFICATION_OPTIONS.map((s) => (
                       <option key={s} value={s}>

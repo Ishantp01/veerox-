@@ -573,6 +573,20 @@ def _lead_search_clause(search: str):
     return or_(Lead.intent.ilike(f"%{search}%"), cast(Lead.tags, String).ilike(f"%{search}%"))
 
 
+def _lead_status_clause(status: str):
+    """`status=qualified` also matches leads qualified via the separate
+    qualification_status review workflow (db/models/lead.py) — a lead a rep
+    marked qualified there commonly still sits at pipeline status
+    "new"/"contacted". The leads-list filter (leads-view.tsx) offers a
+    single "Qualified" option covering both rather than two near-duplicate
+    ones, so this is the one status value where the filter means "either
+    field says qualified" instead of an exact pipeline-status match.
+    """
+    if status == "qualified":
+        return or_(Lead.status == "qualified", Lead.qualification_status == "qualified")
+    return Lead.status == status
+
+
 @router.get("/leads")
 async def list_leads(
     db: DbDep,
@@ -595,7 +609,7 @@ async def list_leads(
     if channel:
         stmt = stmt.where(Lead.channel == channel)
     if status:
-        stmt = stmt.where(Lead.status == status)
+        stmt = stmt.where(_lead_status_clause(status))
     if qualification_status:
         stmt = stmt.where(Lead.qualification_status == qualification_status)
     if tag:
@@ -608,9 +622,9 @@ async def list_leads(
 
 
 _SAMPLE_IMPORT_ROWS = [
-    {"name": "Asha Verma", "phone": "+919876543210", "call": "yes", "whatsapp": "no"},
-    {"name": "Rohit Singh", "phone": "+919812345678", "call": "no", "whatsapp": "yes"},
-    {"name": "Priya Nair", "phone": "+919845098450", "call": "yes", "whatsapp": "yes"},
+    {"name": "Asha Verma", "phone": "+919876543210", "call": "yes", "whatsapp": "no", "status": "new"},
+    {"name": "Rohit Singh", "phone": "+919812345678", "call": "no", "whatsapp": "yes", "status": "contacted"},
+    {"name": "Priya Nair", "phone": "+919845098450", "call": "yes", "whatsapp": "yes", "status": "qualified"},
 ]
 
 
@@ -634,16 +648,19 @@ def _csv_streaming_response(csv_text: str, filename: str) -> StreamingResponse:
 @router.get("/leads/sample.csv")
 async def sample_leads_csv(x_admin_token: str | None = Header(None)) -> StreamingResponse:
     """Blank-data template for POST /leads/import — same columns that
-    endpoint reads (name, phone, call, whatsapp), so a unified-page upload
-    can mix call-only, WhatsApp-only, and both-channel rows in one file.
+    endpoint reads (name, phone, call, whatsapp, status), so a unified-page
+    upload can mix call-only, WhatsApp-only, and both-channel rows in one
+    file. `status` is required here (unlike POST /admin/campaigns' sample,
+    which has no such column) since this endpoint creates a Lead per row
+    immediately — see import_leads_file's required_columns.
     Registered ahead of GET /leads/{lead_id} so its literal path isn't
     swallowed by that route's UUID path param.
     """
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["name", "phone", "call", "whatsapp"])
+    writer.writerow(["name", "phone", "call", "whatsapp", "status"])
     for row in _SAMPLE_IMPORT_ROWS:
-        writer.writerow([row["name"], row["phone"], row["call"], row["whatsapp"]])
+        writer.writerow([row["name"], row["phone"], row["call"], row["whatsapp"], row["status"]])
     buf.seek(0)
 
     return _csv_streaming_response(buf.getvalue(), "leads-sample.csv")
@@ -655,9 +672,9 @@ async def sample_leads_xlsx(x_admin_token: str | None = Header(None)) -> Streami
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Leads"
-    sheet.append(["name", "phone", "call", "whatsapp"])
+    sheet.append(["name", "phone", "call", "whatsapp", "status"])
     for row in _SAMPLE_IMPORT_ROWS:
-        sheet.append([row["name"], row["phone"], row["call"], row["whatsapp"]])
+        sheet.append([row["name"], row["phone"], row["call"], row["whatsapp"], row["status"]])
     for cell in sheet["B"][1:]:
         cell.number_format = "@"
 
@@ -758,7 +775,7 @@ def _leads_export_stmt(
     if channel:
         stmt = stmt.where(Lead.channel == channel)
     if status:
-        stmt = stmt.where(Lead.status == status)
+        stmt = stmt.where(_lead_status_clause(status))
     if qualification_status:
         stmt = stmt.where(Lead.qualification_status == qualification_status)
     if tag:
@@ -950,17 +967,29 @@ def _decode_csv_bytes(raw: bytes) -> str:
             ) from exc
 
 
-def _iter_csv_rows(raw: bytes) -> Iterator[tuple[int, dict[str, str]]]:
+def _missing_columns_detail(missing: set[str]) -> str:
+    cols = sorted(missing)
+    if len(cols) == 1:
+        return f"File must include a '{cols[0]}' column"
+    quoted = ", ".join(f"'{c}'" for c in cols)
+    return f"File must include the following columns: {quoted}"
+
+
+def _iter_csv_rows(
+    raw: bytes, required_columns: frozenset[str] = frozenset({"phone"})
+) -> Iterator[tuple[int, dict[str, str]]]:
     reader = csv.DictReader(io.StringIO(_decode_csv_bytes(raw)))
-    if not reader.fieldnames or "phone" not in {
-        (f or "").strip().lower() for f in reader.fieldnames
-    }:
-        raise HTTPException(status_code=400, detail="File must include a 'phone' column")
+    headers = {(f or "").strip().lower() for f in (reader.fieldnames or [])}
+    missing = required_columns - headers
+    if missing:
+        raise HTTPException(status_code=400, detail=_missing_columns_detail(missing))
     for row_num, raw_row in enumerate(reader, start=2):  # header occupies row 1
         yield row_num, _normalize_import_row(raw_row)
 
 
-def _iter_xlsx_rows(raw: bytes) -> Iterator[tuple[int, dict[str, str]]]:
+def _iter_xlsx_rows(
+    raw: bytes, required_columns: frozenset[str] = frozenset({"phone"})
+) -> Iterator[tuple[int, dict[str, str]]]:
     try:
         workbook = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
     except Exception as exc:
@@ -969,8 +998,9 @@ def _iter_xlsx_rows(raw: bytes) -> Iterator[tuple[int, dict[str, str]]]:
     sheet_rows = workbook.active.iter_rows(values_only=True)
     header = next(sheet_rows, None) or ()
     headers = [(str(h).strip().lower() if h is not None else "") for h in header]
-    if "phone" not in headers:
-        raise HTTPException(status_code=400, detail="File must include a 'phone' column")
+    missing = required_columns - set(headers)
+    if missing:
+        raise HTTPException(status_code=400, detail=_missing_columns_detail(missing))
 
     for row_num, values in enumerate(sheet_rows, start=2):  # header occupies row 1
         yield row_num, _normalize_import_row(dict(zip(headers, values, strict=False)))
@@ -1007,13 +1037,14 @@ async def import_leads_file(
     """Bulk-import leads from an uploaded CSV or Excel (.xlsx) file.
 
     Imported contacts are staged as an auto-generated campaign
-    (``CallCampaign`` + ``CampaignTarget`` rows) rather than written straight
-    to the CRM — the background dialer/dispatcher reaches out to each one and
-    the AI's ``qualify_lead`` tool call is what promotes a target into a
-    ``Lead`` row, and only when interested. This mirrors ``POST
-    /admin/campaigns`` exactly; the only difference is this endpoint fills in
-    a default campaign name/criteria when the caller doesn't supply one. For
-    programmatic (non-file) bulk import, see ``POST /admin/leads/bulk``.
+    (``CallCampaign`` + ``CampaignTarget`` rows), same as ``POST
+    /admin/campaigns`` — the background dialer/dispatcher still reaches out
+    to each one. Unlike that endpoint, though, this one ALSO writes a
+    ``Lead`` row immediately for every contact (``auto_qualify=True``, see
+    ``_create_campaign_from_rows``) rather than waiting for the AI's
+    ``qualify_lead`` tool call, and it fills in a default campaign
+    name/criteria when the caller doesn't supply one. For programmatic
+    (non-file) bulk import, see ``POST /admin/leads/bulk``.
 
     ``channel`` is optional: per-channel pages (e.g. /calling/leads,
     /whatsapp/leads) pass it explicitly, forcing every row into that one
@@ -1021,6 +1052,14 @@ async def import_leads_file(
     mix call and WhatsApp rows — in that case each row's own ``call``/
     ``whatsapp`` columns (or legacy ``channel`` column) pick its
     destination(s) and the file is split into one campaign per channel found.
+
+    The file must also include a ``status`` column (one of "new",
+    "contacted", "qualified", "converted", "lost") — required, with no
+    default, since it becomes each row's immediately-created Lead's status.
+    A blank or invalid cell is a per-row import error, same as a bad phone
+    number. This is the pipeline status only — it doesn't touch
+    ``qualification_status`` (the separate rep-review workflow), which stays
+    at its default and is edited per-lead afterward from the Leads page.
 
     ``start_mode`` controls whether the resulting campaign(s) begin outreach
     immediately ("now"), sit inert until manually started ("draft", the
@@ -1036,10 +1075,15 @@ async def import_leads_file(
     filename = (file.filename or "").lower()
     raw = await file.read()
 
+    # A Lead is created immediately for every row here (auto_qualify=True
+    # below) with that row's own status, so — unlike POST /admin/campaigns,
+    # which never touches Lead.status — the file must supply one per row
+    # rather than defaulting silently to "qualified".
+    required_columns = frozenset({"phone", "status"})
     if filename.endswith(".csv"):
-        rows = list(_iter_csv_rows(raw))
+        rows = list(_iter_csv_rows(raw, required_columns))
     elif filename.endswith(".xlsx"):
-        rows = list(_iter_xlsx_rows(raw))
+        rows = list(_iter_xlsx_rows(raw, required_columns))
     else:
         raise HTTPException(status_code=400, detail="Only .csv or .xlsx files are supported")
 
@@ -1246,11 +1290,17 @@ async def _create_campaign_from_rows(
     ``auto_qualify=True`` (the leads-page entry points, ``POST
     /admin/leads/import`` and ``POST /admin/leads/bulk``) additionally
     creates a ``Lead`` row immediately for every successfully staged
-    contact, with ``status="qualified"`` — an org uploading a list of
-    contacts they already trust shouldn't have to wait for the AI to call
-    each one before seeing them on the Leads page. The org can change that
-    status afterward like any other lead. A row resolved to both channels
-    still produces one Lead per channel, matching its two outreach attempts.
+    contact — an org uploading a list of contacts they already trust
+    shouldn't have to wait for the AI to call each one before seeing them on
+    the Leads page. The org can change that status afterward like any other
+    lead. A row resolved to both channels still produces one Lead per
+    channel, matching its two outreach attempts.
+
+    That Lead's status comes from the row's own ``status`` column when one
+    was supplied (required for the CSV/xlsx upload — see
+    ``import_leads_file``'s ``required_columns``; an invalid value is a
+    per-row error, same as a bad phone number). ``POST /admin/leads/bulk``'s
+    JSON rows have no such column and keep the old default of "qualified".
     """
     campaign = CallCampaign(
         org_id=org_id,
@@ -1289,6 +1339,25 @@ async def _create_campaign_from_rows(
             )
             continue
         row_name = row.get("name") or None
+        # "status" is only present at all for file-based rows (import_leads_file
+        # requires the column via _iter_csv_rows/_iter_xlsx_rows's
+        # required_columns); JSON bulk-import rows (_row_dict) never set the
+        # key, so they keep the old default of "qualified" untouched. This is
+        # the pipeline status only — qualification_status (the separate
+        # rep-review workflow) isn't settable from the import file; it stays
+        # at its default ("unqualified") and is edited per-lead afterward.
+        row_status = "qualified"
+        if auto_qualify and "status" in row:
+            candidate = row.get("status", "").strip().lower()
+            if candidate not in LEAD_STATUSES:
+                errors.append(
+                    {
+                        "row": row_num,
+                        "reason": f"status must be one of: {', '.join(LEAD_STATUSES)}",
+                    }
+                )
+                continue
+            row_status = candidate
         db.add(
             CampaignTarget(
                 campaign_id=campaign.id,
@@ -1308,7 +1377,7 @@ async def _create_campaign_from_rows(
                     phone=normalized,
                     intent="imported",
                     channel=channel,
-                    status="qualified",
+                    status=row_status,
                 )
             )
         seen_channels.add(channel)

@@ -37,6 +37,7 @@ type RuleFieldErrors = Partial<Record<"name" | "delayHours" | "messageTemplate" 
 export function NewFollowUpRuleDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
+  const [channel, setChannel] = useState<"whatsapp" | "voice">("whatsapp");
   const [status, setStatus] = useState<LeadStatus>("contacted");
   const [delayHours, setDelayHours] = useState("24");
   const [templateId, setTemplateId] = useState("");
@@ -69,6 +70,7 @@ export function NewFollowUpRuleDialog() {
 
   function reset() {
     setName("");
+    setChannel("whatsapp");
     setStatus("contacted");
     setDelayHours("24");
     setTemplateId("");
@@ -88,13 +90,14 @@ export function NewFollowUpRuleDialog() {
         if (!errors[key]) errors[key] = issue.message;
       }
     }
-    if (!selectedTemplate && !messageTemplate.trim()) {
+    if (channel === "whatsapp" && !selectedTemplate && !messageTemplate.trim()) {
       errors.messageTemplate = "Choose a template and/or write a message";
     }
     const hasEmptyCustomParam =
-      selectedTemplate?.param_labels.some(
+      channel === "whatsapp" &&
+      (selectedTemplate?.param_labels.some(
         (_, i) => (paramSources[i] ?? "custom") === "custom" && !(paramCustomValues[i] ?? "").trim()
-      ) ?? false;
+      ) ?? false);
     if (hasEmptyCustomParam) {
       errors.templateParams = "Fill in every custom placeholder value, or pick a different source";
     }
@@ -103,16 +106,18 @@ export function NewFollowUpRuleDialog() {
       return;
     }
     setFieldErrors({});
-    const templateParams = selectedTemplate
-      ? resolveTemplateParams(selectedTemplate.param_labels, paramSources, paramCustomValues)
-      : undefined;
+    const templateParams =
+      channel === "whatsapp" && selectedTemplate
+        ? resolveTemplateParams(selectedTemplate.param_labels, paramSources, paramCustomValues)
+        : undefined;
     createRule.mutate(
       {
         name: parsed.data.name,
+        channel,
         trigger_config: { status, delay_hours: parsed.data.delayHours },
-        message_template: messageTemplate.trim() || undefined,
-        template_name: selectedTemplate?.name,
-        template_language: selectedTemplate?.language,
+        message_template: channel === "whatsapp" ? messageTemplate.trim() || undefined : undefined,
+        template_name: channel === "whatsapp" ? selectedTemplate?.name : undefined,
+        template_language: channel === "whatsapp" ? selectedTemplate?.language : undefined,
         template_params: templateParams,
       },
       {
@@ -158,6 +163,25 @@ export function NewFollowUpRuleDialog() {
                 </p>
               )}
             </div>
+            <div>
+              <Label htmlFor="rule-channel" required>
+                Channel
+              </Label>
+              <Select
+                id="rule-channel"
+                value={channel}
+                onChange={(v) => setChannel(v as "whatsapp" | "voice")}
+                className="w-full"
+              >
+                <option value="whatsapp">WhatsApp message</option>
+                <option value="voice">Phone call</option>
+              </Select>
+              <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                {channel === "voice"
+                  ? "Only matches leads captured over a call — places an automated outbound call via your AI calling agent."
+                  : "Only matches leads captured over WhatsApp."}
+              </p>
+            </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <Label htmlFor="rule-status" required>
@@ -198,72 +222,79 @@ export function NewFollowUpRuleDialog() {
                 )}
               </div>
             </div>
-            <div>
-              <Label htmlFor="rule-template">WhatsApp template (optional)</Label>
-              <Select
-                id="rule-template"
-                value={templateId}
-                onChange={handleTemplateChange}
-                className="w-full"
-              >
-                <option value="">No template — send the message below</option>
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} ({t.language})
-                    {t.param_labels.length > 0 ? ` — ${t.param_labels.length} param(s)` : ""}
-                  </option>
-                ))}
-              </Select>
-              <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                {templates.length === 0
-                  ? "No Meta-approved templates yet — create and approve one on the WhatsApp Templates page."
-                  : "Reaches the contact even outside the 24h reply window — use this if leads matching this rule often haven't messaged you recently."}
+            {channel === "voice" ? (
+              <p className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400">
+                No message needed — matching leads get an automated outbound call from your AI
+                calling agent once the wait time above elapses.
               </p>
-            </div>
-            {selectedTemplate && selectedTemplate.param_labels.length > 0 && (
-              <div>
-                <TemplateParamMapper
-                  paramLabels={selectedTemplate.param_labels}
-                  sources={paramSources}
-                  customValues={paramCustomValues}
-                  onSourceChange={(i, source) =>
-                    setParamSources((prev) => prev.map((s, idx) => (idx === i ? source : s)))
-                  }
-                  onCustomValueChange={(i, value) =>
-                    setParamCustomValues((prev) => prev.map((v, idx) => (idx === i ? value : v)))
-                  }
-                  nameSourceLabel="The matched lead's name"
-                />
-                {fieldErrors.templateParams && (
-                  <p className="mt-1.5 text-xs text-red-600">{fieldErrors.templateParams}</p>
+            ) : (
+              <>
+                <div>
+                  <Label htmlFor="rule-template">WhatsApp template (optional)</Label>
+                  <Select
+                    id="rule-template"
+                    value={templateId}
+                    onChange={handleTemplateChange}
+                    className="w-full"
+                  >
+                    <option value="">No template — send the message below</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} ({t.language})
+                        {t.param_labels.length > 0 ? ` — ${t.param_labels.length} param(s)` : ""}
+                      </option>
+                    ))}
+                  </Select>
+                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                    {templates.length === 0
+                      ? "No Meta-approved templates yet — create and approve one on the WhatsApp Templates page."
+                      : "Reaches the contact even outside the 24h reply window — use this if leads matching this rule often haven't messaged you recently."}
+                  </p>
+                </div>
+                {selectedTemplate && selectedTemplate.param_labels.length > 0 && (
+                  <div>
+                    <TemplateParamMapper
+                      paramLabels={selectedTemplate.param_labels}
+                      sources={paramSources}
+                      customValues={paramCustomValues}
+                      onSourceChange={(i, source) =>
+                        setParamSources((prev) => prev.map((s, idx) => (idx === i ? source : s)))
+                      }
+                      onCustomValueChange={(i, value) =>
+                        setParamCustomValues((prev) => prev.map((v, idx) => (idx === i ? value : v)))
+                      }
+                      nameSourceLabel="The matched lead's name"
+                    />
+                    {fieldErrors.templateParams && (
+                      <p className="mt-1.5 text-xs text-red-600">{fieldErrors.templateParams}</p>
+                    )}
+                  </div>
                 )}
-              </div>
+                <div>
+                  <Label htmlFor="rule-message" required={!selectedTemplate}>
+                    WhatsApp message
+                  </Label>
+                  <Textarea
+                    id="rule-message"
+                    rows={3}
+                    required={!selectedTemplate}
+                    value={messageTemplate}
+                    onChange={(e) => setMessageTemplate(e.target.value)}
+                    placeholder="Hi! Just checking in — still interested in moving forward?"
+                    aria-invalid={fieldErrors.messageTemplate ? true : undefined}
+                    aria-describedby={fieldErrors.messageTemplate ? "rule-message-error" : undefined}
+                  />
+                  {fieldErrors.messageTemplate && (
+                    <p id="rule-message-error" className="mt-1.5 text-xs text-red-600">
+                      {fieldErrors.messageTemplate}
+                    </p>
+                  )}
+                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                    Leave blank if a template above already covers this rule.
+                  </p>
+                </div>
+              </>
             )}
-            <div>
-              <Label htmlFor="rule-message" required={!selectedTemplate}>
-                WhatsApp message
-              </Label>
-              <Textarea
-                id="rule-message"
-                rows={3}
-                required={!selectedTemplate}
-                value={messageTemplate}
-                onChange={(e) => setMessageTemplate(e.target.value)}
-                placeholder="Hi! Just checking in — still interested in moving forward?"
-                aria-invalid={fieldErrors.messageTemplate ? true : undefined}
-                aria-describedby={fieldErrors.messageTemplate ? "rule-message-error" : undefined}
-              />
-              {fieldErrors.messageTemplate && (
-                <p id="rule-message-error" className="mt-1.5 text-xs text-red-600">
-                  {fieldErrors.messageTemplate}
-                </p>
-              )}
-              <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                Only sends automatically for leads captured over WhatsApp — voice leads matching this
-                rule still get a task, flagged for manual follow-up. Leave blank if a template above
-                already covers this rule.
-              </p>
-            </div>
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
