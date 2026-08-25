@@ -66,11 +66,13 @@ from apps.api.deps import (
     verify_platform_admin,
 )
 from apps.api.schemas.billing import (
+    BillingPaymentOut,
     BillingStatusOut,
     BillingUsageOut,
     CheckoutSessionIn,
     CheckoutSessionOut,
     OrgAdminOut,
+    OrgPaymentAdminOut,
     PlanAdminOut,
     PlanCreateIn,
     PlatformSettingsOut,
@@ -227,6 +229,45 @@ async def export_orgs_xlsx(db: DbDep, _admin: PlatformAdminDep) -> StreamingResp
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="organizations-{stamp}.xlsx"'},
     )
+
+
+async def _load_org_payments(
+    db: AsyncSession, org_id: UUID
+) -> list[tuple[BillingPayment, Plan | None]]:
+    """Every BillingPayment row for an org (created/failed orders included,
+    not just paid ones), newest first. Shared by the self-service and
+    platform-admin payment-history endpoints below.
+    """
+    result = await db.execute(
+        select(BillingPayment, Plan)
+        .outerjoin(Plan, BillingPayment.plan_id == Plan.id)
+        .where(BillingPayment.org_id == org_id)
+        .order_by(BillingPayment.created_at.desc())
+    )
+    return list(result.all())
+
+
+@router.get("/orgs/{org_id}/payments", response_model=list[OrgPaymentAdminOut])
+async def list_org_payments(
+    org_id: UUID, db: DbDep, _admin: PlatformAdminDep
+) -> list[OrgPaymentAdminOut]:
+    """Full payment history for one org, for the platform admin — backs the
+    "Payment history" action on the Organizations page.
+    """
+    rows = await _load_org_payments(db, org_id)
+    return [
+        OrgPaymentAdminOut(
+            id=str(payment.id),
+            provider=payment.provider,
+            plan_code=plan.code if plan else None,
+            plan_name=plan.name if plan else None,
+            amount_cents=payment.amount_cents,
+            status=payment.status,
+            period_start=payment.period_start.isoformat() if payment.period_start else None,
+            created_at=payment.created_at.isoformat(),
+        )
+        for payment, plan in rows
+    ]
 
 
 @router.post("/orgs/{org_id}/regenerate-admin-token", response_model=RegenerateAdminTokenOut)
@@ -453,6 +494,29 @@ async def get_billing_status(org: CurrentOrgDep, db: DbDep) -> BillingStatusOut:
             else None
         ),
     )
+
+
+@router.get("/payments", response_model=list[BillingPaymentOut])
+async def list_billing_payments(org: CurrentOrgDep, db: DbDep) -> list[BillingPaymentOut]:
+    """Self-service billing history for the caller's own org — any
+    authenticated member can view (read-only, same as /billing/status);
+    only checkout/verify are restricted to admins. Backs the "Billing
+    history" section on the org's own Billing page.
+    """
+    rows = await _load_org_payments(db, org.org_id)
+    return [
+        BillingPaymentOut(
+            id=str(payment.id),
+            provider=payment.provider,
+            plan_code=plan.code if plan else None,
+            plan_name=plan.name if plan else None,
+            amount_cents=payment.amount_cents,
+            status=payment.status,
+            period_start=payment.period_start.isoformat() if payment.period_start else None,
+            created_at=payment.created_at.isoformat(),
+        )
+        for payment, plan in rows
+    ]
 
 
 @router.post("/checkout-session", response_model=CheckoutSessionOut)

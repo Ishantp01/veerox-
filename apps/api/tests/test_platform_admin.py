@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.config import settings
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.db.models import AccountUser, Org, OrgMembership, Plan
+from apps.api.db.models.billing_payment import BillingPayment
 
 ADMIN_HEADERS = {"X-Admin-Token": settings.admin_token}
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -144,6 +145,68 @@ async def test_org_directory_accepts_superuser_session(
 
     response = await client.get("/billing/orgs", headers={"X-Session-Token": token})
     assert response.status_code == 200
+
+
+async def test_org_payment_history_lists_payments_newest_first(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    org = Org(id=ORG_ID, name="Org With Payments")
+    db_session.add(org)
+    plan = Plan(code="pro", name="Pro", price_cents=99900, limits={})
+    db_session.add(plan)
+    await db_session.flush()
+
+    older = BillingPayment(
+        org_id=org.id,
+        provider="razorpay",
+        provider_order_id="order_older",
+        plan_id=plan.id,
+        amount_cents=99900,
+        status="paid",
+    )
+    newer = BillingPayment(
+        org_id=org.id,
+        provider="razorpay",
+        provider_order_id="order_newer",
+        plan_id=plan.id,
+        amount_cents=99900,
+        status="created",
+    )
+    db_session.add_all([older, newer])
+    await db_session.flush()
+    # created_at defaults are server-side and would otherwise tie — force
+    # ordering deterministically so the "newest first" assertion is real.
+    older.created_at = older.created_at.replace(year=2020)
+    await db_session.commit()
+
+    response = await client.get(f"/billing/orgs/{org.id}/payments", headers=ADMIN_HEADERS)
+    assert response.status_code == 200
+    body = response.json()
+    assert [p["status"] for p in body] == ["created", "paid"]
+    assert body[0]["plan_name"] == "Pro"
+    assert body[0]["amount_cents"] == 99900
+
+
+async def test_org_payment_history_rejects_regular_session(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    org = Org(id=ORG_ID, name="Regular Org")
+    db_session.add(org)
+    await db_session.flush()
+    login_token = generate_login_token()
+    account = AccountUser(email="regular2@example.com", token_hash=hash_token(login_token))
+    db_session.add(account)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=org.id, account_user_id=account.id, role="admin"))
+    await db_session.commit()
+
+    login = await client.post("/auth/login", json={"token": login_token})
+    token = login.json()["token"]
+
+    response = await client.get(
+        f"/billing/orgs/{org.id}/payments", headers={"X-Session-Token": token}
+    )
+    assert response.status_code == 403
 
 
 async def test_me_and_login_expose_is_superuser(

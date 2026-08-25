@@ -50,6 +50,49 @@ async def _seed_org_and_login_as_member(client: AsyncClient, db: AsyncSession) -
     return {"X-Session-Token": login.json()["token"]}
 
 
+async def test_list_billing_payments_scoped_to_own_org(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    headers = await _seed_org_and_login_as_member(client, db_session)
+    plan = Plan(code="basic", name="Basic", price_cents=49900, limits={})
+    db_session.add(plan)
+    await db_session.flush()
+
+    db_session.add(
+        BillingPayment(
+            org_id=ORG_ID,
+            provider="razorpay",
+            provider_order_id="order_mine",
+            plan_id=plan.id,
+            amount_cents=49900,
+            status="paid",
+        )
+    )
+    other_org = Org(name="Other Org")
+    db_session.add(other_org)
+    await db_session.flush()
+    db_session.add(
+        BillingPayment(
+            org_id=other_org.id,
+            provider="razorpay",
+            provider_order_id="order_not_mine",
+            plan_id=plan.id,
+            amount_cents=49900,
+            status="paid",
+        )
+    )
+    await db_session.commit()
+
+    # A plain member (not just admin) can view — this is read-only, unlike
+    # checkout which requires the admin role.
+    response = await client.get("/billing/payments", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["plan_name"] == "Basic"
+    assert body[0]["amount_cents"] == 49900
+
+
 async def test_checkout_session_rejects_member_role(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

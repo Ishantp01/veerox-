@@ -24,6 +24,33 @@ class PlanAdminOut(BaseModel):
     resource_type: str | None = None
 
 
+class BillingPaymentOut(BaseModel):
+    """Same shape as OrgPaymentAdminOut below — kept as a separate model
+    because the two are read by different endpoints for different
+    audiences (self-service GET /billing/payments vs. platform-admin GET
+    /billing/orgs/{org_id}/payments), same as PlanOut/PlanAdminOut."""
+
+    id: str
+    provider: str
+    plan_code: str | None
+    plan_name: str | None
+    amount_cents: int
+    status: str
+    period_start: str | None
+    created_at: str
+
+
+class OrgPaymentAdminOut(BaseModel):
+    id: str
+    provider: str
+    plan_code: str | None
+    plan_name: str | None
+    amount_cents: int
+    status: str
+    period_start: str | None
+    created_at: str
+
+
 class RegenerateAdminTokenOut(BaseModel):
     account_user_id: str
     email: str

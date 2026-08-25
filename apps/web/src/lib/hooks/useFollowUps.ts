@@ -54,6 +54,18 @@ export function useUpdateFollowUpRule() {
   });
 }
 
+/** DELETE /follow-up-rules/{id} — tasks it already spawned keep existing, just lose the rule link. */
+export function useDeleteFollowUpRule() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ ok: boolean }, Error, string>({
+    mutationFn: (id) => apiFetch<{ ok: boolean }>(`/follow-up-rules/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.followUpRules() });
+    },
+  });
+}
+
 export interface FollowUpTaskFilters {
   status?: FollowUpTaskStatus;
 }

@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { PlanAdminTable } from "@/components/billing/plan-admin-table";
 import { ChoosePlanCards } from "@/components/billing/choose-plan-cards";
+import { BillingHistoryCard } from "@/components/billing/billing-history-card";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Skeleton } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -158,6 +159,8 @@ export default function BillingPage() {
                     </CardContent>
                   </Card>
                 )}
+
+                <BillingHistoryCard />
 
                 {/* With a plan already active the catalog lives on the
                     dedicated /billing/upgrade page behind the button above —

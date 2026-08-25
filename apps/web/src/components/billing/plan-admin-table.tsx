@@ -9,6 +9,7 @@ import {
   TableCell,
   TableHeader,
   TableRow,
+  useConfirm,
   useToast,
 } from "@/components/ui";
 import {
@@ -120,10 +121,15 @@ export function PlanAdminTable() {
   const { data, isLoading } = useAdminPlans();
   const deletePlan = useDeletePlan();
   const { toast } = useToast();
+  const confirm = useConfirm();
   const plans = data ?? [];
 
-  function handleDelete(code: string) {
-    if (!window.confirm(`Delete plan "${code}"? This only works if no org is on it.`)) return;
+  async function handleDelete(code: string) {
+    const ok = await confirm({
+      title: "Delete plan",
+      description: `Delete plan "${code}"? This only works if no org is on it.`,
+    });
+    if (!ok) return;
     deletePlan.mutate(code, {
       onSuccess: () => toast({ title: "Plan deleted", variant: "success" }),
       onError: (err) =>

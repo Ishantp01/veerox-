@@ -66,6 +66,20 @@ async def update_follow_up_rule(rule_id: UUID, payload: FollowUpRuleUpdateIn, db
     return rule
 
 
+@router.delete("/follow-up-rules/{rule_id}")
+async def delete_follow_up_rule(rule_id: UUID, db: DbDep) -> dict[str, bool]:
+    """Delete a rule. Tasks it already spawned (``FollowUpTask.rule_id``,
+    ``ondelete="SET NULL"``) are kept for history — they just lose the rule
+    link, matching how deleting a Contact keeps its Leads (routers/crm.py)."""
+    await enforce_plan_feature(db, _default_org_id(), "automated_followups")
+    rule = await db.get(FollowUpRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Follow-up rule not found")
+    await db.delete(rule)
+    await db.commit()
+    return {"ok": True}
+
+
 @router.get("/follow-up-tasks", response_model=list[FollowUpTaskOut])
 async def list_follow_up_tasks(
     db: DbDep,

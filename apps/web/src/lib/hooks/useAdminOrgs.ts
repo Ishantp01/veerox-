@@ -57,6 +57,26 @@ export function useProvisionOrg() {
   });
 }
 
+export interface OrgPayment {
+  id: string;
+  provider: string;
+  plan_code: string | null;
+  plan_name: string | null;
+  amount_cents: number;
+  status: string;
+  period_start: string | null;
+  created_at: string;
+}
+
+/** GET /billing/orgs/{orgId}/payments → OrgPayment[] (platform-admin only) */
+export function useOrgPayments(orgId: string, enabled: boolean) {
+  return useQuery<OrgPayment[]>({
+    queryKey: ["admin", "orgs", orgId, "payments"],
+    queryFn: () => apiFetch<OrgPayment[]>(`/billing/orgs/${orgId}/payments`),
+    enabled,
+  });
+}
+
 export interface RegenerateAdminTokenResult {
   account_user_id: string;
   email: string;

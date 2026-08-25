@@ -146,6 +146,25 @@ export function useAvailablePlans() {
   });
 }
 
+export interface BillingPayment {
+  id: string;
+  provider: string;
+  plan_code: string | null;
+  plan_name: string | null;
+  amount_cents: number;
+  status: string;
+  period_start: string | null;
+  created_at: string;
+}
+
+/** GET /billing/payments → BillingPayment[] — the caller's own org history. */
+export function useBillingPayments() {
+  return useQuery<BillingPayment[]>({
+    queryKey: ["billing", "payments"],
+    queryFn: () => apiFetch<BillingPayment[]>("/billing/payments"),
+  });
+}
+
 export interface CheckoutSession {
   // Free plans: set — caller should just navigate here (no payment needed).
   checkout_url: string | null;

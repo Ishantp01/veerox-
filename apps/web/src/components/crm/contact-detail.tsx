@@ -21,6 +21,7 @@ import {
   TableCell,
   TableHeader,
   TableRow,
+  useConfirm,
   useToast,
 } from "@/components/ui";
 import { useContact, useDeleteContact } from "@/lib/hooks";
@@ -40,11 +41,16 @@ export function ContactDetail({ id }: ContactDetailProps) {
   const contact = useContact(id);
   const deleteContact = useDeleteContact();
   const { toast } = useToast();
+  const confirm = useConfirm();
 
-  function handleDelete() {
+  async function handleDelete() {
     if (!contact.data) return;
     const label = contact.data.name ?? formatPhone(contact.data.phone);
-    if (!window.confirm(`Delete ${label}? This can't be undone.`)) return;
+    const ok = await confirm({
+      title: "Delete contact",
+      description: `Delete ${label}? This can't be undone.`,
+    });
+    if (!ok) return;
     deleteContact.mutate(id, {
       onSuccess: () => {
         toast({ title: "Contact deleted", variant: "success" });

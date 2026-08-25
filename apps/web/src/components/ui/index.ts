@@ -48,3 +48,6 @@ export {
   DialogClose,
 } from "./dialog";
 export type { DialogProps, DialogContentProps, DialogTriggerProps } from "./dialog";
+
+export { ConfirmProvider, useConfirm } from "./confirm-dialog";
+export type { ConfirmOptions } from "./confirm-dialog";

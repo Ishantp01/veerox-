@@ -1,6 +1,6 @@
 "use client";
 
-import { Repeat, Ban } from "lucide-react";
+import { Repeat, Ban, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import {
@@ -15,11 +15,14 @@ import {
   TableCell,
   TableHeader,
   TableRow,
+  useConfirm,
+  useToast,
 } from "@/components/ui";
 import { NewFollowUpRuleDialog } from "@/components/automation/new-follow-up-rule-dialog";
 import { FollowUpTaskStatusBadge } from "@/components/automation/follow-up-task-status-badge";
 import {
   useCancelFollowUpTask,
+  useDeleteFollowUpRule,
   useFollowUpRules,
   useFollowUpTasks,
   useUpdateFollowUpRule,
@@ -30,7 +33,23 @@ export default function FollowUpsPage() {
   const rules = useFollowUpRules();
   const tasks = useFollowUpTasks();
   const updateRule = useUpdateFollowUpRule();
+  const deleteRule = useDeleteFollowUpRule();
   const cancelTask = useCancelFollowUpTask();
+  const { toast } = useToast();
+  const confirm = useConfirm();
+
+  async function handleDeleteRule(id: string, name: string) {
+    const ok = await confirm({
+      title: "Delete rule",
+      description: `Delete rule "${name}"? This can't be undone.`,
+    });
+    if (!ok) return;
+    deleteRule.mutate(id, {
+      onSuccess: () => toast({ title: "Rule deleted", variant: "success" }),
+      onError: (err) =>
+        toast({ title: "Could not delete rule", description: err.message, variant: "error" }),
+    });
+  }
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -54,7 +73,7 @@ export default function FollowUpsPage() {
             loadingFallback={
               <table className="w-full border-collapse text-sm">
                 <tbody>
-                  <SkeletonRows rows={2} cols={4} />
+                  <SkeletonRows rows={2} cols={5} />
                 </tbody>
               </table>
             }
@@ -75,6 +94,7 @@ export default function FollowUpsPage() {
                     <TableHeader>Trigger</TableHeader>
                     <TableHeader>Message</TableHeader>
                     <TableHeader>Active</TableHeader>
+                    <TableHeader>Actions</TableHeader>
                   </TableRow>
                 </thead>
                 <tbody>
@@ -97,6 +117,16 @@ export default function FollowUpsPage() {
                           onClick={() => updateRule.mutate({ id: rule.id, active: !rule.active })}
                         >
                           {rule.active ? "Active" : "Paused"}
+                        </Button>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Delete ${rule.name}`}
+                          onClick={() => handleDeleteRule(rule.id, rule.name)}
+                        >
+                          <Trash2 size={14} aria-hidden />
                         </Button>
                       </TableCell>
                     </TableRow>

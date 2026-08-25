@@ -67,6 +67,7 @@ export {
   useFollowUpRules,
   useCreateFollowUpRule,
   useUpdateFollowUpRule,
+  useDeleteFollowUpRule,
   useFollowUpTasks,
   useCancelFollowUpTask,
   type FollowUpRuleCreateInput,

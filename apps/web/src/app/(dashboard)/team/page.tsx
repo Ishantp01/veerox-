@@ -14,6 +14,7 @@ import {
   TableCell,
   TableHeader,
   TableRow,
+  useConfirm,
   useToast,
 } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
@@ -46,6 +47,7 @@ export default function TeamPage() {
   const updateRole = useUpdateMemberRole();
   const removeMember = useRemoveMember();
   const { toast } = useToast();
+  const confirm = useConfirm();
   // The org owner is the account that bought the plan, not a "team member"
   // — hidden from this list entirely (and, per apps/api/routers/team.py's
   // invite_member, exempt from the plan's max_seats count).
@@ -88,8 +90,12 @@ export default function TeamPage() {
     );
   }
 
-  function handleRemove(member: TeamMember) {
-    if (!window.confirm(`Remove ${member.email} from the team?`)) return;
+  async function handleRemove(member: TeamMember) {
+    const ok = await confirm({
+      title: "Remove team member",
+      description: `Remove ${member.email} from the team?`,
+    });
+    if (!ok) return;
     removeMember.mutate(member.account_user_id, {
       onSuccess: () => toast({ title: "Member removed", variant: "success" }),
       onError: (err) =>
