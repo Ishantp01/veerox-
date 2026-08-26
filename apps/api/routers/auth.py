@@ -17,20 +17,30 @@ from uuid import UUID
 
 import httpx
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from apps.api.channels.email import brevo_client
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice.number_provider import resolve_calling_number
 from apps.api.config import settings
 from apps.api.core.security import generate_login_token, hash_token
-from apps.api.core.sessions import create_session, delete_session
+from apps.api.core.sessions import create_session, delete_session, invalidate_user_sessions
 from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
 from apps.api.deps import CurrentUserDep, DbDep, RedisDep, verify_platform_admin
-from apps.api.schemas.auth import LoginIn, MeOut, ProvisionOrgIn, ProvisionOrgOut, SessionOut
+from apps.api.rate_limit import limiter
+from apps.api.schemas.auth import (
+    ForgotTokenIn,
+    ForgotTokenOut,
+    LoginIn,
+    MeOut,
+    ProvisionOrgIn,
+    ProvisionOrgOut,
+    SessionOut,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -227,6 +237,61 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep) -> SessionOut:
         full_name=account_user.full_name,
         is_superuser=account_user.is_superuser,
     )
+
+
+_FORGOT_TOKEN_GENERIC_MESSAGE = "If an account matches, a new login token has been sent."
+
+
+@router.post("/forgot-token", response_model=ForgotTokenOut)
+@limiter.limit("5/minute")
+async def forgot_token(
+    request: Request, payload: ForgotTokenIn, db: DbDep, redis: RedisDep
+) -> ForgotTokenOut:
+    """Self-service token recovery: identify by email or mobile, rotate the
+    token, kill existing sessions, and deliver the new token by whichever
+    channel matched. Public and unauthenticated, so the response is always
+    the same generic message regardless of whether a match was found or
+    delivery succeeded — anything else would let a caller enumerate which
+    emails/numbers have accounts (see routers/team.py's
+    regenerate_member_token for the authenticated equivalent of this
+    rotate-and-invalidate mutation).
+    """
+    identifier = payload.identifier.strip()
+    is_email = "@" in identifier
+
+    if is_email:
+        result = await db.execute(
+            select(AccountUser).where(func.lower(AccountUser.email) == identifier.lower())
+        )
+    else:
+        result = await db.execute(select(AccountUser).where(AccountUser.mobile == identifier))
+    account_user = result.scalars().first()
+
+    if account_user is not None and account_user.is_active:
+        login_token = generate_login_token()
+        account_user.token_hash = hash_token(login_token)
+        await db.commit()
+        await invalidate_user_sessions(redis, account_user.id)
+
+        try:
+            if is_email:
+                await brevo_client.send_email(
+                    account_user.email,
+                    "Your new Veerox login token",
+                    f"<p>Your new login token: <b>{login_token}</b></p>"
+                    "<p>Your previous token no longer works.</p>",
+                )
+            elif account_user.mobile:
+                await voice_failover.send_sms(
+                    account_user.mobile, f"Your new Veerox login token: {login_token}"
+                )
+        except httpx.HTTPError as exc:
+            # Best-effort, same as provision_org's SMS send: the mutation
+            # (rotate + invalidate) already happened, so a delivery failure
+            # can't be surfaced without also leaking that a match was found.
+            logger.warning("forgot_token_delivery_failed", identifier=identifier, error=str(exc))
+
+    return ForgotTokenOut(message=_FORGOT_TOKEN_GENERIC_MESSAGE)
 
 
 @router.post("/logout", status_code=204)

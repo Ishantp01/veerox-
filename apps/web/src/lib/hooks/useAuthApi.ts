@@ -39,3 +39,12 @@ export function logoutRequest(): Promise<void> {
 export function fetchMe(): Promise<MeInfo> {
   return apiFetch<MeInfo>("/auth/me");
 }
+
+/** POST /auth/forgot-token — always resolves with a generic message; never
+ * reveals whether the identifier matched an account. */
+export function forgotToken(identifier: string): Promise<{ message: string }> {
+  return apiFetch<{ message: string }>("/auth/forgot-token", {
+    method: "POST",
+    body: JSON.stringify({ identifier }),
+  });
+}

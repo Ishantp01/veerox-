@@ -192,7 +192,7 @@ export function DialogTitle({
     <h2
       id={titleId}
       className={cn(
-        "px-6 pt-6 pr-12 text-lg font-semibold text-slate-900 dark:text-slate-100",
+        "px-12 pt-6 text-center text-lg font-semibold text-slate-900 dark:text-slate-100",
         className,
       )}
       {...props}

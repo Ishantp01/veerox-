@@ -86,6 +86,29 @@ Add a `next/link` under the form (near the existing "Don't have a token? Ask you
 ## Env / setup note for the user
 `BREVO_API_KEY` must be added to `.env` (plus optionally `BREVO_SENDER_EMAIL`/`BREVO_SENDER_NAME` to override the defaults) for email delivery to actually send — without it, `brevo_client.is_configured()` is false the same way Plivo/Twilio are today when unset, and I'll skip the call rather than raise, so the endpoint still returns its generic success response instead of erroring.
 
+## Documentation deliverable — `tokensending.md`
+
+Alongside the code changes, create `tokensending.md` at the repo root documenting this feature in full detail — every change made in this session, including edge cases, so it stands alone as a reference. Structure:
+- **Overview**: what "forgot token" does and why it exists (no password system, prior recovery was admin-only — see Context above).
+- **Backend changes**: every new/edited file (`apps/api/channels/email/__init__.py`, `apps/api/channels/email/brevo_client.py`, `apps/api/config.py`, `apps/api/schemas/auth.py`, `apps/api/routers/auth.py`, `apps/api/tests/test_auth_endpoints.py`) with what changed and why.
+- **Frontend changes**: every new/edited file (`useAuthApi.ts`, `forgot-token/page.tsx`, `login/page.tsx`) with what changed and why.
+- **Request/response contract**: exact `POST /auth/forgot-token` request body and response body, including the 200-generic-response-always behavior.
+- **Edge cases enumerated explicitly**, each with its exact resulting behavior:
+  - Identifier matches no account → generic success, no email/SMS sent.
+  - Identifier matches an `is_active=False` account → treated as not-found (generic success, no send, no token change).
+  - Identifier is an email that matches an account with no `mobile`, or a mobile that matches an account fine either way (email/mobile are independent lookups, not "try both").
+  - Email matches but Brevo isn't configured (`BREVO_API_KEY` unset) → token still regenerated and old sessions still invalidated (this is the same "recovery" mutation regardless of delivery), but no email actually sent — user is silently unable to retrieve it. Call this out as a known limitation.
+  - Mobile matches but neither Plivo nor Twilio is configured → same as above for SMS.
+  - Email/SMS provider configured but the send call itself fails (`httpx.HTTPError`) → same outcome: token already rotated before the send attempt, failure is only logged, response is unchanged. Call out that this means a failed delivery still invalidates the user's old sessions/token — a real (accepted) tradeoff of doing the rotate-then-send in that order, matching `provision_org`'s existing best-effort-SMS precedent.
+  - Rate limiting: `5/minute` per IP (`slowapi`, keyed by remote address per `apps/api/rate_limit.py`) → 429 on the 6th request in a minute from the same IP, independent of which identifiers were tried.
+  - Multiple accounts sharing the same mobile number (schema doesn't enforce uniqueness on `mobile`, only on `email`/`token_hash`) → query returns whichever row the DB happens to order first; document this as an existing ambiguity, not newly introduced.
+  - Case sensitivity: email lookup is case-insensitive (`func.lower(...)`), mobile lookup is exact-string (no normalization of spaces/dashes/leading `0` vs `+country code`).
+  - Frontend: identical generic message is shown whether the backend returned success-with-match, success-without-match, or even a network error reaching the API at all (documented as intentional, to avoid a client-visible timing/error-shape enumeration channel) — note the one exception being client-side empty-field validation, which never reaches the network.
+- **Env vars required**: `BREVO_API_KEY` (required for email delivery), `BREVO_SENDER_EMAIL`/`BREVO_SENDER_NAME` (optional overrides) — plus a reminder that SMS delivery reuses whatever Plivo/Twilio credentials are already configured, no new SMS-specific setup needed.
+- **Testing performed**: list the exact test commands run and their results (filled in after implementation, not written speculatively).
+
+This file is a one-time snapshot of this session's work, not living documentation — write it after the code changes are made and verified, so it reflects what was actually built rather than what was planned.
+
 ## Verification
 - `cd apps/api && pytest tests/test_auth_endpoints.py -k forgot_token -v`
 - Full backend suite: `pytest apps/api/tests/test_auth_endpoints.py apps/api/tests/test_admin_endpoints.py -q` (sanity check nothing else broke)

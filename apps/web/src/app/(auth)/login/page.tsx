@@ -2,6 +2,7 @@
 
 import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { z } from "zod";
 import Button from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
@@ -103,6 +104,13 @@ export default function LoginPage() {
             <Button type="submit" variant="default" className="w-full py-2.5 mt-1 gap-2" loading={submitting}>
               {!submitting && <LogIn size={15} />} {submitting ? "Signing in…" : "Sign in"}
             </Button>
+
+            <Link
+              href="/forgot-token"
+              className="text-xs text-primary-400 hover:text-primary-300 text-center -mt-1"
+            >
+              Forgot your login token?
+            </Link>
           </form>
 
           <p className="mt-5 text-xs text-slate-500 text-center">

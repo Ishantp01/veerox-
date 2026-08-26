@@ -36,8 +36,8 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
 
   const rows = conversations.data ?? [];
   const columns = channel
-    ? (["Live", "Started", "Ended", "# Messages"] as const)
-    : (["Live", "Channel", "Started", "Ended", "# Messages"] as const);
+    ? (["Live", "Client", "Started", "Ended", "# Messages"] as const)
+    : (["Live", "Client", "Channel", "Started", "Ended", "# Messages"] as const);
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
@@ -77,6 +77,12 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
                 >
                   <TableCell>
                     {isLive ? <LiveDot /> : <Badge variant="ended">Ended</Badge>}
+                  </TableCell>
+                  <TableCell className="font-medium text-slate-700 dark:text-slate-200">
+                    {c.user_phone ?? "—"}
+                    {c.user_name && (
+                      <span className="ml-1.5 font-normal text-slate-400">({c.user_name})</span>
+                    )}
                   </TableCell>
                   {!channel && (
                     <TableCell>

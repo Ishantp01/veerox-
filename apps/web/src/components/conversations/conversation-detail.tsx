@@ -71,7 +71,11 @@ export function ConversationDetail({ id, backHref, backLabel, channel }: Convers
 
       <PageHeader
         title="Transcript"
-        description={`Conversation ${id}`}
+        description={
+          conversation?.user_phone
+            ? `${conversation.user_phone}${conversation.user_name ? ` · ${conversation.user_name}` : ""}`
+            : `Conversation ${id}`
+        }
         action={
           isLive && messages.dataUpdatedAt ? (
             <LiveDot label={`Live · updated ${formatRelative(new Date(messages.dataUpdatedAt).toISOString())}`} />

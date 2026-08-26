@@ -18,6 +18,12 @@ class ConversationOut(BaseModel):
     recording_url: str | None = None
     recording_duration_secs: float | None = None
     summary: str | None = None
+    # The WhatsApp/voice contact's phone number and name (User.phone /
+    # User.name — see db/models/user.py) — not on the Conversation row itself,
+    # so callers join User and pass these in explicitly (they default to None
+    # for callers, like summarize, that don't bother with the join).
+    user_phone: str | None = None
+    user_name: str | None = None
 
 
 class ConversationSummaryOut(ConversationOut):

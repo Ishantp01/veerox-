@@ -478,8 +478,9 @@ async def list_conversations(
     )
 
     stmt = (
-        select(Conversation, func.coalesce(msg_count_subq.c.message_count, 0))
+        select(Conversation, func.coalesce(msg_count_subq.c.message_count, 0), User.phone, User.name)
         .outerjoin(msg_count_subq, Conversation.id == msg_count_subq.c.conversation_id)
+        .join(User, User.id == Conversation.user_id)
     )
     if scope_org_id is not None:
         stmt = stmt.where(Conversation.org_id == scope_org_id)
@@ -493,8 +494,10 @@ async def list_conversations(
         {
             **ConversationOut.model_validate(conv).model_dump(mode="json"),
             "message_count": int(count),
+            "user_phone": phone,
+            "user_name": name,
         }
-        for conv, count in rows
+        for conv, count, phone, name in rows
     ]
 
 
@@ -525,7 +528,7 @@ async def summarize_conversation(
     conversation_id: UUID,
     db: DbDep,
     x_admin_token: str | None = Header(None),
-) -> Conversation:
+) -> ConversationOut:
     """Generate (or regenerate) an AI summary of a conversation's transcript,
     on demand — not automatic, since not every conversation needs one."""
     conversation = await db.get(Conversation, conversation_id)
@@ -551,7 +554,13 @@ async def summarize_conversation(
     conversation.summary = (result.content or "").strip() or None
     await db.commit()
     await db.refresh(conversation)
-    return conversation
+
+    user = await db.get(User, conversation.user_id)
+    return ConversationOut(
+        **ConversationOut.model_validate(conversation).model_dump(exclude={"user_phone", "user_name"}),
+        user_phone=user.phone if user else None,
+        user_name=user.name if user else None,
+    )
 
 
 _LEAD_STATUS_PATTERN = f"^({'|'.join(LEAD_STATUSES)})$"
@@ -709,18 +718,21 @@ async def get_lead(
         .subquery()
     )
     conv_stmt = (
-        select(Conversation, func.coalesce(msg_count_subq.c.message_count, 0))
+        select(Conversation, func.coalesce(msg_count_subq.c.message_count, 0), User.phone, User.name)
         .outerjoin(msg_count_subq, Conversation.id == msg_count_subq.c.conversation_id)
+        .join(User, User.id == Conversation.user_id)
         .where(Conversation.user_id == lead.user_id)
         .order_by(Conversation.started_at.desc())
     )
     conv_rows = (await db.execute(conv_stmt)).all()
     conversations = [
         ConversationSummaryOut(
-            **ConversationOut.model_validate(conv).model_dump(),
+            **ConversationOut.model_validate(conv).model_dump(exclude={"user_phone", "user_name"}),
             message_count=int(count),
+            user_phone=phone,
+            user_name=name,
         )
-        for conv, count in conv_rows
+        for conv, count, phone, name in conv_rows
     ]
 
     return LeadDetailOut(**LeadOut.model_validate(lead).model_dump(), conversations=conversations)

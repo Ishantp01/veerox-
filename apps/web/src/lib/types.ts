@@ -8,6 +8,11 @@ export interface Conversation {
   started_at: string;
   ended_at: string | null;
   message_count?: number;
+  // The WhatsApp/voice contact's phone number + name (User.phone / User.name
+  // on the backend) — null only for the rare caller/sender the pipeline
+  // never resolved to a User row.
+  user_phone?: string | null;
+  user_name?: string | null;
   // Plivo hosts the audio file itself — this is just the URL + duration it
   // reported when the recording finished processing. Voice calls only.
   recording_url?: string | null;

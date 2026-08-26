@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     # nothing but lowering it after overshooting means dropped/rejected calls.
     max_concurrent_calls: int = 50
 
+    # Brevo transactional email (forgot-token delivery only, for now).
+    brevo_api_key: str | None = None
+    brevo_sender_email: str = "no-reply@veerox.ai"
+    brevo_sender_name: str = "Veerox"
+
     # Meta WhatsApp Cloud API
     meta_app_id: str | None = None
     meta_app_secret: str | None = None

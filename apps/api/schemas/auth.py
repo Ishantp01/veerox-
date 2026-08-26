@@ -55,6 +55,14 @@ class ProvisionOrgIn(BaseModel):
     )
 
 
+class ForgotTokenIn(BaseModel):
+    identifier: str  # email address or E.164 mobile number
+
+
+class ForgotTokenOut(BaseModel):
+    message: str
+
+
 class ProvisionOrgOut(BaseModel):
     org_id: UUID
     account_user_id: UUID
