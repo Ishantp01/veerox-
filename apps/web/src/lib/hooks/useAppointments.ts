@@ -4,18 +4,22 @@ import { apiFetch } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
 import type { Appointment, AppointmentStatus } from "@/lib/types";
 
+export type AppointmentSort = "newest" | "oldest";
+
 export interface AppointmentFilters {
   status?: AppointmentStatus;
+  sort?: AppointmentSort;
 }
 
 function buildAppointmentsPath(filters?: AppointmentFilters): string {
   const params = new URLSearchParams();
   if (filters?.status) params.set("status", filters.status);
+  if (filters?.sort) params.set("sort", filters.sort);
   const qs = params.toString();
   return qs ? `/appointments?${qs}` : "/appointments";
 }
 
-/** Upcoming-first appointments list. GET /appointments → Appointment[] */
+/** Newest-first by default (matches Leads); pass sort:"oldest" to reverse. GET /appointments → Appointment[] */
 export function useAppointments(filters?: AppointmentFilters) {
   return useQuery<Appointment[]>({
     queryKey: queryKeys.appointments(filters),

@@ -30,6 +30,7 @@ router = APIRouter(
 )
 
 _STATUS_PATTERN = f"^({'|'.join(APPOINTMENT_STATUSES)})$"
+_SORT_PATTERN = "^(newest|oldest)$"
 
 
 @router.get("", response_model=list[AppointmentOut])
@@ -39,13 +40,19 @@ async def list_appointments(
     status: str | None = Query(None, pattern=_STATUS_PATTERN),
     starts_after: datetime | None = Query(None),
     starts_before: datetime | None = Query(None),
+    sort: str = Query("newest", pattern=_SORT_PATTERN),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[Appointment]:
+    order_by = (
+        Appointment.created_at.desc()
+        if sort == "newest"
+        else Appointment.created_at.asc()
+    )
     stmt = (
         select(Appointment)
         .where(Appointment.org_id == org_id)
-        .order_by(Appointment.scheduled_at.asc())
+        .order_by(order_by)
     )
     if status:
         stmt = stmt.where(Appointment.status == status)

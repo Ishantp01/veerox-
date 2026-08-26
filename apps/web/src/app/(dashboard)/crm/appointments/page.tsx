@@ -10,7 +10,7 @@ import {
 } from "@/components/crm/appointment-status-badge";
 import { NewAppointmentDialog } from "@/components/crm/new-appointment-dialog";
 import { EmptyState, Select, SkeletonRows, Table, TableCell, TableHeader, TableRow } from "@/components/ui";
-import { useAppointments, useUpdateAppointment } from "@/lib/hooks";
+import { useAppointments, useUpdateAppointment, type AppointmentSort } from "@/lib/hooks";
 import { formatDateTime } from "@/lib/format";
 import type { AppointmentStatus } from "@/lib/types";
 
@@ -19,9 +19,12 @@ const SELECT_CLS =
 
 export default function AppointmentsPage() {
   const [filter, setFilter] = useState<AppointmentStatus | "">("");
-  const { data, isLoading, isError, error, refetch } = useAppointments(
-    filter ? { status: filter } : undefined,
-  );
+  // Newest-first by default, matching how the Leads list sorts.
+  const [sort, setSort] = useState<AppointmentSort>("newest");
+  const { data, isLoading, isError, error, refetch } = useAppointments({
+    ...(filter ? { status: filter } : {}),
+    sort,
+  });
   const updateAppointment = useUpdateAppointment();
   const appointments = data ?? [];
 
@@ -29,9 +32,17 @@ export default function AppointmentsPage() {
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="Appointments"
-        description="Bookings scheduled from calls, WhatsApp, or manually — soonest first."
+        description="Bookings scheduled from calls, WhatsApp, or manually."
         action={
           <div className="flex flex-wrap items-center gap-3">
+            <Select
+              value={sort}
+              onChange={(v) => setSort(v as AppointmentSort)}
+              aria-label="Sort appointments"
+            >
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+            </Select>
             <Select
               value={filter}
               onChange={(v) => setFilter(v as AppointmentStatus | "")}

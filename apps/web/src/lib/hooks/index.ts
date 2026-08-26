@@ -59,6 +59,7 @@ export {
   useCreateAppointment,
   useUpdateAppointment,
   type AppointmentFilters,
+  type AppointmentSort,
   type AppointmentCreateInput,
   type AppointmentUpdateInput,
 } from "./useAppointments";
