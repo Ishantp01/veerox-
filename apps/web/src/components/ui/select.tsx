@@ -62,7 +62,12 @@ export function Select({
   const options = parseOptions(children);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [rect, setRect] = useState<
+    { left: number; width: number; maxHeight: number } & (
+      | { openUp: false; top: number }
+      | { openUp: true; bottom: number }
+    ) | null
+  >(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const listboxId = useId();
@@ -73,7 +78,29 @@ export function Select({
     if (!open) return;
     function updateRect() {
       const r = buttonRef.current?.getBoundingClientRect();
-      if (r) setRect({ top: r.bottom + 4, left: r.left, width: r.width });
+      if (!r) return;
+      const GAP = 4;
+      const PREFERRED = 240; // matches max-h-60
+      const spaceBelow = window.innerHeight - r.bottom - GAP;
+      const spaceAbove = r.top - GAP;
+      const openUp = spaceBelow < PREFERRED && spaceAbove > spaceBelow;
+      setRect(
+        openUp
+          ? {
+              openUp: true,
+              bottom: window.innerHeight - r.top + GAP,
+              left: r.left,
+              width: r.width,
+              maxHeight: Math.min(PREFERRED, spaceAbove),
+            }
+          : {
+              openUp: false,
+              top: r.bottom + GAP,
+              left: r.left,
+              width: r.width,
+              maxHeight: Math.min(PREFERRED, spaceBelow),
+            },
+      );
     }
     updateRect();
     window.addEventListener("scroll", updateRect, true);
@@ -174,7 +201,7 @@ export function Select({
             onKeyDown={onListKeyDown}
             style={{
               position: "fixed",
-              top: rect.top,
+              ...(rect.openUp ? { bottom: rect.bottom } : { top: rect.top }),
               left: rect.left,
               minWidth: rect.width,
               // Grows to fit the longest option instead of being clipped to
@@ -183,8 +210,12 @@ export function Select({
               // "Qualified") — capped so it can't run off the right edge of
               // the viewport.
               maxWidth: `calc(100vw - ${rect.left}px - 16px)`,
+              // Flips above the trigger (and shrinks to fit) when there
+              // isn't enough room below — otherwise rows near the bottom of
+              // the table render their option list off-screen.
+              maxHeight: rect.maxHeight,
             }}
-            className="z-50 max-h-60 w-max overflow-auto rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-card-lg focus-visible:outline-none dark:border-slate-700 dark:bg-slate-900"
+            className="z-50 w-max overflow-auto rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-card-lg focus-visible:outline-none dark:border-slate-700 dark:bg-slate-900"
           >
             {options.map((opt, idx) => (
               <li
