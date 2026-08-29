@@ -172,8 +172,19 @@ export function Select({
             ref={listRef}
             tabIndex={-1}
             onKeyDown={onListKeyDown}
-            style={{ position: "fixed", top: rect.top, left: rect.left, width: rect.width }}
-            className="z-50 max-h-60 overflow-auto rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-card-lg focus-visible:outline-none dark:border-slate-700 dark:bg-slate-900"
+            style={{
+              position: "fixed",
+              top: rect.top,
+              left: rect.left,
+              minWidth: rect.width,
+              // Grows to fit the longest option instead of being clipped to
+              // the trigger's width (which reflects the *selected* label,
+              // often shorter than other options — e.g. "New" vs.
+              // "Qualified") — capped so it can't run off the right edge of
+              // the viewport.
+              maxWidth: `calc(100vw - ${rect.left}px - 16px)`,
+            }}
+            className="z-50 max-h-60 w-max overflow-auto rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-card-lg focus-visible:outline-none dark:border-slate-700 dark:bg-slate-900"
           >
             {options.map((opt, idx) => (
               <li
