@@ -24,6 +24,7 @@ import {
   CreditCard,
   Building2,
   UsersRound,
+  LifeBuoy,
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -96,17 +97,21 @@ const GROUPS: NavGroup[] = [
       { href: "/team", label: "Team", Icon: UsersRound },
       { href: "/settings", label: "Settings", Icon: Settings },
       { href: "/billing", label: "Billing", Icon: CreditCard },
+      { href: "/support", label: "Support", Icon: LifeBuoy },
     ],
   },
 ];
 
-const PLATFORM_GROUP: NavGroup = {
-  label: "Platform",
-  items: [{ href: "/organizations", label: "Organizations", Icon: Building2 }],
-};
+// Platform-wide items, shown in their own "Platform" group — visibility per
+// item differs (see Nav() below): Organizations exposes every org's
+// billing/tokens and stays superuser-only, while Support Tickets is scoped
+// to org membership (any Veerox staff account, not just the superuser) via
+// `user.is_platform_org`.
+const ORGANIZATIONS_ITEM: NavItem = { href: "/organizations", label: "Organizations", Icon: Building2 };
+const SUPPORT_TICKETS_ITEM: NavItem = { href: "/support-tickets", label: "Support Tickets", Icon: LifeBuoy };
 
-const ALL_HREFS = [...GROUPS, PLATFORM_GROUP].flatMap((group) =>
-  group.items.map((item) => item.href)
+const ALL_HREFS = [...GROUPS, { label: "Platform", items: [ORGANIZATIONS_ITEM, SUPPORT_TICKETS_ITEM] }].flatMap(
+  (group) => group.items.map((item) => item.href)
 );
 
 // Exact match on a group root ("/", "/calling", "/whatsapp", ...) — otherwise
@@ -150,11 +155,20 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
   // the dashboard layout's onboarding gate handles that case) keep every
   // feature-gated item visible rather than flashing it away and back.
   const planLimits = billing.data?.plan?.limits;
-  const groups = (user?.is_superuser ? [...GROUPS, PLATFORM_GROUP] : GROUPS)
+  const isPlatformTeam = user?.is_superuser || user?.is_platform_org;
+  const platformItems: NavItem[] = [];
+  if (user?.is_superuser) platformItems.push(ORGANIZATIONS_ITEM);
+  if (isPlatformTeam) platformItems.push(SUPPORT_TICKETS_ITEM);
+  const platformGroup: NavGroup | null =
+    platformItems.length > 0 ? { label: "Platform", items: platformItems } : null;
+  const groups = (platformGroup ? [...GROUPS, platformGroup] : GROUPS)
     .map((group) => ({
       ...group,
       items: group.items.filter((item) => {
         if (isRestrictedMember && MEMBER_RESTRICTED_HREFS.has(item.href)) return false;
+        // Mutually exclusive with Support Tickets: the Veerox team triages
+        // the queue there and doesn't need to raise tickets to itself.
+        if (item.href === "/support" && isPlatformTeam) return false;
         const feature = PLAN_FEATURE_HREFS[item.href];
         if (feature && !user?.is_superuser && planLimits && planLimits[feature] !== true) {
           return false;

@@ -31,6 +31,7 @@ from apps.api.routers import (
     sales,
     team,
     templates,
+    tickets,
 )
 from apps.api.sentry import init_sentry
 from apps.api.workers.campaign_dialer import run_campaign_dialer
@@ -100,6 +101,8 @@ def create_app() -> FastAPI:
     app.include_router(templates.router)
     app.include_router(sales.router)
     app.include_router(team.router)
+    app.include_router(tickets.router)
+    app.include_router(tickets.admin_router)
     app.include_router(admin.router)
     app.include_router(helpdesk.router)
     app.include_router(diag.router)

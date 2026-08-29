@@ -9,6 +9,10 @@ export interface SessionInfo {
   email: string;
   full_name: string | null;
   is_superuser: boolean;
+  // True when org_id is the platform operator's own seeded org — every
+  // Veerox staff account (not just the superuser) gets this. Gates
+  // platform-team-only pages like the cross-org support ticket queue.
+  is_platform_org: boolean;
 }
 
 export interface MeInfo {
@@ -19,6 +23,7 @@ export interface MeInfo {
   email: string;
   full_name: string | null;
   is_superuser: boolean;
+  is_platform_org: boolean;
 }
 
 /** POST /auth/login → SessionInfo. Login token is the sole credential — no

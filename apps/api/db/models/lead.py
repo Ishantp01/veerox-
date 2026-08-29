@@ -62,5 +62,13 @@ class Lead(Base):
         nullable=False,
         index=True,
     )
+    # Ownership for the escalation-claim flow (transfer_to_human writes
+    # intent="escalation" leads; a team member claims one via
+    # PATCH /admin/escalations/{id}/claim so two people don't both work the
+    # same handoff). Unused by non-escalation leads.
+    claimed_by_account_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("account_users.id", ondelete="SET NULL"), nullable=True
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     contact: Mapped["Contact | None"] = relationship(back_populates="leads")  # noqa: F821

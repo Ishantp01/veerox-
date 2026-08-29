@@ -56,6 +56,12 @@ class LeadOut(BaseModel):
     qualified_at: datetime | None
     deal_value: float | None
     created_at: datetime
+    claimed_by_account_user_id: UUID | None = None
+    claimed_at: datetime | None = None
+    # Populated by the endpoint (joined from AccountUser.full_name/email) —
+    # not a real model column, so it's set manually rather than via
+    # from_attributes.
+    claimed_by_name: str | None = None
 
 
 class LeadDetailOut(LeadOut):

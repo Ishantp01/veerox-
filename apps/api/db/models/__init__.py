@@ -13,6 +13,7 @@ from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
 from apps.api.db.models.plan import Plan
 from apps.api.db.models.platform_settings import PlatformSettings
+from apps.api.db.models.support_ticket import SupportTicket
 from apps.api.db.models.template import WhatsAppTemplate
 from apps.api.db.models.usage_counter import UsageCounter
 from apps.api.db.models.user import User
@@ -34,6 +35,7 @@ __all__ = [
     "OrgMembership",
     "Plan",
     "PlatformSettings",
+    "SupportTicket",
     "UsageCounter",
     "User",
     "WhatsAppTemplate",

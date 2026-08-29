@@ -25,7 +25,7 @@ export {
   type LeadFilters,
   type LeadUpdateInput,
 } from "./useLeads";
-export { useEscalations, type EscalationFilters } from "./useEscalations";
+export { useEscalations, useClaimEscalation, type EscalationFilters } from "./useEscalations";
 export { useKillSwitch, useSetKillSwitch } from "./useKillSwitch";
 export { useWhatsAppSettings, useCallingSettings } from "./useConfig";
 export { useScript, useUpdateScript } from "./useScript";

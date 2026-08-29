@@ -103,6 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       email: session.email,
       full_name: session.full_name,
       is_superuser: session.is_superuser,
+      is_platform_org: session.is_platform_org,
     });
     setStatus("authenticated");
   }, [queryClient]);

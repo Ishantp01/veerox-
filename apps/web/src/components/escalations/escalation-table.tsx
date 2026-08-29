@@ -1,6 +1,8 @@
 ﻿import Link from "next/link";
 import { Table, TableHeader, TableRow, TableCell } from "@/components/ui";
+import { useToast } from "@/components/ui/toast";
 import { formatDateTime, formatPhone } from "@/lib/format";
+import { useClaimEscalation } from "@/lib/hooks";
 import type { Escalation } from "@/lib/types";
 import { SourceBadge } from "./source-badge";
 import { UrgencyBadge } from "./urgency-badge";
@@ -17,6 +19,19 @@ export interface EscalationTableProps {
  * urgency badges and a link to the conversation when present.
  */
 export function EscalationTable({ escalations, conversationBasePath }: EscalationTableProps) {
+  const claimEscalation = useClaimEscalation();
+  const { toast } = useToast();
+
+  function handleClaim(leadId: string) {
+    claimEscalation.mutate(
+      { leadId },
+      {
+        onSuccess: () => toast({ title: "Escalation claimed", variant: "success" }),
+        onError: (err) => toast({ title: "Couldn't claim", description: err.message, variant: "error" }),
+      },
+    );
+  }
+
   return (
     <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
       <Table>
@@ -28,6 +43,7 @@ export function EscalationTable({ escalations, conversationBasePath }: Escalatio
             <TableHeader>Reason</TableHeader>
             <TableHeader>Urgency</TableHeader>
             <TableHeader>Conversation</TableHeader>
+            <TableHeader>Claimed</TableHeader>
           </TableRow>
         </thead>
         <tbody>
@@ -58,6 +74,24 @@ export function EscalationTable({ escalations, conversationBasePath }: Escalatio
                   >
                     Open →
                   </Link>
+                ) : (
+                  <span className="text-sm text-slate-300 dark:text-slate-600">—</span>
+                )}
+              </TableCell>
+              <TableCell>
+                {e.claimed_by_name ? (
+                  <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                    {e.claimed_by_name}
+                  </span>
+                ) : e.id ? (
+                  <button
+                    type="button"
+                    onClick={() => handleClaim(e.id!)}
+                    disabled={claimEscalation.isPending}
+                    className="rounded-sm text-sm font-semibold text-primary-600 hover:text-primary-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:opacity-50 dark:text-primary-400 dark:hover:text-primary-300"
+                  >
+                    Claim
+                  </button>
                 ) : (
                   <span className="text-sm text-slate-300 dark:text-slate-600">—</span>
                 )}

@@ -40,9 +40,19 @@ from apps.api.core.tools import (
     _normalize_phone,
 )
 from apps.api.core.usage import get_credit_usage
-from apps.api.db.models import CallCampaign, CampaignTarget, Conversation, Lead, Message, Org, User
+from apps.api.db.models import (
+    AccountUser,
+    CallCampaign,
+    CampaignTarget,
+    Conversation,
+    Lead,
+    Message,
+    Org,
+    User,
+)
 from apps.api.deps import (
     AnalyticsScopeDep,
+    CurrentUserDep,
     DbDep,
     RedisDep,
     RequestOrgDep,
@@ -1925,6 +1935,25 @@ async def update_org_numbers(
     )
 
 
+async def _claimant_names(db: DbDep, leads: Sequence[Lead]) -> dict[UUID, str]:
+    """Batch-resolve claimed_by_account_user_id -> display name (full_name,
+    falling back to email) for a set of leads, one query instead of N."""
+    claimant_ids = {lead.claimed_by_account_user_id for lead in leads if lead.claimed_by_account_user_id}
+    if not claimant_ids:
+        return {}
+    rows = (
+        await db.execute(select(AccountUser).where(AccountUser.id.in_(claimant_ids)))
+    ).scalars().all()
+    return {row.id: row.full_name or row.email for row in rows}
+
+
+def _lead_out_with_claimant(lead: Lead, claimant_names: dict[UUID, str]) -> LeadOut:
+    out = LeadOut.model_validate(lead)
+    if lead.claimed_by_account_user_id:
+        out.claimed_by_name = claimant_names.get(lead.claimed_by_account_user_id)
+    return out
+
+
 @router.get("/escalations")
 async def get_escalations(
     db: DbDep,
@@ -1950,10 +1979,16 @@ async def get_escalations(
     if channel:
         stmt = stmt.where(Lead.channel == channel)
     lead_rows = (await db.execute(stmt)).scalars().all()
-    recent_leads = [LeadOut.model_validate(lead).model_dump(mode="json") for lead in lead_rows]
+    claimant_names = await _claimant_names(db, lead_rows)
+    recent_leads = [
+        _lead_out_with_claimant(lead, claimant_names).model_dump(mode="json") for lead in lead_rows
+    ]
 
-    # LRANGE for inspection — non-destructive; "Mark Handled" UI uses a separate
-    # endpoint (LREM) added Day 4.
+    # LRANGE for inspection — non-destructive. Claiming (PATCH
+    # /escalations/{lead_id}/claim, below) only applies to `recent_leads`
+    # rows; a raw queue entry has no id to claim until transfer_to_human's
+    # Lead write lands, which is the normal case since a Lead is written
+    # whenever a user_id is available (see tools.py).
     raw_queue = await redis.lrange(HUMAN_HANDOFF_QUEUE, 0, -1)
     queue: list[object] = []
     for entry in raw_queue:
@@ -1973,6 +2008,39 @@ async def get_escalations(
         queue.append(parsed)
 
     return {"recent_leads": recent_leads, "queue": queue}
+
+
+@router.patch("/escalations/{lead_id}/claim", response_model=LeadOut)
+async def claim_escalation(
+    lead_id: UUID,
+    db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    current_user: CurrentUserDep,
+    x_admin_token: str | None = Header(None),
+) -> LeadOut:
+    """A team member takes ownership of an escalation so others stop being
+    alerted for it. First claim wins — a second attempt on an
+    already-claimed lead is rejected (409) rather than silently
+    reassigning it, so two people can't both think they own the handoff.
+    """
+    lead = await db.get(Lead, lead_id)
+    if lead is None or lead.intent != "escalation":
+        raise HTTPException(status_code=404, detail="Escalation not found")
+    if scope_org_id is not None and lead.org_id != scope_org_id:
+        raise HTTPException(status_code=404, detail="Escalation not found")
+
+    if lead.claimed_by_account_user_id not in (None, current_user.id):
+        claimant_names = await _claimant_names(db, [lead])
+        claimant = claimant_names.get(lead.claimed_by_account_user_id, "another team member")
+        raise HTTPException(status_code=409, detail=f"Already claimed by {claimant}")
+
+    if lead.claimed_by_account_user_id is None:
+        lead.claimed_by_account_user_id = current_user.id
+        lead.claimed_at = datetime.now(UTC)
+        await db.commit()
+        await db.refresh(lead)
+
+    return _lead_out_with_claimant(lead, {current_user.id: current_user.full_name or current_user.email})
 
 
 # ---------------------------------------------------------------------------

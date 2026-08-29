@@ -317,6 +317,32 @@ async def verify_admin_or_session(
     raise HTTPException(status_code=403, detail="Forbidden")
 
 
+async def verify_platform_team_member(
+    membership_org_id: SessionMembershipOrgIdDep,
+    x_admin_token: str | None = Header(None),
+) -> None:
+    """Gate for platform-team-only resources that every Veerox staff account
+    should reach, not just the single seeded superuser — e.g. the cross-org
+    support ticket queue (routers/tickets.py's admin_router). Passes for the
+    shared `X-Admin-Token`, or any session whose org membership is the
+    platform operator's own org (`DEFAULT_ORG_ID` — the org every Veerox
+    staff account is invited onto via POST /team/members).
+
+    Deliberately org-based rather than `is_superuser`-based: `is_superuser`
+    is a narrower, more sensitive flag (it also unlocks platform-wide
+    billing/plan-catalog control via `verify_platform_admin`) that a support
+    rep invited onto the platform org doesn't need just to triage tickets.
+    Unlike `verify_admin_or_session`, this doesn't depend on
+    `settings.require_session_auth` — membership in the platform org is
+    itself the authorization, on or off.
+    """
+    if x_admin_token is not None and x_admin_token == settings.admin_token:
+        return
+    if membership_org_id is not None and membership_org_id == DEFAULT_ORG_ID:
+        return
+    raise HTTPException(status_code=403, detail="Forbidden")
+
+
 async def resolve_request_org_id(
     membership_org_id: SessionMembershipOrgIdDep,
     x_admin_token: str | None = Header(None),

@@ -927,6 +927,89 @@ async def test_escalations_filters_queue_entries_by_channel(
     assert body["queue"][0]["channel"] == "voice"
 
 
+async def test_claim_escalation_success(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """First claim sets claimed_by_account_user_id/claimed_at and returns
+    the claimant's display name; a second claim by the same caller is a
+    no-op success (idempotent), not a conflict."""
+    from apps.api.db.models import AccountUser
+    from apps.api.deps import DEFAULT_OWNER_ID
+
+    await _seed_org(db_session)
+    db_session.add(
+        AccountUser(id=DEFAULT_OWNER_ID, email="owner@example.com", token_hash="owner-hash", full_name="Owner")
+    )
+    user = User(org_id=ORG_ID, phone="+910000000006")
+    db_session.add(user)
+    await db_session.flush()
+    lead = Lead(org_id=ORG_ID, user_id=user.id, intent="escalation", channel="whatsapp")
+    db_session.add(lead)
+    await db_session.commit()
+    await db_session.refresh(lead)
+
+    response = await client.patch(f"/admin/escalations/{lead.id}/claim", headers=ADMIN_HEADERS)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["claimed_by_account_user_id"] == str(DEFAULT_OWNER_ID)
+    assert body["claimed_by_name"] == "Owner"
+    assert body["claimed_at"] is not None
+
+    # Idempotent re-claim by the same caller.
+    response2 = await client.patch(f"/admin/escalations/{lead.id}/claim", headers=ADMIN_HEADERS)
+    assert response2.status_code == 200
+    assert response2.json()["claimed_by_account_user_id"] == str(DEFAULT_OWNER_ID)
+
+
+async def test_claim_escalation_conflict_when_already_claimed(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from apps.api.db.models import AccountUser
+    from apps.api.deps import DEFAULT_OWNER_ID
+
+    await _seed_org(db_session)
+    other_id = uuid.UUID("00000000-0000-0000-0000-0000000000b2")
+    db_session.add_all(
+        [
+            AccountUser(id=DEFAULT_OWNER_ID, email="owner@example.com", token_hash="owner-hash"),
+            AccountUser(id=other_id, email="other@example.com", token_hash="other-hash", full_name="Other Rep"),
+        ]
+    )
+    user = User(org_id=ORG_ID, phone="+910000000007")
+    db_session.add(user)
+    await db_session.flush()
+    lead = Lead(
+        org_id=ORG_ID,
+        user_id=user.id,
+        intent="escalation",
+        channel="whatsapp",
+        claimed_by_account_user_id=other_id,
+    )
+    db_session.add(lead)
+    await db_session.commit()
+    await db_session.refresh(lead)
+
+    response = await client.patch(f"/admin/escalations/{lead.id}/claim", headers=ADMIN_HEADERS)
+    assert response.status_code == 409
+    assert "Other Rep" in response.json()["detail"]
+
+
+async def test_claim_escalation_not_found(client: AsyncClient, db_session: AsyncSession) -> None:
+    from apps.api.db.models import AccountUser
+    from apps.api.deps import DEFAULT_OWNER_ID
+
+    await _seed_org(db_session)
+    db_session.add(
+        AccountUser(id=DEFAULT_OWNER_ID, email="owner@example.com", token_hash="owner-hash")
+    )
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/admin/escalations/{uuid.uuid4()}/claim", headers=ADMIN_HEADERS
+    )
+    assert response.status_code == 404
+
+
 async def test_whatsapp_settings_reports_unconfigured_when_creds_unset(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

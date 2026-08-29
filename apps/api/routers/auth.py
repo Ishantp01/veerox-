@@ -236,6 +236,7 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep) -> SessionOut:
         email=account_user.email,
         full_name=account_user.full_name,
         is_superuser=account_user.is_superuser,
+        is_platform_org=membership.org_id == DEFAULT_ORG_ID,
     )
 
 
@@ -319,4 +320,5 @@ async def me(current_user: CurrentUserDep, db: DbDep) -> MeOut:
         email=current_user.email,
         full_name=current_user.full_name,
         is_superuser=current_user.is_superuser,
+        is_platform_org=membership.org_id == DEFAULT_ORG_ID,
     )

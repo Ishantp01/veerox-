@@ -63,6 +63,9 @@ export interface Lead {
   qualification_notes: string | null;
   qualified_at: string | null;
   created_at: string;
+  claimed_by_account_user_id: string | null;
+  claimed_at: string | null;
+  claimed_by_name: string | null;
 }
 
 // GET /admin/leads/{id} — Lead plus its conversation history, joined
@@ -277,7 +280,13 @@ export interface Escalation {
   user_phone: string | null;
   reason: string;
   urgency: string;
+  channel?: "voice" | "whatsapp" | null;
   conversation_id?: string | null;
+  // Only ever set for source: "lead" rows — a raw queue entry has no id to
+  // claim until transfer_to_human's Lead write lands (see admin.py).
+  claimed_by_account_user_id?: string | null;
+  claimed_by_name?: string | null;
+  claimed_at?: string | null;
 }
 
 export interface KillSwitchState {

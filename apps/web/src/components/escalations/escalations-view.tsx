@@ -24,7 +24,11 @@ function leadToEscalation(lead: Lead): Escalation {
     user_phone: lead.phone,
     reason: typeof meta.reason === "string" ? meta.reason : "—",
     urgency: typeof meta.urgency === "string" ? meta.urgency : "medium",
+    channel: lead.channel,
     conversation_id: lead.conversation_id,
+    claimed_by_account_user_id: lead.claimed_by_account_user_id,
+    claimed_by_name: lead.claimed_by_name,
+    claimed_at: lead.claimed_at,
   };
 }
 
@@ -37,6 +41,7 @@ function queueEntryToEscalation(entry: HandoffQueueEntry): Escalation {
     user_phone: entry.phone ?? null,
     reason: entry.reason,
     urgency: entry.urgency ?? "medium",
+    channel: entry.channel,
     conversation_id: entry.conversation_id ?? null,
   };
 }
@@ -105,7 +110,7 @@ export function EscalationsView({
           <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
-                <SkeletonRows rows={4} cols={6} />
+                <SkeletonRows rows={4} cols={7} />
               </tbody>
             </Table>
           </div>

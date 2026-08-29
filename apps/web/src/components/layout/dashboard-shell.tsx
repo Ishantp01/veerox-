@@ -5,6 +5,7 @@ import Nav from "@/components/nav";
 import { Topbar } from "@/components/layout/topbar";
 import { UsageWarningBanner } from "@/components/billing/usage-warning-banner";
 import { CreditExpiredModal } from "@/components/billing/credit-expired-modal";
+import { EmergencyEscalationPopup } from "@/components/escalations/emergency-escalation-popup";
 
 /**
  * Owns the mobile-drawer open state shared by Nav (the sidebar itself) and
@@ -29,6 +30,12 @@ export function DashboardShell({ children }: { children: ReactNode }) {
           isn't clipped by the scroll container. Dismissible, but re-opens
           on its own every SNOOZE_MS until the org recharges. */}
       <CreditExpiredModal />
+      {/* Non-blocking corner alert for a brand-new, unclaimed
+          transfer_to_human escalation — same "outside <main>, reaches every
+          route" rationale as CreditExpiredModal above, but deliberately a
+          small card (not a full-screen takeover) so it doesn't stop
+          whatever the team member is doing. */}
+      <EmergencyEscalationPopup />
     </div>
   );
 }

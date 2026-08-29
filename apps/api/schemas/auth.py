@@ -18,6 +18,12 @@ class SessionOut(BaseModel):
     email: str
     full_name: str | None = None
     is_superuser: bool = False
+    # True when org_id is the platform operator's own seeded org — every
+    # Veerox staff account invited via POST /team/members onto that org gets
+    # this, distinct from is_superuser (a narrower, individually-granted
+    # flag). Drives frontend visibility of platform-team-only pages like the
+    # cross-org support ticket queue (see deps.py's verify_platform_team_member).
+    is_platform_org: bool = False
 
 
 class MeOut(BaseModel):
@@ -28,6 +34,7 @@ class MeOut(BaseModel):
     email: str
     full_name: str | None = None
     is_superuser: bool = False
+    is_platform_org: bool = False
 
 
 class ProvisionOrgIn(BaseModel):
