@@ -123,13 +123,16 @@ async def create_template(payload: TemplateCreate, db: DbDep) -> WhatsAppTemplat
             # language, but WhatsApp's own top-level message is sometimes just
             # a generic label ("Invalid parameter") with no useful detail
             # attached — showing that verbatim to a non-technical client gives
-            # them nothing to act on, so swap it for actionable guidance.
+            # them nothing to act on. The single most common real cause of this
+            # generic rejection is a variable sitting right at the start/end of
+            # the message with no real words around it, so name that concretely
+            # instead of a vague "double-check" instruction.
             if message.strip().lower() in {"invalid parameter", "invalid parameters", "message couldn't be sent."}:
                 message = (
-                    "Please double-check the template body and the example "
-                    "text for each {{n}} placeholder, then try again."
+                    'Add words before and after each blank — e.g. "Hi {{1}}, thanks '
+                    'for contacting us!" instead of just "Hi {{1}}". Then try again.'
                 )
-            raise HTTPException(status_code=400, detail=f"Couldn't create this template: {message}") from exc
+            raise HTTPException(status_code=400, detail=f"Couldn't create this template. {message}") from exc
 
     template = WhatsAppTemplate(
         org_id=_default_org_id(),
