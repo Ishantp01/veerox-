@@ -119,9 +119,17 @@ async def create_template(payload: TemplateCreate, db: DbDep) -> WhatsAppTemplat
             )
         except httpx.HTTPStatusError as exc:
             message = wa_client.friendly_error_message(wa_client._meta_error_detail(exc))
-            raise HTTPException(
-                status_code=400, detail=f"Meta rejected this template: {message}"
-            ) from exc
+            # friendly_error_message already turns known error codes into plain
+            # language, but WhatsApp's own top-level message is sometimes just
+            # a generic label ("Invalid parameter") with no useful detail
+            # attached — showing that verbatim to a non-technical client gives
+            # them nothing to act on, so swap it for actionable guidance.
+            if message.strip().lower() in {"invalid parameter", "invalid parameters", "message couldn't be sent."}:
+                message = (
+                    "Please double-check the template body and the example "
+                    "text for each {{n}} placeholder, then try again."
+                )
+            raise HTTPException(status_code=400, detail=f"Couldn't create this template: {message}") from exc
 
     template = WhatsAppTemplate(
         org_id=_default_org_id(),
