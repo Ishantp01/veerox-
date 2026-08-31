@@ -57,6 +57,7 @@ limit key it increments. Only `max_team_members` differs from its own name
 | `billing_status` | `trialing` → `active` → `past_due` \| `canceled` \| `incomplete` |
 | `plan_started_at` | When the current plan took effect (last full recharge). Usage is counted from here — moving it forward is what restores credits |
 | `resource_limits` | Org-specific effective limits, overriding `Plan.limits` once populated by any recharge. `NULL` = never touched by the recharge scheme yet |
+| `free_plan_claimed_at` | Set the first time this org is granted *any* free (`price_cents == 0`) plan. `NULL` = never claimed one. Once set, no free plan can be selected or renewed again — permanently, even after moving to a paid plan |
 
 ## Effective limits: `Org.resource_limits` vs. `Plan.limits`
 
@@ -112,7 +113,10 @@ reset — only the recharged resource's *limit* goes up.
 
 1. `POST /billing/checkout-session` — looks up the `Plan` by code.
    - `price_cents == 0`: no payment needed, plan/recharge applied
-     immediately.
+     immediately — but only once per org ever. If `Org.free_plan_claimed_at`
+     is already set, this returns 409 instead, regardless of which free
+     plan (or recharge SKU) is being requested or what plan the org is on
+     now. A successful claim sets `free_plan_claimed_at`.
    - Otherwise creates a Razorpay Order, records a `BillingPayment` row
      with `status="created"`.
 2. Payment confirmation, either path lands on `_activate_paid_payment`

@@ -37,6 +37,14 @@ class Org(Base):
     # existing orgs are unaffected until their next recharge (see
     # deps.py `effective_limits`).
     resource_limits: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Set the first (and only) time this org is granted a free (price_cents
+    # == 0) plan — see routers/billing.py `create_checkout_session`. Once
+    # set, no free plan can be selected or renewed again, even after the
+    # org later upgrades to a paid plan or its free credits run out. NULL =
+    # never claimed a free plan yet (includes orgs that predate this field).
+    free_plan_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

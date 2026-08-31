@@ -137,6 +137,42 @@ async def test_checkout_session_activates_free_plan_instantly(
     org = (await db_session.execute(select(Org).where(Org.id == ORG_ID))).scalar_one()
     assert org.plan_id == plan.id
     assert org.billing_status == "active"
+    assert org.free_plan_claimed_at is not None
+
+
+async def test_checkout_session_rejects_second_free_plan_claim(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    headers = await _seed_org_and_login(client, db_session)
+    free_plan = Plan(code="basic", name="Basic", price_cents=0, limits={})
+    other_free_plan = Plan(code="starter", name="Starter", price_cents=0, limits={})
+    db_session.add_all([free_plan, other_free_plan])
+    await db_session.commit()
+
+    first = await client.post(
+        "/billing/checkout-session",
+        json={
+            "plan_code": "basic",
+            "success_url": "http://localhost:3001/billing?checkout=success",
+            "cancel_url": "http://localhost:3001/billing?checkout=cancel",
+        },
+        headers=headers,
+    )
+    assert first.status_code == 200
+
+    # Neither renewing the same free plan nor claiming a different free plan
+    # is allowed once an org has claimed one — it's a one-time allowance per
+    # org, not per plan.
+    second = await client.post(
+        "/billing/checkout-session",
+        json={
+            "plan_code": "starter",
+            "success_url": "http://localhost:3001/billing?checkout=success",
+            "cancel_url": "http://localhost:3001/billing?checkout=cancel",
+        },
+        headers=headers,
+    )
+    assert second.status_code == 409
 
 
 async def test_checkout_session_paid_plan_returns_order_for_embedded_checkout(

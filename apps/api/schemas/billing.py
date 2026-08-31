@@ -96,6 +96,10 @@ class BillingStatusOut(BaseModel):
     # nothing expires on a timer any more, access ends when the credits in
     # BillingUsageOut run out (see core/usage.py).
     last_recharge_at: str | None
+    # True once this org has ever been granted a free (price_cents == 0)
+    # plan — the frontend uses this to stop offering free plans again,
+    # matching the one-time enforcement in POST /billing/checkout-session.
+    free_plan_claimed: bool
 
 
 class UsageMetricOut(BaseModel):

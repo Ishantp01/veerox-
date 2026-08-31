@@ -493,6 +493,7 @@ async def get_billing_status(org: CurrentOrgDep, db: DbDep) -> BillingStatusOut:
             if latest_payment and latest_payment.period_start
             else None
         ),
+        free_plan_claimed=target_org.free_plan_claimed_at is not None,
     )
 
 
@@ -534,6 +535,11 @@ async def create_checkout_session(
         # their own success_url (no external redirect needed).
         org_result = await db.execute(select(Org).where(Org.id == org.org_id))
         target_org = org_result.scalar_one()
+        if target_org.free_plan_claimed_at is not None:
+            # One-time only, per org: once any free plan has been granted,
+            # it can never be selected or renewed again, whether the org is
+            # still on it, out of credit, or has since moved to a paid plan.
+            raise HTTPException(status_code=409, detail="Free plan has already been used")
         if plan.resource_type is None:
             target_org.plan_id = plan.id
             target_org.billing_status = "active"
@@ -542,6 +548,7 @@ async def create_checkout_session(
         else:
             await _apply_resource_recharge(db, target_org, plan)
             target_org.billing_status = "active"
+        target_org.free_plan_claimed_at = datetime.now(UTC)
         await db.commit()
         return CheckoutSessionOut(checkout_url=payload.success_url)
 

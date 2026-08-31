@@ -17,6 +17,11 @@ export interface BillingStatus {
   /** When the org last recharged. Informational only — plans don't expire on
    * a timer, access ends when the credits in BillingUsage run out. */
   last_recharge_at: string | null;
+  /** True once this org has ever been granted a free (price_cents === 0)
+   * plan — free plans are one-time only per org (see apps/api/routers/
+   * billing.py's create_checkout_session), so the picker must stop
+   * offering them once this is true, even after moving to a paid plan. */
+  free_plan_claimed: boolean;
 }
 
 export interface UsageMetric {

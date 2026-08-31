@@ -3,6 +3,7 @@
 import { Badge, Card, CardContent, CardHeader, CardTitle, Button, Skeleton, useToast } from "@/components/ui";
 import {
   useAvailablePlans,
+  useBillingStatus,
   useCreateCheckoutSession,
   useVerifyPayment,
 } from "@/lib/hooks/useBilling";
@@ -76,6 +77,12 @@ export function ChoosePlanCards({
   onPlanActivated?: () => void;
 }) {
   const availablePlans = useAvailablePlans();
+  const billingStatus = useBillingStatus();
+  // Free plans are one-time only per org (apps/api/routers/billing.py's
+  // create_checkout_session rejects a second claim with 409) — once true,
+  // every free-priced card gets locked out here too, not just on the server,
+  // so the org sees why instead of hitting an error toast.
+  const freePlanClaimed = billingStatus.data?.free_plan_claimed ?? false;
   const checkout = useCreateCheckoutSession();
   const verifyPayment = useVerifyPayment();
   const { toast } = useToast();
@@ -172,6 +179,7 @@ export function ChoosePlanCards({
         // (it resets Org.plan_started_at, which is what usage is counted
         // from — see apps/api/core/usage.py).
         const isEmpty = isCurrent && needsRecharge;
+        const isFreeLocked = plan.price_cents === 0 && freePlanClaimed;
         return (
           <Card
             key={plan.code}
@@ -243,12 +251,18 @@ export function ChoosePlanCards({
                 variant={isEmpty ? "danger" : isCurrent ? "secondary" : "primary"}
                 // Only the clicked card spins; the others just go inert so a
                 // second plan can't be started while one is mid-checkout.
-                // The current plan stays clickable (recharge), not disabled.
-                disabled={pendingCode !== null && pendingCode !== plan.code}
+                // The current plan stays clickable (recharge), not disabled —
+                // except a free plan already claimed once, which is locked
+                // out for good regardless of whether it's the current plan.
+                disabled={isFreeLocked || (pendingCode !== null && pendingCode !== plan.code)}
                 loading={pendingCode === plan.code}
                 onClick={() => handleChoose(plan.code)}
               >
-                {isCurrent ? "Renew this plan" : "Choose plan"}
+                {isFreeLocked
+                  ? "Already used"
+                  : isCurrent
+                    ? "Renew this plan"
+                    : "Choose plan"}
               </Button>
             </CardContent>
           </Card>
