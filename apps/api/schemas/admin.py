@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -37,6 +39,14 @@ class OutboundWhatsappIn(BaseModel):
 
 class OutboundCallIn(BaseModel):
     to_phone: str = Field(..., description="Destination phone number in E.164 format.")
+    # Optional — omit to keep the automatic Plivo-first/Twilio-fallback
+    # ordering (channels/voice/failover.py). Only meaningful when the org
+    # has BOTH a dedicated Plivo and Twilio number (the dashboard's calling
+    # page only shows this choice in that case); the chosen provider is
+    # just tried first, the other still stands by as a fallback.
+    provider: Literal["plivo", "twilio"] | None = Field(
+        None, description="Which dedicated number to call from, when the org has both."
+    )
 
 
 class KillSwitchIn(BaseModel):
@@ -66,9 +76,8 @@ class ScriptIn(BaseModel):
 
 class OrgNumbersOut(BaseModel):
     whatsapp_phone_number_id: str | None
-    # Only ever one of these two is set — whichever provider's account was
-    # found to own the calling number (see
-    # channels/voice/number_provider.py::detect_provider).
+    # An org can have BOTH a dedicated Plivo and a dedicated Twilio number at
+    # once — each field is independent (see routers/admin.py::update_org_numbers).
     plivo_phone_number: str | None
     twilio_phone_number: str | None = None
 
@@ -81,13 +90,11 @@ class OrgNumbersIn(BaseModel):
     whatsapp_phone_number_id: str | None = Field(
         None, description="This org's WhatsApp Business phone_number_id, from the Meta dashboard."
     )
-    # Named after Plivo for historical reasons, but accepts EITHER a Plivo or
-    # a Twilio number — the server looks it up in both accounts and stores it
-    # under whichever one actually owns it (see
-    # channels/voice/number_provider.py::detect_provider and
-    # routers/admin.py::update_org_numbers).
     plivo_phone_number: str | None = Field(
-        None, description="This org's dedicated calling number (Plivo or Twilio), e.g. +14155551234."
+        None, description="This org's dedicated Plivo calling number, e.g. +14155551234."
+    )
+    twilio_phone_number: str | None = Field(
+        None, description="This org's dedicated Twilio calling number, e.g. +14155551234."
     )
 
 

@@ -15,10 +15,16 @@ import {
   CardTitle,
   Input,
   Label,
+  Select,
   useToast,
 } from "@/components/ui";
 import { CallAnalyticsPanel } from "@/components/calling/call-analytics-panel";
-import { useOutboundCall } from "@/lib/hooks";
+import { useOrgNumbers, useOutboundCall } from "@/lib/hooks";
+
+const PROVIDER_LABEL: Record<"plivo" | "twilio", string> = {
+  plivo: "Plivo",
+  twilio: "Twilio",
+};
 
 const dialSchema = z.object({
   // E.164-ish: a leading "+" followed by 8–15 digits.
@@ -34,6 +40,13 @@ export default function CallingDialPage() {
   const { toast } = useToast();
   const [callSid, setCallSid] = useState<string | null>(null);
   const outboundCall = useOutboundCall();
+  const { data: orgNumbers } = useOrgNumbers();
+
+  // Only worth letting someone choose when the org actually has a dedicated
+  // number on both providers — otherwise there's nothing to pick between,
+  // the single configured (or platform default) number is just used.
+  const hasBothProviders = Boolean(orgNumbers?.plivo_phone_number) && Boolean(orgNumbers?.twilio_phone_number);
+  const [provider, setProvider] = useState<"plivo" | "twilio">("plivo");
 
   const {
     register,
@@ -46,10 +59,9 @@ export default function CallingDialPage() {
   });
 
   const onSubmit = handleSubmit((values) => {
-    
     setCallSid(null);
     outboundCall.mutate(
-      { to_phone: values.to_phone },
+      { to_phone: values.to_phone, provider: hasBothProviders ? provider : undefined },
       {
         onSuccess: (res) => {
           setCallSid(res.call_sid);
@@ -90,7 +102,9 @@ export default function CallingDialPage() {
               </div>
               <div>
                 <CardTitle>Outbound Call</CardTitle>
-                <p className="text-xs text-slate-400 dark:text-slate-500">via Plivo + AI agent</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  via {hasBothProviders ? PROVIDER_LABEL[provider] : "Plivo"} + AI agent
+                </p>
               </div>
             </div>
           </CardHeader>
@@ -125,6 +139,23 @@ export default function CallingDialPage() {
                 )}
               </div>
 
+              {hasBothProviders && (
+                <div>
+                  <Label htmlFor="call_provider">Call from</Label>
+                  <Select
+                    id="call_provider"
+                    value={provider}
+                    onChange={(value) => setProvider(value as "plivo" | "twilio")}
+                  >
+                    <option value="plivo">Plivo</option>
+                    <option value="twilio">Twilio</option>
+                  </Select>
+                  <p className="mt-1.5 text-xs text-slate-400">
+                    Your org has a dedicated number on both — pick which one places this call.
+                  </p>
+                </div>
+              )}
+
               {callSid && (
                 <div
                   role="status"
@@ -156,8 +187,8 @@ export default function CallingDialPage() {
               <Info size={12} aria-hidden /> How it works
             </p>
             <p className="text-xs text-primary-500 dark:text-primary-400/80">
-              Plivo calls the recipient → AI agent joins → conversation is logged
-              automatically.
+              {hasBothProviders ? PROVIDER_LABEL[provider] : "Plivo"} calls the recipient → AI
+              agent joins → conversation is logged automatically.
             </p>
           </div>
         </Card>

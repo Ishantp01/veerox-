@@ -29,7 +29,6 @@ from sqlalchemy.exc import IntegrityError
 
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice import plivo_client as voice_plivo
-from apps.api.channels.voice.number_provider import resolve_calling_number as _resolve_calling_number
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.llm import chat_completion
@@ -1894,12 +1893,13 @@ async def update_org_numbers(
     the calling/WhatsApp settings pages can each save just their own number
     without clobbering the other.
 
-    The calling number is auto-detected against both the Plivo and Twilio
-    accounts (see channels/voice/number_provider.py::detect_provider) and
-    stored under whichever provider owns it — clearing the other column, so
-    an org only ever has a dedicated number on one provider at a time.
-    Stored digits-only either way, matching how channels/voice/webhook.py
-    normalizes the provider's `To` param before comparing.
+    Plivo and Twilio numbers are independent fields — an org can have BOTH a
+    dedicated Plivo and a dedicated Twilio number at once (the caller states
+    which provider each number belongs to; this endpoint no longer guesses
+    via channels/voice/number_provider.py::detect_provider or clears the
+    other provider's number). Stored digits-only either way, matching how
+    channels/voice/webhook.py normalizes the provider's `To` param before
+    comparing.
     """
     record = await db.get(Org, org)
     if record is None:
@@ -1910,17 +1910,10 @@ async def update_org_numbers(
         record.whatsapp_phone_number_id = value.strip() if value else None
     if "plivo_phone_number" in fields:
         value = fields["plivo_phone_number"]
-        if not value:
-            record.plivo_phone_number = None
-            record.twilio_phone_number = None
-        else:
-            digits, provider = await _resolve_calling_number(value)
-            if provider == "twilio":
-                record.plivo_phone_number = None
-                record.twilio_phone_number = digits
-            else:
-                record.plivo_phone_number = digits
-                record.twilio_phone_number = None
+        record.plivo_phone_number = re.sub(r"\D", "", value) if value else None
+    if "twilio_phone_number" in fields:
+        value = fields["twilio_phone_number"]
+        record.twilio_phone_number = re.sub(r"\D", "", value) if value else None
     try:
         await db.commit()
     except IntegrityError:
@@ -2214,11 +2207,11 @@ async def outbound_call(
         )
         return OutboundCallOut(call_sid=f"STUB-{uuid4()}", status="stub")
 
-    # Dial from this org's own dedicated number when it has one (see
-    # Org.plivo_phone_number / Org.twilio_phone_number — mutually exclusive,
-    # whichever provider actually owns the number an admin entered), falling
-    # back to each provider's platform default. Both are stored digits-only
-    # (see PUT /admin/org-numbers), so re-add the "+" the provider APIs expect.
+    # Dial from this org's own dedicated number(s) when it has them (see
+    # Org.plivo_phone_number / Org.twilio_phone_number — independent, an org
+    # can have both), falling back to each provider's platform default. Both
+    # are stored digits-only (see PUT /admin/org-numbers), so re-add the "+"
+    # the provider APIs expect.
     org_record = await db.get(Org, org_id)
     plivo_from = f"+{org_record.plivo_phone_number}" if org_record and org_record.plivo_phone_number else None
     twilio_from = f"+{org_record.twilio_phone_number}" if org_record and org_record.twilio_phone_number else None
@@ -2231,7 +2224,11 @@ async def outbound_call(
     answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer?org_id={org_id}"
     try:
         result, provider = await voice_failover.initiate_call(
-            payload.to_phone, answer_url, plivo_from_number=plivo_from, twilio_from_number=twilio_from
+            payload.to_phone,
+            answer_url,
+            plivo_from_number=plivo_from,
+            twilio_from_number=twilio_from,
+            preferred_provider=payload.provider,
         )
     except httpx.HTTPError as exc:
         logger.exception(

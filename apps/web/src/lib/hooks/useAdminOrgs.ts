@@ -27,7 +27,10 @@ export interface ProvisionOrgInput {
   // Optional dedicated numbers for this org. Omit to use the platform
   // default calling/WhatsApp numbers (see apps/api/schemas/auth.py's
   // ProvisionOrgIn) — can be set later from the org's own settings pages.
+  // plivo_phone_number/twilio_phone_number are independent — an org can be
+  // given a dedicated number on both providers at once.
   plivo_phone_number?: string;
+  twilio_phone_number?: string;
   whatsapp_phone_number_id?: string;
 }
 

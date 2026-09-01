@@ -1048,6 +1048,70 @@ async def test_whatsapp_settings_reports_configured_when_creds_set(
     assert body["phone_number_id"] == "1555000"
 
 
+async def test_update_org_numbers_sets_both_providers_independently(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """An org can now have a dedicated number on BOTH Plivo and Twilio at
+    once — setting one must never clear the other (the old behavior, back
+    when a single auto-detected field only ever populated one column)."""
+    await _seed_org(db_session)
+
+    response = await client.put(
+        "/admin/org-numbers",
+        json={"plivo_phone_number": "+15550001111", "twilio_phone_number": "+15550002222"},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["plivo_phone_number"] == "15550001111"
+    assert body["twilio_phone_number"] == "15550002222"
+
+    # Updating just one field later must leave the other untouched.
+    response2 = await client.put(
+        "/admin/org-numbers",
+        json={"plivo_phone_number": "+15550003333"},
+        headers=ADMIN_HEADERS,
+    )
+    assert response2.status_code == 200
+    body2 = response2.json()
+    assert body2["plivo_phone_number"] == "15550003333"
+    assert body2["twilio_phone_number"] == "15550002222"
+
+
+async def test_outbound_call_passes_chosen_provider_through(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dashboard's provider toggle (only shown when an org has both a
+    dedicated Plivo and Twilio number) must reach failover.initiate_call as
+    an explicit preference, not just the automatic from-number inference."""
+    from apps.api.routers import admin as admin_module
+
+    await _seed_org(db_session)
+    org = await db_session.get(Org, ORG_ID)
+    org.plivo_phone_number = "15550001111"
+    org.twilio_phone_number = "15550002222"
+    await db_session.commit()
+
+    monkeypatch.setattr(admin_module.voice_failover, "is_configured", lambda: True)
+
+    captured: dict[str, object] = {}
+
+    async def _fake_initiate_call(*args: object, **kwargs: object) -> tuple[dict, str]:
+        captured.update(kwargs)
+        return {"sid": "CA123"}, "twilio"
+
+    monkeypatch.setattr(admin_module.voice_failover, "initiate_call", _fake_initiate_call)
+
+    response = await client.post(
+        "/admin/outbound/call",
+        json={"to_phone": "+919876543210", "provider": "twilio"},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert captured["preferred_provider"] == "twilio"
+
+
 async def test_calling_settings_reports_unconfigured_when_creds_unset(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

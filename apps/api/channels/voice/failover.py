@@ -37,29 +37,35 @@ async def initiate_call(
     hangup_url: str | None = None,
     plivo_from_number: str | None = None,
     twilio_from_number: str | None = None,
+    preferred_provider: str | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Place an outbound call, preferring Plivo and falling back to Twilio.
 
     ``plivo_from_number`` / ``twilio_from_number``, when given, override each
     provider's configured caller ID — used to dial from an org's own
     dedicated number (see ``Org.plivo_phone_number`` /
-    ``Org.twilio_phone_number``) instead of the platform default. An org's
-    dedicated number only ever lives on one of the two (a number belongs to
-    exactly one provider's account — see
-    ``channels/voice/number_provider.py::detect_provider``), so when
+    ``Org.twilio_phone_number``) instead of the platform default. An org can
+    have a dedicated number on BOTH providers at once, so when
     ``twilio_from_number`` is set and ``plivo_from_number`` isn't, Twilio is
     tried FIRST — dialing from Plivo with no matching number for this org
     would just be the platform default caller ID, not this org's own line.
-    Either way the other provider is still tried as a fallback (using ITS
-    platform default, since the org has no dedicated number there) so a
-    provider-wide outage doesn't strand the org's calls entirely.
+    ``preferred_provider`` (``"plivo"`` or ``"twilio"``), when given,
+    overrides that inference outright — e.g. the dashboard's calling page
+    lets an org with dedicated numbers on both providers explicitly choose
+    which one to dial from. Either way the other provider is still tried as
+    a fallback (using ITS platform default, or its own dedicated number when
+    the org has one) so a provider-wide outage doesn't strand the org's
+    calls entirely — this is a preference, not a hard restriction.
 
     Returns ``(response_json, provider_name)`` so callers can log/attribute
     which provider actually placed the call. Raises the primary provider's
     error (not the fallback's) if both fail, since that's the one worth
     surfacing/alerting on.
     """
-    twilio_primary = bool(twilio_from_number) and not plivo_from_number
+    if preferred_provider is not None:
+        twilio_primary = preferred_provider == "twilio"
+    else:
+        twilio_primary = bool(twilio_from_number) and not plivo_from_number
     providers = (
         [("twilio", twilio_from_number), ("plivo", plivo_from_number)]
         if twilio_primary

@@ -9,12 +9,19 @@ import type {
 
 export interface OutboundCallInput {
   to_phone: string;
+  /**
+   * Which dedicated number to call from — only meaningful when the org has
+   * BOTH a Plivo and a Twilio number (see useOrgNumbers()); omit otherwise
+   * and the backend falls back to its automatic Plivo-first/Twilio-fallback
+   * ordering (channels/voice/failover.py).
+   */
+  provider?: "plivo" | "twilio";
 }
 
 /**
  * Place an outbound voice call.
  *
- * POST /admin/outbound/call { to_phone } → OutboundCallResponse
+ * POST /admin/outbound/call { to_phone, provider? } → OutboundCallResponse
  *
  * A successful dial creates a conversation server-side, so the conversation
  * list and dashboard stats are invalidated to surface it.
@@ -23,10 +30,10 @@ export function useOutboundCall() {
   const queryClient = useQueryClient();
 
   return useMutation<OutboundCallResponse, Error, OutboundCallInput>({
-    mutationFn: ({ to_phone }: OutboundCallInput) =>
+    mutationFn: ({ to_phone, provider }: OutboundCallInput) =>
       apiFetch<OutboundCallResponse>("/admin/outbound/call", {
         method: "POST",
-        body: JSON.stringify({ to_phone }),
+        body: JSON.stringify({ to_phone, provider }),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.conversations() });

@@ -23,6 +23,7 @@ const EMPTY = {
   fullName: "",
   mobile: "",
   plivoNumber: "",
+  twilioNumber: "",
   whatsappNumberId: "",
 };
 
@@ -39,6 +40,11 @@ const orgSchema = z.object({
     .optional(),
   mobile: z.string().trim().regex(E164_REGEX, E164_MESSAGE),
   plivoNumber: z
+    .string()
+    .trim()
+    .optional()
+    .refine((v) => !v || E164_REGEX.test(v), E164_MESSAGE),
+  twilioNumber: z
     .string()
     .trim()
     .optional()
@@ -104,6 +110,7 @@ export function NewOrgDialog() {
         full_name: form.fullName.trim() || undefined,
         mobile: form.mobile.trim(),
         plivo_phone_number: form.plivoNumber.trim() || undefined,
+        twilio_phone_number: form.twilioNumber.trim() || undefined,
         whatsapp_phone_number_id: form.whatsappNumberId.trim() || undefined,
       },
       {
@@ -242,7 +249,7 @@ export function NewOrgDialog() {
                 )}
               </div>
               <div>
-                <Label htmlFor="org-plivo-number">Dedicated calling number</Label>
+                <Label htmlFor="org-plivo-number">Dedicated Plivo number</Label>
                 <Input
                   id="org-plivo-number"
                   type="tel"
@@ -254,12 +261,32 @@ export function NewOrgDialog() {
                   aria-invalid={fieldErrors.plivoNumber ? true : undefined}
                   aria-describedby={fieldErrors.plivoNumber ? "org-plivo-number-error" : undefined}
                 />
-                <p className="mt-1 text-xs text-slate-500">
-                  Either a Plivo or a Twilio number — we detect which provider owns it automatically.
-                </p>
                 {fieldErrors.plivoNumber && (
                   <p id="org-plivo-number-error" className="mt-1.5 text-xs text-red-600">
                     {fieldErrors.plivoNumber}
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label htmlFor="org-twilio-number">Dedicated Twilio number</Label>
+                <Input
+                  id="org-twilio-number"
+                  type="tel"
+                  inputMode="tel"
+                  maxLength={16}
+                  value={form.twilioNumber}
+                  onChange={(e) => updateField("twilioNumber", e.target.value.replace(/[^\d+]/g, ""))}
+                  placeholder="Optional — leave blank to use the default number"
+                  aria-invalid={fieldErrors.twilioNumber ? true : undefined}
+                  aria-describedby={fieldErrors.twilioNumber ? "org-twilio-number-error" : undefined}
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  Set both to give this org a dedicated number on each provider — the calling
+                  page then lets them choose which one to dial from.
+                </p>
+                {fieldErrors.twilioNumber && (
+                  <p id="org-twilio-number-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.twilioNumber}
                   </p>
                 )}
               </div>

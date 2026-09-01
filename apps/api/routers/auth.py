@@ -11,6 +11,7 @@ to re-invite or a platform admin to re-provision.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
@@ -23,7 +24,6 @@ from sqlalchemy.exc import IntegrityError
 
 from apps.api.channels.email import brevo_client
 from apps.api.channels.voice import failover as voice_failover
-from apps.api.channels.voice.number_provider import resolve_calling_number
 from apps.api.config import settings
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import create_session, delete_session, invalidate_user_sessions
@@ -114,19 +114,14 @@ async def provision_org(
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # The entered calling number is checked against both the Plivo and
-    # Twilio accounts and stored under whichever one owns it (see
-    # channels/voice/number_provider.py::detect_provider) so
-    # channels/voice/failover.py dials from — and can fail over around —
-    # the correct provider for this org.
-    plivo_number: str | None = None
-    twilio_number: str | None = None
-    if payload.plivo_phone_number:
-        digits, provider = await resolve_calling_number(payload.plivo_phone_number)
-        if provider == "twilio":
-            twilio_number = digits
-        else:
-            plivo_number = digits
+    # Each provider's number is an independent, explicitly-labeled field now
+    # (an org can have a dedicated number on both at once) — stored
+    # digits-only, matching how channels/voice/webhook.py normalizes the
+    # provider's `To` param before comparing.
+    plivo_number = re.sub(r"\D", "", payload.plivo_phone_number) if payload.plivo_phone_number else None
+    twilio_number = (
+        re.sub(r"\D", "", payload.twilio_phone_number) if payload.twilio_phone_number else None
+    )
 
     # No plan assigned yet on purpose: `Org.plan_id is None` is exactly the
     # signal the frontend's dashboard layout gates on to force new orgs
