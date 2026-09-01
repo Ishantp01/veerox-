@@ -326,13 +326,22 @@ export interface WhatsAppSettings {
   webhook_url: string;
 }
 
-// GET /admin/settings/calling — read-only Plivo channel config status.
+// GET /admin/settings/calling — Plivo channel config status, plus the
+// org's own preferred-provider override (the one editable field).
 export interface CallingSettings {
   configured: boolean;
   auth_id_configured: boolean;
   auth_token_configured: boolean;
   phone_number: string | null;
   answer_webhook_url: string;
+  // Explicit override of the automatic Plivo-first/Twilio-fallback
+  // ordering. null = automatic.
+  preferred_provider: "plivo" | "twilio" | null;
+}
+
+// PUT /admin/settings/calling
+export interface CallingSettingsInput {
+  preferred_provider: "plivo" | "twilio" | null;
 }
 
 // Calling campaigns — bulk-upload a lead list, the background dialer

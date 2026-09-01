@@ -134,8 +134,9 @@ class WhatsAppSettingsOut(BaseModel):
 
 
 class CallingSettingsOut(BaseModel):
-    """Read-only status of the Plivo voice channel config — see
-    WhatsAppSettingsOut for why this is view-only, not editable."""
+    """Status of the voice calling config, plus the one editable setting on
+    it — see WhatsAppSettingsOut for why the credential-status fields below
+    stay view-only."""
 
     configured: bool = Field(
         ..., description="True when all Plivo credentials are set (real calls enabled)."
@@ -144,6 +145,21 @@ class CallingSettingsOut(BaseModel):
     auth_token_configured: bool
     phone_number: str | None
     answer_webhook_url: str
+    # Explicit override of failover.py's automatic Plivo-first/Twilio-
+    # fallback ordering. None = automatic (the existing default: prefer
+    # whichever provider this org has a dedicated number on).
+    preferred_provider: Literal["plivo", "twilio"] | None = None
+
+
+class CallingSettingsIn(BaseModel):
+    preferred_provider: Literal["plivo", "twilio"] | None = Field(
+        None,
+        description=(
+            "Which provider to try first for every outbound call this org places "
+            "(single admin call, AI callback, campaign dialer, follow-up dispatcher). "
+            "Omit/null to go back to automatic ordering."
+        ),
+    )
 
 
 class StatsTimeseriesPoint(BaseModel):

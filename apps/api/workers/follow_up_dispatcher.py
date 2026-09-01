@@ -286,7 +286,11 @@ async def _place_follow_up_call(task_id: UUID, lead: Lead, org_record: Org | Non
 
     try:
         _, provider = await voice_failover.initiate_call(
-            lead.phone, answer_url, plivo_from_number=plivo_from, twilio_from_number=twilio_from
+            lead.phone,
+            answer_url,
+            plivo_from_number=plivo_from,
+            twilio_from_number=twilio_from,
+            preferred_provider=org_record.preferred_voice_provider if org_record else None,
         )
         if provider == "twilio" and not twilio_from:
             logger.warning("follow_up_dispatcher_fell_back_to_twilio", task_id=str(task_id))

@@ -30,8 +30,8 @@ async def _redirect_dialer_sessions(test_engine, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(campaign_dialer, "AsyncSessionLocal", session_factory)
 
 
-async def _seed_org(db: AsyncSession) -> None:
-    db.add(Org(id=ORG_ID, name="Test Org"))
+async def _seed_org(db: AsyncSession, *, preferred_voice_provider: str | None = None) -> None:
+    db.add(Org(id=ORG_ID, name="Test Org", preferred_voice_provider=preferred_voice_provider))
     await db.commit()
 
 
@@ -154,12 +154,27 @@ async def test_claim_targets_claims_pending_voice_campaign(
     claimed = await campaign_dialer._claim_targets()
 
     assert len(claimed) == 1
-    target_id, phone, attempt_count, plivo_from, twilio_from = claimed[0]
+    target_id, phone, attempt_count, plivo_from, twilio_from, preferred_provider = claimed[0]
     assert target_id == str(target.id)
     assert phone == target.phone
     assert attempt_count == 1
     assert plivo_from is None
     assert twilio_from is None
+    assert preferred_provider is None
+
+
+async def test_claim_targets_carries_org_preferred_provider(db_session: AsyncSession) -> None:
+    """The org's explicit Plivo/Twilio override must ride along with each
+    claimed target so _dial_one can pass it to initiate_call — otherwise a
+    campaign for an org that set a preference would silently ignore it."""
+    await _seed_org(db_session, preferred_voice_provider="twilio")
+    await _seed_target(db_session, status="pending", attempt_count=0, campaign_channel="voice")
+
+    claimed = await campaign_dialer._claim_targets()
+
+    assert len(claimed) == 1
+    *_, preferred_provider = claimed[0]
+    assert preferred_provider == "twilio"
 
 
 async def test_claim_targets_stops_at_concurrency_limit(

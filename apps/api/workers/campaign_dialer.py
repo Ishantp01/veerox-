@@ -107,16 +107,19 @@ async def _count_calls_in_flight(db) -> int:
     return (await db.execute(stmt)).scalar_one()
 
 
-async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None]]:
+async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, str | None]]:
     """Atomically claim up to the remaining concurrency budget's worth of the
     oldest pending targets of running campaigns.
 
-    Returns ``[(target_id, phone, attempt_count, plivo_from, twilio_from), ...]``
-    as strings/int so the caller can place the calls outside this
-    short-lived session. ``plivo_from``/``twilio_from`` are the owning org's
-    dedicated number on that provider (see ``Org.plivo_phone_number`` /
-    ``Org.twilio_phone_number`` — mutually exclusive), or ``None`` to fall
-    back to that provider's platform default. Empty if there's nothing to
+    Returns ``[(target_id, phone, attempt_count, plivo_from, twilio_from,
+    preferred_provider), ...]`` as strings/int so the caller can place the
+    calls outside this short-lived session. ``plivo_from``/``twilio_from``
+    are the owning org's dedicated number on that provider (see
+    ``Org.plivo_phone_number`` / ``Org.twilio_phone_number`` — independent,
+    an org can have both), or ``None`` to fall back to that provider's
+    platform default. ``preferred_provider`` is the org's explicit
+    Plivo/Twilio override (``Org.preferred_voice_provider``), or ``None``
+    for automatic ordering. Empty if there's nothing to
     dial right now or ``max_concurrent_calls`` voice calls are already in
     flight.
 
@@ -148,7 +151,11 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None]]
         # contends against a second instance's own claim attempt.
         stmt = (
             select(
-                CampaignTarget, CallCampaign.org_id, Org.plivo_phone_number, Org.twilio_phone_number
+                CampaignTarget,
+                CallCampaign.org_id,
+                Org.plivo_phone_number,
+                Org.twilio_phone_number,
+                Org.preferred_voice_provider,
             )
             .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
             .join(Org, Org.id == CallCampaign.org_id)
@@ -165,7 +172,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None]]
 
         org_over_limit: dict[UUID, bool] = {}
         claimed = []
-        for target, org_id, org_plivo_number, org_twilio_number in rows:
+        for target, org_id, org_plivo_number, org_twilio_number, preferred_provider in rows:
             if len(claimed) >= capacity:
                 break
             if org_id not in org_over_limit:
@@ -181,7 +188,14 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None]]
             plivo_from = f"+{org_plivo_number}" if org_plivo_number else None
             twilio_from = f"+{org_twilio_number}" if org_twilio_number else None
             claimed.append(
-                (str(target.id), target.phone, target.attempt_count, plivo_from, twilio_from)
+                (
+                    str(target.id),
+                    target.phone,
+                    target.attempt_count,
+                    plivo_from,
+                    twilio_from,
+                    preferred_provider,
+                )
             )
         if claimed:
             await db.commit()
@@ -231,6 +245,7 @@ async def _dial_one(
     attempt_count: int,
     plivo_from: str | None,
     twilio_from: str | None,
+    preferred_provider: str | None,
 ) -> None:
     answer_url = (
         f"{settings.public_base_url.rstrip('/')}/voice/answer?campaign_target_id={target_id}"
@@ -256,11 +271,12 @@ async def _dial_one(
             hangup_url=hangup_url,
             plivo_from_number=plivo_from,
             twilio_from_number=twilio_from,
+            preferred_provider=preferred_provider,
         )
         # Only worth flagging when Twilio wasn't this org's own dedicated
-        # provider (i.e. it wasn't picked on purpose) — see
-        # failover.initiate_call's provider-ordering docstring.
-        if provider == "twilio" and not twilio_from:
+        # provider or explicit preference (i.e. it wasn't picked on purpose)
+        # — see failover.initiate_call's provider-ordering docstring.
+        if provider == "twilio" and not twilio_from and preferred_provider != "twilio":
             logger.warning("campaign_dialer_fell_back_to_twilio", target_id=target_id)
     except httpx.HTTPError:
         logger.warning("campaign_dialer_initiate_call_failed", target_id=target_id)
@@ -273,8 +289,8 @@ async def _dial_batch() -> None:
         return
     await asyncio.gather(
         *(
-            _dial_one(target_id, phone, attempt_count, plivo_from, twilio_from)
-            for target_id, phone, attempt_count, plivo_from, twilio_from in claimed
+            _dial_one(target_id, phone, attempt_count, plivo_from, twilio_from, preferred_provider)
+            for target_id, phone, attempt_count, plivo_from, twilio_from, preferred_provider in claimed
         )
     )
 

@@ -78,8 +78,8 @@ def fake_redis(monkeypatch: pytest.MonkeyPatch) -> _FakeRedis:
     return fake
 
 
-async def _seed_org(db: AsyncSession) -> None:
-    db.add(Org(id=ORG_ID, name="Test Org"))
+async def _seed_org(db: AsyncSession, *, preferred_voice_provider: str | None = None) -> None:
+    db.add(Org(id=ORG_ID, name="Test Org", preferred_voice_provider=preferred_voice_provider))
     await db.commit()
 
 
@@ -657,6 +657,37 @@ async def test_initiate_ai_call_proceeds_for_genuine_callback_request(
     )
 
     assert result["status"] == "ok"
+
+
+async def test_initiate_ai_call_passes_org_preferred_provider(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The org's explicit Plivo/Twilio preference (PUT /admin/settings/calling)
+    must reach voice_failover.initiate_call, not just the org's dedicated
+    from-numbers."""
+    captured: dict[str, object] = {}
+
+    async def _fake_initiate_call(*args: object, **kwargs: object) -> tuple[dict, str]:
+        captured.update(kwargs)
+        return {}, "twilio"
+
+    monkeypatch.setattr(tools.voice_failover, "is_configured", lambda: True)
+    monkeypatch.setattr(tools.voice_failover, "initiate_call", _fake_initiate_call)
+    await _seed_org(db_session, preferred_voice_provider="twilio")
+    user = User(org_id=ORG_ID, phone="+910000000099", name="Caller")
+    db_session.add(user)
+    await db_session.commit()
+
+    result = await initiate_ai_call(
+        db_session,
+        user_id=user.id,
+        org_id=ORG_ID,
+        channel="whatsapp",
+        raw_message="can you call me back please",
+    )
+
+    assert result["status"] == "ok"
+    assert captured["preferred_provider"] == "twilio"
 
 
 async def _seed_campaign_target(db: AsyncSession, phone: str = "9000000001") -> CampaignTarget:

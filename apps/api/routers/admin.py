@@ -61,6 +61,7 @@ from apps.api.deps import (
 from apps.api.rate_limit import limiter
 from apps.api.redis_client import ERROR_COUNTER_KEY_FMT
 from apps.api.schemas.admin import (
+    CallingSettingsIn,
     CallingSettingsOut,
     KillSwitchIn,
     KillSwitchOut,
@@ -1785,18 +1786,50 @@ async def get_whatsapp_settings(
 
 @router.get("/settings/calling", response_model=CallingSettingsOut)
 async def get_calling_settings(
+    db: DbDep,
+    org: RequestOrgDep,
     x_admin_token: str | None = Header(None),
 ) -> CallingSettingsOut:
-    """Read-only status of the Plivo voice channel config for the
-    /calling/settings page — see get_whatsapp_settings for why this is
-    view-only rather than editable.
+    """Status of the Plivo voice channel config for the /calling/settings
+    page, plus the calling org's own `preferred_provider` override — see
+    get_whatsapp_settings for why the credential-status fields stay
+    view-only; `preferred_provider` is the one editable field here (see
+    `update_calling_settings` below).
     """
+    record = await db.get(Org, org)
     return CallingSettingsOut(
         configured=voice_plivo.is_configured(),
         auth_id_configured=bool(settings.plivo_auth_id),
         auth_token_configured=bool(settings.plivo_auth_token),
         phone_number=settings.plivo_phone_number,
         answer_webhook_url=f"{settings.public_base_url.rstrip('/')}/voice/answer",
+        preferred_provider=record.preferred_voice_provider if record else None,
+    )
+
+
+@router.put("/settings/calling", response_model=CallingSettingsOut)
+async def update_calling_settings(
+    body: CallingSettingsIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> CallingSettingsOut:
+    """Set (or, with `preferred_provider: null`, clear back to automatic)
+    this org's preferred voice provider — applied at every outbound-calling
+    entry point via `initiate_call`'s `preferred_provider` kwarg (single
+    admin call, AI callback, campaign dialer, follow-up dispatcher)."""
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    record.preferred_voice_provider = body.preferred_provider
+    await db.commit()
+    return CallingSettingsOut(
+        configured=voice_plivo.is_configured(),
+        auth_id_configured=bool(settings.plivo_auth_id),
+        auth_token_configured=bool(settings.plivo_auth_token),
+        phone_number=settings.plivo_phone_number,
+        answer_webhook_url=f"{settings.public_base_url.rstrip('/')}/voice/answer",
+        preferred_provider=record.preferred_voice_provider,
     )
 
 
@@ -2222,13 +2255,17 @@ async def outbound_call(
     # platform default — this is the one call site with no campaign context
     # to resolve org from instead.
     answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer?org_id={org_id}"
+    # An explicit per-call choice on the dial form wins; otherwise fall back
+    # to the org's persisted preference (PUT /admin/settings/calling), then
+    # to failover.py's own automatic ordering if neither is set.
+    preferred_provider = payload.provider or (org_record.preferred_voice_provider if org_record else None)
     try:
         result, provider = await voice_failover.initiate_call(
             payload.to_phone,
             answer_url,
             plivo_from_number=plivo_from,
             twilio_from_number=twilio_from,
-            preferred_provider=payload.provider,
+            preferred_provider=preferred_provider,
         )
     except httpx.HTTPError as exc:
         logger.exception(

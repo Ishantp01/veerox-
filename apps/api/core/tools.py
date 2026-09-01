@@ -1114,6 +1114,7 @@ async def initiate_ai_call(
             answer_url,
             plivo_from_number=plivo_from,
             twilio_from_number=twilio_from,
+            preferred_provider=org.preferred_voice_provider if org else None,
         )
     except httpx.HTTPError as exc:
         logger.warning(

@@ -1,12 +1,22 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Bot, ChevronRight } from "lucide-react";
+import { Bot, ChevronRight, Phone } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
-import { Button, Card, CardContent, CardHeader, Skeleton, Textarea } from "@/components/ui";
-import { useScript, useUpdateScript } from "@/lib/hooks";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  Label,
+  Select,
+  Skeleton,
+  Textarea,
+  useToast,
+} from "@/components/ui";
+import { useCallingSettings, useScript, useUpdateCallingSettings, useUpdateScript } from "@/lib/hooks";
 
 interface CollapsibleSectionProps {
   title: string;
@@ -135,6 +145,68 @@ function ScriptEditor() {
   );
 }
 
+const PROVIDER_OPTIONS: { value: "" | "plivo" | "twilio"; label: string }[] = [
+  { value: "", label: "Automatic (prefer whichever number this org has)" },
+  { value: "plivo", label: "Plivo" },
+  { value: "twilio", label: "Twilio" },
+];
+
+function ProviderPreference() {
+  const calling = useCallingSettings();
+  const updateSettings = useUpdateCallingSettings();
+  const { toast } = useToast();
+
+  return (
+    <QueryBoundary
+      isLoading={calling.isLoading}
+      isError={calling.isError}
+      error={calling.error}
+      onRetry={() => calling.refetch()}
+      loadingFallback={<Skeleton className="h-20 w-full rounded-xl" />}
+    >
+      {calling.data && (
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Which provider to try first for every outbound call this org places — a single
+            dialed call, an AI callback, campaign calls, and follow-up calls. The other
+            provider still stands by as a fallback if the preferred one fails.
+          </p>
+          <div className="max-w-xs">
+            <Label htmlFor="preferred-provider">Preferred provider</Label>
+            <Select
+              id="preferred-provider"
+              value={calling.data.preferred_provider ?? ""}
+              disabled={updateSettings.isPending}
+              onChange={(value) => {
+                const provider = (value || null) as "plivo" | "twilio" | null;
+                updateSettings.mutate(
+                  { preferred_provider: provider },
+                  {
+                    onSuccess: () =>
+                      toast({ title: "Voice provider preference saved", variant: "success" }),
+                    onError: (err) =>
+                      toast({
+                        title: "Could not save preference",
+                        description: err.message,
+                        variant: "error",
+                      }),
+                  }
+                );
+              }}
+            >
+              {PROVIDER_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </div>
+      )}
+    </QueryBoundary>
+  );
+}
+
 export interface SettingsViewProps {
   title: string;
   description: string;
@@ -150,7 +222,7 @@ export interface SettingsViewProps {
  * channel-specific and determines which org an inbound message/call on it
  * resolves to (channels/whatsapp/adapter.py, channels/voice/webhook.py).
  */
-export function SettingsView({ title, description }: SettingsViewProps) {
+export function SettingsView({ title, description, channel }: SettingsViewProps) {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader title={title} description={description} />
@@ -164,6 +236,15 @@ export function SettingsView({ title, description }: SettingsViewProps) {
           <ScriptEditor />
         </CollapsibleSection>
 
+        {channel === "calling" && (
+          <CollapsibleSection
+            title="Voice Provider"
+            icon={<Phone size={15} aria-hidden className="text-slate-400" />}
+            defaultOpen
+          >
+            <ProviderPreference />
+          </CollapsibleSection>
+        )}
       </div>
     </div>
   );

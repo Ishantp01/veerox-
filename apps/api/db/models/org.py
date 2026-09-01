@@ -74,3 +74,11 @@ class Org(Base):
     # fail over from Plivo to Twilio (or vice versa) while still dialing
     # from this org's own number on whichever provider actually owns it.
     twilio_phone_number: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True)
+    # Explicit override of failover.py's automatic Plivo-first/Twilio-
+    # fallback ordering — "plivo", "twilio", or NULL (automatic, the
+    # default: prefer whichever provider this org has a dedicated number
+    # on, Plivo if both/neither). Applied at every outbound-calling entry
+    # point (single admin call, AI callback, campaign dialer, follow-up
+    # dispatcher) via `initiate_call`'s `preferred_provider` kwarg — see
+    # routers/admin.py's PUT /admin/settings/calling.
+    preferred_voice_provider: Mapped[str | None] = mapped_column(String(10), nullable=True)

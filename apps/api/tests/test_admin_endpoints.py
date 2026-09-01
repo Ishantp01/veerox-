@@ -1112,6 +1112,27 @@ async def test_outbound_call_passes_chosen_provider_through(
     assert captured["preferred_provider"] == "twilio"
 
 
+async def test_update_calling_settings_persists_preferred_provider(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+
+    put_response = await client.put(
+        "/admin/settings/calling", json={"preferred_provider": "twilio"}, headers=ADMIN_HEADERS
+    )
+    assert put_response.status_code == 200
+    assert put_response.json()["preferred_provider"] == "twilio"
+
+    get_response = await client.get("/admin/settings/calling", headers=ADMIN_HEADERS)
+    assert get_response.json()["preferred_provider"] == "twilio"
+
+    # null clears it back to automatic.
+    clear_response = await client.put(
+        "/admin/settings/calling", json={"preferred_provider": None}, headers=ADMIN_HEADERS
+    )
+    assert clear_response.json()["preferred_provider"] is None
+
+
 async def test_calling_settings_reports_unconfigured_when_creds_unset(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
