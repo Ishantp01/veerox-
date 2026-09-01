@@ -136,6 +136,8 @@ async def test_create_appointment_with_contact_notifies_and_schedules_reminder(
     body = response.json()
     assert body["contact_id"] == str(contact.id)
     assert body["lead_id"] is not None
+    assert body["name"] == "Asha"
+    assert body["phone"] == "+910000000099"
 
     lead_stmt = select(Lead).where(Lead.id == uuid.UUID(body["lead_id"]))
     lead = (await db_session.execute(lead_stmt)).scalar_one()
@@ -150,6 +152,45 @@ async def test_create_appointment_with_contact_notifies_and_schedules_reminder(
     assert len(sent) == 1
     assert sent[0][0] == "+910000000099"
     assert sent[0][1] == "appointment_confirmation"
+
+
+async def test_list_and_get_appointment_surface_name_and_phone(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Both the list and single-item endpoints must resolve name/phone from
+    the appointment's Lead — not just contact_id/lead_id UUIDs — since the
+    dashboard table shows who the appointment is for (see AppointmentOut)."""
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000061", name="Rahul")
+    db_session.add(user)
+    await db_session.flush()
+    lead = Lead(
+        org_id=ORG_ID,
+        user_id=user.id,
+        name="Rahul",
+        phone="+910000000061",
+        intent="booking",
+        channel="whatsapp",
+    )
+    db_session.add(lead)
+    await db_session.flush()
+    appointment = Appointment(
+        org_id=ORG_ID, lead_id=lead.id, scheduled_at=datetime.now(UTC) + timedelta(days=2)
+    )
+    db_session.add(appointment)
+    await db_session.commit()
+
+    list_response = await client.get("/appointments", headers=ADMIN_HEADERS)
+    assert list_response.status_code == 200
+    [row] = [r for r in list_response.json() if r["id"] == str(appointment.id)]
+    assert row["name"] == "Rahul"
+    assert row["phone"] == "+910000000061"
+
+    get_response = await client.get(f"/appointments/{appointment.id}", headers=ADMIN_HEADERS)
+    assert get_response.status_code == 200
+    body = get_response.json()
+    assert body["name"] == "Rahul"
+    assert body["phone"] == "+910000000061"
 
 
 async def test_create_appointment_rejects_slot_within_30_minutes(

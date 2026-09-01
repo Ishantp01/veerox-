@@ -55,14 +55,22 @@ export default function TeamPage() {
   const isAdmin = user?.role === "admin";
   const [exporting, setExporting] = useState(false);
 
+  // The platform operator's own org (any member with is_superuser=True) is
+  // exempt from every plan limit, max_seats included — see deps.py's
+  // `_org_is_platform_admin_owned`. Mirror that here so a superuser doesn't
+  // hit a UI-only "limit reached" block the backend would never enforce.
+  const isSuperuser = user?.is_superuser === true;
   const maxMembers = billing.data?.plan?.limits.max_seats;
   // A limit of 0 means the plan never included team members at all (same
   // convention as the billing page's usage bars / choose-plan-cards) — the
   // API still refuses any invite either way (apps/api/routers/team.py), but
   // the header shouldn't advertise a confusing "0 / 0 team members used".
-  const hasSeatLimit = typeof maxMembers === "number" && maxMembers > 0;
+  const hasSeatLimit = !isSuperuser && typeof maxMembers === "number" && maxMembers > 0;
   const memberLimitReached =
-    typeof maxMembers === "number" && billing.data !== undefined && members.length >= maxMembers;
+    !isSuperuser &&
+    typeof maxMembers === "number" &&
+    billing.data !== undefined &&
+    members.length >= maxMembers;
 
   async function handleExport() {
     setExporting(true);
@@ -133,7 +141,7 @@ export default function TeamPage() {
           <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
-                <SkeletonRows rows={4} cols={5} />
+                <SkeletonRows rows={4} cols={6} />
               </tbody>
             </Table>
           </div>
@@ -148,6 +156,7 @@ export default function TeamPage() {
               <TableRow isHeader>
                 <TableHeader>Member</TableHeader>
                 <TableHeader>Email</TableHeader>
+                <TableHeader>Phone</TableHeader>
                 <TableHeader>Role</TableHeader>
                 <TableHeader>Joined</TableHeader>
                 {isAdmin && <TableHeader className="text-right">Actions</TableHeader>}
@@ -165,6 +174,7 @@ export default function TeamPage() {
                     )}
                   </TableCell>
                   <TableCell>{member.email}</TableCell>
+                  <TableCell>{member.mobile ?? "—"}</TableCell>
                   <TableCell>
                     {isAdmin ? (
                       <Select

@@ -70,7 +70,7 @@ export default function AppointmentsPage() {
           <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
-                <SkeletonRows rows={5} cols={4} />
+                <SkeletonRows rows={5} cols={6} />
               </tbody>
             </Table>
           </div>
@@ -87,6 +87,8 @@ export default function AppointmentsPage() {
           <Table>
             <thead>
               <TableRow isHeader>
+                <TableHeader>Name</TableHeader>
+                <TableHeader>Number</TableHeader>
                 <TableHeader>When</TableHeader>
                 <TableHeader>Duration</TableHeader>
                 <TableHeader>Notes</TableHeader>
@@ -96,6 +98,10 @@ export default function AppointmentsPage() {
             <tbody>
               {appointments.map((appt) => (
                 <TableRow key={appt.id}>
+                  <TableCell className="font-semibold text-slate-800 dark:text-slate-100">
+                    {appt.name ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-xs text-slate-500">{appt.phone ?? "—"}</TableCell>
                   <TableCell className="font-semibold text-slate-800 dark:text-slate-100">
                     {formatDateTime(appt.scheduled_at)}
                   </TableCell>

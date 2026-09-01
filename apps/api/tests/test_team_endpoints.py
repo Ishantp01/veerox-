@@ -54,6 +54,45 @@ async def test_admin_can_invite_new_member(
     assert body["login_token"]
 
 
+async def test_admin_can_invite_member_with_mobile(
+    client: AsyncClient, admin_session: tuple[AccountUser, str]
+) -> None:
+    _, session_token = admin_session
+    response = await client.post(
+        "/team/members",
+        json={"email": "teammate2@example.com", "role": "member", "mobile": "+919876543210"},
+        headers=_auth(session_token),
+    )
+    assert response.status_code == 201
+
+    members = await client.get("/team/members", headers=_auth(session_token))
+    row = next(m for m in members.json() if m["email"] == "teammate2@example.com")
+    assert row["mobile"] == "+919876543210"
+
+
+async def test_invite_fills_missing_mobile_on_existing_account_without_overwriting(
+    client: AsyncClient, admin_session: tuple[AccountUser, str], db_session: AsyncSession
+) -> None:
+    """Re-inviting an email that already has an account (elsewhere on the
+    platform) with a mobile fills it in if missing, but never clobbers one
+    that account already has."""
+    _, session_token = admin_session
+
+    existing = AccountUser(email="existing@example.com", token_hash=hash_token("x"), mobile="+911111111111")
+    db_session.add(existing)
+    await db_session.commit()
+
+    response = await client.post(
+        "/team/members",
+        json={"email": "existing@example.com", "role": "member", "mobile": "+922222222222"},
+        headers=_auth(session_token),
+    )
+    assert response.status_code == 201
+
+    await db_session.refresh(existing)
+    assert existing.mobile == "+911111111111"  # untouched, not overwritten
+
+
 async def test_invite_rejects_duplicate_member(
     client: AsyncClient, admin_session: tuple[AccountUser, str]
 ) -> None:

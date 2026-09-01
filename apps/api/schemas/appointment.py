@@ -38,6 +38,12 @@ class AppointmentOut(BaseModel):
     assigned_user_id: UUID | None
     notes: str | None
     created_at: datetime
+    # Not columns on `appointments` itself — resolved by the router from
+    # whichever of lead_id/contact_id is set (Lead takes priority when a
+    # booking has both), so the dashboard list can show who an appointment
+    # is for without a separate lookup.
+    name: str | None = None
+    phone: str | None = None
 
 
 class AppointmentUpdateIn(BaseModel):

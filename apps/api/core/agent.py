@@ -168,6 +168,7 @@ async def _dispatch_tool(
     channel: Channel,
     campaign_target_id: UUID | None = None,
     conversation_id: UUID | None = None,
+    raw_message: str | None = None,
 ) -> dict[str, Any]:
     """Look up the handler, parse args, run it. Returns a JSON-serialisable dict.
 
@@ -192,7 +193,10 @@ async def _dispatch_tool(
     # Inject caller context the LLM args can't carry — handlers absorb extras
     # via **_. campaign_target_id mirrors voice/adapter.py's
     # _dispatch_realtime_tool so qualify_lead can find the CampaignTarget row
-    # to update on either channel.
+    # to update on either channel. raw_message is the current turn's own
+    # text, unaltered by the model — initiate_ai_call uses it as a
+    # deterministic backstop against misreading "connect me to a human" as
+    # a request to be called back (see core/tools.py).
     result = await handler(
         db,
         user_id=user_id,
@@ -200,6 +204,7 @@ async def _dispatch_tool(
         channel=channel,
         campaign_target_id=campaign_target_id,
         conversation_id=conversation_id,
+        raw_message=raw_message,
         **args,
     )
     if not isinstance(result, dict):
@@ -314,6 +319,7 @@ class AgentCore:
                     channel,
                     campaign_target_id=campaign_target_id,
                     conversation_id=conversation.id,
+                    raw_message=input_text,
                 )
                 if tool_call.name == "book_appointment" and tool_result.get("status") == "ok":
                     _appointment_booked_ctx.set(True)

@@ -5,7 +5,8 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.core.tools import (
     _APPOINTMENT_REMINDER_TEMPLATE_NAME,
@@ -33,6 +34,34 @@ _STATUS_PATTERN = f"^({'|'.join(APPOINTMENT_STATUSES)})$"
 _SORT_PATTERN = "^(newest|oldest)$"
 
 
+def _appointment_out(appointment: Appointment, name: str | None, phone: str | None) -> AppointmentOut:
+    """Build the response model, attaching name/phone resolved separately
+    since neither is a column on ``appointments`` itself (see AppointmentOut)."""
+    out = AppointmentOut.model_validate(appointment)
+    out.name = name
+    out.phone = phone
+    return out
+
+
+async def _resolve_name_phone(
+    db: AsyncSession, appointment: Appointment
+) -> tuple[str | None, str | None]:
+    """Look up who a single appointment is for, from whichever of
+    lead_id/contact_id is set (Lead takes priority). Only used for the
+    single-row endpoints below — list_appointments joins instead to avoid
+    N+1 queries over a page of results.
+    """
+    if appointment.lead_id is not None:
+        lead = await db.get(Lead, appointment.lead_id)
+        if lead is not None:
+            return lead.name, lead.phone
+    if appointment.contact_id is not None:
+        contact = await db.get(Contact, appointment.contact_id)
+        if contact is not None:
+            return contact.name, contact.phone
+    return None, None
+
+
 @router.get("", response_model=list[AppointmentOut])
 async def list_appointments(
     db: DbDep,
@@ -43,14 +72,23 @@ async def list_appointments(
     sort: str = Query("newest", pattern=_SORT_PATTERN),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-) -> list[Appointment]:
+) -> list[AppointmentOut]:
     order_by = (
         Appointment.created_at.desc()
         if sort == "newest"
         else Appointment.created_at.asc()
     )
+    # Outer-joined so a page of results resolves name/phone in one query
+    # instead of one extra lookup per row. Lead takes priority over Contact
+    # when both happen to be set, matching _resolve_name_phone above.
     stmt = (
-        select(Appointment)
+        select(
+            Appointment,
+            func.coalesce(Lead.name, Contact.name).label("name"),
+            func.coalesce(Lead.phone, Contact.phone).label("phone"),
+        )
+        .outerjoin(Lead, Appointment.lead_id == Lead.id)
+        .outerjoin(Contact, Appointment.contact_id == Contact.id)
         .where(Appointment.org_id == org_id)
         .order_by(order_by)
     )
@@ -61,14 +99,14 @@ async def list_appointments(
     if starts_before:
         stmt = stmt.where(Appointment.scheduled_at <= starts_before)
     stmt = stmt.limit(limit).offset(offset)
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
+    rows = (await db.execute(stmt)).all()
+    return [_appointment_out(appt, name, phone) for appt, name, phone in rows]
 
 
 @router.post("", response_model=AppointmentOut, status_code=201)
 async def create_appointment(
     payload: AppointmentCreate, db: DbDep, org_id: RequestOrgDep
-) -> Appointment:
+) -> AppointmentOut:
     conflict = await find_conflicting_appointment(db, org_id, payload.scheduled_at)
     if conflict is not None:
         raise HTTPException(
@@ -139,24 +177,27 @@ async def create_appointment(
             db, org_id, appointment.id, notify_phone, notify_name, date_str, time_str
         )
 
-    return appointment
+    return _appointment_out(appointment, notify_name, notify_phone)
 
 
 @router.get("/{appointment_id}", response_model=AppointmentOut)
-async def get_appointment(appointment_id: UUID, db: DbDep, org_id: RequestOrgDep) -> Appointment:
+async def get_appointment(
+    appointment_id: UUID, db: DbDep, org_id: RequestOrgDep
+) -> AppointmentOut:
     stmt = select(Appointment).where(
         Appointment.id == appointment_id, Appointment.org_id == org_id
     )
     appointment = (await db.execute(stmt)).scalar_one_or_none()
     if appointment is None:
         raise HTTPException(status_code=404, detail="Appointment not found")
-    return appointment
+    name, phone = await _resolve_name_phone(db, appointment)
+    return _appointment_out(appointment, name, phone)
 
 
 @router.patch("/{appointment_id}", response_model=AppointmentOut)
 async def update_appointment(
     appointment_id: UUID, payload: AppointmentUpdateIn, db: DbDep, org_id: RequestOrgDep
-) -> Appointment:
+) -> AppointmentOut:
     stmt = select(Appointment).where(
         Appointment.id == appointment_id, Appointment.org_id == org_id
     )
@@ -194,4 +235,5 @@ async def update_appointment(
         setattr(appointment, field, value)
     await db.commit()
     await db.refresh(appointment)
-    return appointment
+    name, phone = await _resolve_name_phone(db, appointment)
+    return _appointment_out(appointment, name, phone)

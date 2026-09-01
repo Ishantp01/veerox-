@@ -54,6 +54,7 @@ def _member_out(account_user: AccountUser, membership: OrgMembership) -> TeamMem
         account_user_id=account_user.id,
         email=account_user.email,
         full_name=account_user.full_name,
+        mobile=account_user.mobile,
         role=membership.role,
         is_active=account_user.is_active,
         invited_at=membership.invited_at,
@@ -86,7 +87,7 @@ async def export_members_xlsx(org: OrgMemberDep, db: DbDep) -> StreamingResponse
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Team"
-    sheet.append(["name", "email", "role", "active", "invited_at", "joined_at"])
+    sheet.append(["name", "email", "mobile", "role", "active", "invited_at", "joined_at"])
     for account_user, membership in result.all():
         # The org owner (the account that bought the plan) isn't a "team
         # member" — GET /team/members' own JSON response leaves it in, but
@@ -100,6 +101,7 @@ async def export_members_xlsx(org: OrgMemberDep, db: DbDep) -> StreamingResponse
             [
                 account_user.full_name or "",
                 account_user.email,
+                account_user.mobile or "",
                 membership.role,
                 account_user.is_active,
                 membership.invited_at.isoformat() if membership.invited_at else "",
@@ -155,6 +157,7 @@ async def invite_member(
             email=payload.email,
             token_hash=hash_token(login_token),
             full_name=payload.full_name,
+            mobile=payload.mobile,
         )
         db.add(account_user)
         await db.flush()
@@ -166,6 +169,11 @@ async def invite_member(
         )
         if already_member.scalar_one_or_none() is not None:
             raise HTTPException(status_code=409, detail="This email is already on the team")
+        # Existing account (already had a login elsewhere) being added to
+        # this org too — let the inviter fill in a mobile it's still
+        # missing, but never silently overwrite one the account already has.
+        if payload.mobile and not account_user.mobile:
+            account_user.mobile = payload.mobile
 
     db.add(
         OrgMembership(

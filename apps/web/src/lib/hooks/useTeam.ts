@@ -5,6 +5,10 @@ export interface TeamMember {
   account_user_id: string;
   email: string;
   full_name: string | null;
+  // E.164 mobile number, if this teammate has one on file — the number
+  // WhatsApp-notified on a human handoff (see core/tools.py's
+  // _resolve_team_notify_phone).
+  mobile: string | null;
   role: "admin" | "member";
   is_active: boolean;
   invited_at: string | null;
@@ -25,6 +29,7 @@ export function useTeamMembers() {
 export interface InviteMemberInput {
   email: string;
   full_name?: string;
+  mobile?: string;
   role: string;
 }
 

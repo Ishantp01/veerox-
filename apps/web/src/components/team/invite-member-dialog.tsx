@@ -18,7 +18,10 @@ import {
 } from "@/components/ui";
 import { useInviteMember, type InviteMemberResult } from "@/lib/hooks/useTeam";
 
-const EMPTY = { email: "", fullName: "", role: "member" };
+const EMPTY = { email: "", fullName: "", mobile: "", role: "member" };
+
+const E164_REGEX = /^\+\d{8,15}$/;
+const E164_MESSAGE = "Enter a valid E.164 number, e.g. +919876543210";
 
 const inviteSchema = z.object({
   email: z.string().trim().email(),
@@ -28,10 +31,15 @@ const inviteSchema = z.object({
     .max(200, "Name is too long")
     .regex(/^[A-Za-z\s'.-]*$/, "Name should only contain letters")
     .optional(),
+  mobile: z
+    .string()
+    .trim()
+    .optional()
+    .refine((v) => !v || E164_REGEX.test(v), E164_MESSAGE),
   role: z.string().trim().min(1),
 });
 
-type InviteFieldErrors = Partial<Record<"email" | "fullName" | "role", string>>;
+type InviteFieldErrors = Partial<Record<"email" | "fullName" | "mobile" | "role", string>>;
 
 /**
  * Admin self-service invite — the org's own equivalent of
@@ -65,6 +73,7 @@ export function InviteMemberDialog({ disabled = false }: { disabled?: boolean })
       {
         email: form.email.trim(),
         full_name: form.fullName.trim() || undefined,
+        mobile: form.mobile.trim() || undefined,
         role: form.role,
       },
       {
@@ -199,6 +208,28 @@ export function InviteMemberDialog({ disabled = false }: { disabled?: boolean })
                 {fieldErrors.fullName && (
                   <p id="member-name-error" className="mt-1.5 text-xs text-red-600">
                     {fieldErrors.fullName}
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label htmlFor="member-mobile">Phone number</Label>
+                <Input
+                  id="member-mobile"
+                  type="tel"
+                  value={form.mobile}
+                  onChange={(e) => setForm((f) => ({ ...f, mobile: e.target.value }))}
+                  placeholder="+919876543210"
+                  aria-invalid={fieldErrors.mobile ? true : undefined}
+                  aria-describedby={fieldErrors.mobile ? "member-mobile-error" : "member-mobile-hint"}
+                />
+                {fieldErrors.mobile ? (
+                  <p id="member-mobile-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.mobile}
+                  </p>
+                ) : (
+                  <p id="member-mobile-hint" className="mt-1.5 text-xs text-slate-500">
+                    Optional — lets the AI WhatsApp this teammate when a lead asks to be
+                    connected to a human.
                   </p>
                 )}
               </div>

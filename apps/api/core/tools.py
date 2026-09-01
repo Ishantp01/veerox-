@@ -30,12 +30,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
+from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.appointment import Appointment
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.follow_up import FollowUpTask
 from apps.api.db.models.lead import Lead
 from apps.api.db.models.org import Org
+from apps.api.db.models.org_membership import OrgMembership
 from apps.api.db.models.user import User
 from apps.api.redis_client import get_redis_pool
 
@@ -74,6 +76,15 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "The caller's full name. Required unless you already have it from "
+                            "earlier in this conversation (e.g. a prior capture_lead call or "
+                            "returning-user context) — if you don't have it yet, ask for it "
+                            "before booking rather than omitting this."
+                        ),
+                    },
                     "date": {
                         "type": "string",
                         "description": "Requested appointment date (ISO 8601, e.g. 2025-06-01).",
@@ -106,8 +117,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "transfer_to_human",
             "description": (
-                "Transfer the conversation to a human agent when the AI cannot resolve "
-                "the query."
+                "Transfer the conversation to a human agent: call this whenever the AI "
+                "cannot resolve the query, OR the caller explicitly asks to be connected "
+                "to a human, a live agent, or a team member. After calling this, tell the "
+                "caller a team member will follow up with them shortly - do not claim "
+                "you're transferring them live or put them on hold."
             ),
             "parameters": {
                 "type": "object",
@@ -227,10 +241,13 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "initiate_ai_call",
             "description": (
-                "Place an outbound AI voice call to the caller — use this when someone "
-                "chatting over WhatsApp asks to be called instead of continuing over text. "
-                "If they don't give a different number, it calls their own number "
-                "automatically. Not usable while already on a voice call."
+                "Place an outbound AI voice call to the caller — use this ONLY when someone "
+                "chatting over WhatsApp wants to keep talking to the AI itself but over voice "
+                "instead of text. Do NOT use this for 'connect me to an agent/human/team "
+                "member' or any request for a person to reach out — that's transfer_to_human, "
+                "even if their wording says 'call' or 'connect'. If they don't give a "
+                "different number, it calls their own number automatically. Not usable while "
+                "already on a voice call."
             ),
             "parameters": {
                 "type": "object",
@@ -424,6 +441,7 @@ async def book_appointment(
     db: AsyncSession,
     date: str,
     time: str,
+    name: str | None = None,
     timezone: str | None = None,
     notes: str | None = None,
     user_id: UUID | None = None,
@@ -455,6 +473,22 @@ async def book_appointment(
     .scheduled_at`` stays UTC regardless of what zone the caller booked in.
     Malformed date/time/timezone values fail the booking outright rather
     than silently landing on the CRM with no calendar entry.
+
+    ``name`` is required — either passed by the LLM this call, or already on
+    file for this user (e.g. from a prior ``capture_lead`` this conversation,
+    or a returning contact). A booking is only useful to a human follow-up if
+    it's attached to who it's for, not just a phone number, so a caller with
+    no known name fails here with ``missing_name`` instead of landing on the
+    calendar anonymously — the agent is expected to ask for the name and
+    retry rather than silently booking without it.
+
+    The phone number itself is never an LLM argument — it's not something the
+    caller states, it's the channel identity ``user_id`` already resolves to
+    (``users.phone`` is non-nullable, set the moment the User row was
+    created). ``booking_user`` only comes back ``None`` here if ``user_id``
+    is stale/invalid, which shouldn't happen in normal operation — but if it
+    does, failing with ``missing_phone`` beats silently writing a Lead with
+    no way to reach the person.
     """
     if user_id is None:
         return {"status": "error", "reason": "missing_user_id"}
@@ -462,6 +496,15 @@ async def book_appointment(
     org_id = org_id or _default_org_id()
     booking_user_id = user_id
     booking_user = await db.get(User, booking_user_id)
+
+    if booking_user is None or not booking_user.phone:
+        return {"status": "error", "reason": "missing_phone"}
+
+    resolved_name = name or booking_user.name
+    if not resolved_name:
+        return {"status": "error", "reason": "missing_name"}
+    if not booking_user.name:
+        booking_user.name = resolved_name
 
     tz_name = timezone or DEFAULT_BOOKING_TIMEZONE
     try:
@@ -501,8 +544,8 @@ async def book_appointment(
     lead = Lead(
         org_id=org_id,
         user_id=booking_user_id,
-        name=booking_user.name if booking_user else None,
-        phone=booking_user.phone if booking_user else None,
+        name=resolved_name,
+        phone=booking_user.phone,
         intent="booking",
         channel=channel,
         metadata_=metadata,
@@ -526,8 +569,7 @@ async def book_appointment(
     # sent hours after booking usually is. Offsets that have already passed
     # by booking time (e.g. booking 10 minutes out) are skipped rather than
     # firing immediately.
-    booking_name = booking_user.name if booking_user and booking_user.name else None
-    schedule_appointment_reminders(db, org_id, lead.id, booking_name, date, time, scheduled_at)
+    schedule_appointment_reminders(db, org_id, lead.id, resolved_name, date, time, scheduled_at)
 
     await db.commit()
 
@@ -548,9 +590,8 @@ async def book_appointment(
     # never messaged them before and no 24h session is open — the common
     # case for a call-initiated booking. Best-effort: a failed send must not
     # undo the booking that already committed above.
-    target_phone = booking_user.phone if booking_user else None
     await send_appointment_confirmation(
-        db, org_id, appointment.id, target_phone, booking_name, date, time
+        db, org_id, appointment.id, booking_user.phone, resolved_name, date, time
     )
 
     return {
@@ -563,6 +604,43 @@ async def book_appointment(
     }
 
 
+async def _resolve_team_notify_phone(db: AsyncSession, org_id: UUID) -> str | None:
+    """Best-effort org contact to WhatsApp-notify on a human handoff.
+
+    Prefers the org owner's mobile (the ``AccountUser`` behind the
+    ``OrgMembership`` row with no ``invited_by_id`` — the account that
+    provisioned the org). Falls back to any ``admin``-role teammate's
+    mobile when the owner hasn't set one. Returns ``None`` when nobody on
+    the org has a mobile number on file (``AccountUser.mobile`` is
+    optional — only set when SMS'd a login token at provisioning/invite).
+    """
+    owner_result = await db.execute(
+        select(AccountUser.mobile)
+        .join(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
+        .where(
+            OrgMembership.org_id == org_id,
+            OrgMembership.invited_by_id.is_(None),
+            AccountUser.mobile.is_not(None),
+        )
+    )
+    mobile = owner_result.scalar_one_or_none()
+    if mobile:
+        return mobile
+
+    admin_result = await db.execute(
+        select(AccountUser.mobile)
+        .join(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
+        .where(
+            OrgMembership.org_id == org_id,
+            OrgMembership.role == "admin",
+            AccountUser.mobile.is_not(None),
+        )
+        .order_by(OrgMembership.created_at)
+        .limit(1)
+    )
+    return admin_result.scalar_one_or_none()
+
+
 async def transfer_to_human(
     db: AsyncSession,
     reason: str,
@@ -573,7 +651,13 @@ async def transfer_to_human(
     conversation_id: UUID | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    """Escalate to a human: enqueue in Redis and write an escalation ``Lead``.
+    """Escalate to a human: enqueue in Redis, write an escalation ``Lead``,
+    and best-effort WhatsApp-notify the org's team (see
+    ``_resolve_team_notify_phone``) with the lead's name/number via the
+    pre-approved ``appointment_confirmation`` template — reused here since
+    it's the only Meta-approved template on hand; its (name, date, time)
+    slots carry (lead name, a fixed "new lead" label, the lead's phone)
+    instead of actual appointment details.
 
     The ``Lead`` row is only written when the agent layer supplies a
     ``user_id`` (the LLM args don't carry one). When absent, the Redis
@@ -586,9 +670,36 @@ async def transfer_to_human(
     redis = get_redis_pool()
 
     phone: str | None = None
+    name: str | None = None
     if user_id is not None:
         user = await db.get(User, user_id)
-        phone = user.phone if user is not None else None
+        if user is not None:
+            phone = user.phone
+            name = user.name
+
+    notify_phone = await _resolve_team_notify_phone(db, org_id)
+    if notify_phone:
+        org = await db.get(Org, org_id)
+        phone_number_id = org.whatsapp_phone_number_id if org else None
+        try:
+            await wa_client.send_template(
+                _normalize_phone(notify_phone),
+                _APPOINTMENT_TEMPLATE_NAME,
+                body_params=[
+                    name or "there",
+                    "a new lead requesting human follow-up",
+                    phone or "not provided",
+                ],
+                phone_number_id=phone_number_id,
+            )
+        except httpx.HTTPError:
+            logger.warning(
+                "transfer_to_human_notify_send_error",
+                org_id=str(org_id),
+                exc_info=True,
+            )
+    else:
+        logger.warning("transfer_to_human_no_notify_phone", org_id=str(org_id))
 
     payload = {
         "reason": reason,
@@ -630,7 +741,7 @@ async def transfer_to_human(
 
     return {
         "status": "ok",
-        "message": "I'm connecting you to a human agent, please hold.",
+        "message": "A team member has been notified and will follow up with you shortly.",
         "lead_id": lead_id,
     }
 
@@ -932,6 +1043,21 @@ async def send_whatsapp_message(
     return {"status": "ok", "phone": normalized}
 
 
+
+# Deterministic backstop for a recurring misfire: gpt-4o-mini sometimes reads
+# "connect me to a human/agent/team member" as a request to be *called*, and
+# picks this tool instead of transfer_to_human — which would actually ring
+# the lead's own phone instead of just WhatsApp-notifying the org's team.
+# Prompt wording alone (see WHATSAPP_APPEND) wasn't reliable enough, so this
+# checks the current turn's raw text and refuses to place the call outright
+# whenever it names a human rather than asking for the AI back on voice.
+_HUMAN_HANDOFF_KEYWORDS = re.compile(
+    r"\b(human|agent|representative|real\s+person|team\s*member|"
+    r"someone\s+from\s+(?:your|the)\s+team)\b",
+    re.IGNORECASE,
+)
+
+
 async def initiate_ai_call(
     db: AsyncSession,
     phone: str | None = None,
@@ -939,6 +1065,7 @@ async def initiate_ai_call(
     user_id: UUID | None = None,
     org_id: UUID | None = None,
     channel: str | None = None,
+    raw_message: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     """Place an outbound AI voice call to the caller, from a WhatsApp chat.
@@ -949,6 +1076,16 @@ async def initiate_ai_call(
     """
     if channel == "voice":
         return {"status": "error", "reason": "already_on_a_call"}
+
+    if raw_message and _HUMAN_HANDOFF_KEYWORDS.search(raw_message):
+        logger.info(
+            "initiate_ai_call_blocked_human_request",
+            org_id=str(org_id) if org_id else None,
+        )
+        return {
+            "status": "error",
+            "reason": "this_is_a_human_handoff_request_call_transfer_to_human_instead",
+        }
 
     org_id = org_id or _default_org_id()
 

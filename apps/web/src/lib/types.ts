@@ -180,6 +180,10 @@ export interface Appointment {
   assigned_user_id: string | null;
   notes: string | null;
   created_at: string;
+  // Not stored on the appointment itself — resolved server-side from
+  // whichever of lead_id/contact_id is set.
+  name: string | null;
+  phone: string | null;
 }
 
 // One entry sitting in the Redis human_handoff_queue. Shape produced by
