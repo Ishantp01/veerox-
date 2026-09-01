@@ -136,6 +136,11 @@ export function EmergencyEscalationPopup() {
 
   function requeueLater(id: string) {
     snoozedUntil.current.set(id, Date.now() + SNOOZE_MS);
+    // Writing to the ref alone doesn't re-render, so the popup wouldn't
+    // actually disappear until some unrelated state change (the next 3s
+    // poll) happened to sweep through — force one now so "Not now"/X hide
+    // it immediately, then again after the snooze window so it can resurface.
+    setQueue((prev) => [...prev]);
     setTimeout(() => setQueue((prev) => [...prev]), SNOOZE_MS + 50);
   }
 
