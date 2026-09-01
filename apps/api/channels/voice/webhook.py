@@ -32,7 +32,9 @@ from apps.api.channels.voice import adapter as voice_adapter
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.voice import twilio_client as voice_twilio
 from apps.api.config import settings
+from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.org import Org
+from apps.api.db.models.user import User
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.workers import campaign_dialer
 
@@ -132,6 +134,37 @@ async def _resolve_org_by_number(to_number: str | None, is_twilio: bool) -> str 
     return str(org_id) if org_id else None
 
 
+async def _resolve_org_by_last_contact(caller: str) -> str | None:
+    """Fallback for a real inbound call to a number no org owns as a
+    dedicated line (multiple orgs can share the platform's default number
+    when neither has provisioned their own) — the dialed number alone can't
+    say whose call this is. If this caller already has a voice history with
+    a specific org (an earlier outbound campaign/admin call, or a past
+    inbound call that *did* resolve), route back to that org's script
+    instead of the static ``settings.default_org_id`` fallback further down
+    the chain, which would otherwise ignore any real relationship this lead
+    already has with an org.
+
+    Matches on ``User.phone`` using the same normalization the voice adapter
+    stores it with (leading ``+`` kept) — NOT this module's own
+    ``_normalize_phone`` (digit-only), which is for matching ``Org``'s
+    dedicated-number columns instead.
+    """
+    normalized = voice_adapter._normalize_phone(caller)
+    if not normalized:
+        return None
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(User.org_id)
+            .join(Conversation, Conversation.user_id == User.id)
+            .where(User.phone == normalized, Conversation.channel == "voice")
+            .order_by(Conversation.started_at.desc())
+            .limit(1)
+        )
+        org_id = (await db.execute(stmt)).scalar_one_or_none()
+    return str(org_id) if org_id else None
+
+
 async def _call_params(request: Request) -> dict[str, str]:
     """Read Plivo's call params from POST form-body or GET query string.
 
@@ -180,11 +213,15 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
         caller = params.get("From") or params.get("from") or "unknown"
     if not org_id and not campaign_target_id:
         # A real inbound call — nothing in the URL says which org, so look up
-        # the dialed number's owner instead. Falls back to the platform
-        # default further down the chain (realtime_bridge._resolve_org_id)
-        # if the number isn't provisioned to any org yet.
+        # the dialed number's owner instead.
         to_number = params.get("To") or params.get("to")
         org_id = await _resolve_org_by_number(to_number, is_twilio)
+        if org_id is None:
+            # Dialed number isn't any org's dedicated line (orgs sharing the
+            # platform default) — prefer whichever org last actually talked
+            # to this caller over the static platform-default fallback
+            # further down the chain (realtime_bridge._resolve_org_id).
+            org_id = await _resolve_org_by_last_contact(caller)
 
     provider = "twilio" if is_twilio else "plivo"
 
