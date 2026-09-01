@@ -609,10 +609,13 @@ async def _resolve_team_notify_phone(db: AsyncSession, org_id: UUID) -> str | No
 
     Prefers the org owner's mobile (the ``AccountUser`` behind the
     ``OrgMembership`` row with no ``invited_by_id`` — the account that
-    provisioned the org). Falls back to any ``admin``-role teammate's
-    mobile when the owner hasn't set one. Returns ``None`` when nobody on
-    the org has a mobile number on file (``AccountUser.mobile`` is
-    optional — only set when SMS'd a login token at provisioning/invite).
+    provisioned the org). Falls back to the earliest-added teammate with a
+    mobile on file, of ANY role — not just admins, since a plain "member"
+    invite (the dashboard's invite form default role) is just as valid a
+    notify target once someone's bothered to give them a phone number.
+    Returns ``None`` when nobody on the org has a mobile number on file
+    (``AccountUser.mobile`` is optional — only set when SMS'd a login token
+    at provisioning, or filled in on the team invite form).
     """
     owner_result = await db.execute(
         select(AccountUser.mobile)
@@ -627,18 +630,17 @@ async def _resolve_team_notify_phone(db: AsyncSession, org_id: UUID) -> str | No
     if mobile:
         return mobile
 
-    admin_result = await db.execute(
+    teammate_result = await db.execute(
         select(AccountUser.mobile)
         .join(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
         .where(
             OrgMembership.org_id == org_id,
-            OrgMembership.role == "admin",
             AccountUser.mobile.is_not(None),
         )
         .order_by(OrgMembership.created_at)
         .limit(1)
     )
-    return admin_result.scalar_one_or_none()
+    return teammate_result.scalar_one_or_none()
 
 
 async def transfer_to_human(

@@ -552,9 +552,12 @@ async def test_transfer_to_human_notifies_org_owner_via_whatsapp(
     ]
 
 
-async def test_transfer_to_human_falls_back_to_admin_when_owner_has_no_mobile(
+async def test_transfer_to_human_falls_back_to_any_teammate_when_owner_has_no_mobile(
     db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Falls back to a plain "member"-role teammate (the invite form's
+    default role), not just admins — role shouldn't gate who can be the
+    notify target, only whether they have a mobile on file."""
     sent: list[dict[str, object]] = []
 
     async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
@@ -564,14 +567,14 @@ async def test_transfer_to_human_falls_back_to_admin_when_owner_has_no_mobile(
     await _seed_org(db_session)
 
     owner = AccountUser(email="owner@example.com", token_hash="x", mobile=None)
-    admin = AccountUser(email="admin@example.com", token_hash="y", mobile="+918888888888")
-    db_session.add_all([owner, admin])
+    member = AccountUser(email="member@example.com", token_hash="y", mobile="+918888888888")
+    db_session.add_all([owner, member])
     await db_session.flush()
     db_session.add_all(
         [
             OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin", invited_by_id=None),
             OrgMembership(
-                org_id=ORG_ID, account_user_id=admin.id, role="admin", invited_by_id=owner.id
+                org_id=ORG_ID, account_user_id=member.id, role="member", invited_by_id=owner.id
             ),
         ]
     )
