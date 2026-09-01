@@ -39,7 +39,7 @@ from apps.api.config import settings
 from apps.api.core.prompts import (
     OUTBOUND_CALL_PROMPT,
     VOICE_APPEND,
-    campaign_qualification_prompt,
+    campaign_qualification_append,
     current_datetime_block,
 )
 from apps.api.core.usage import get_credit_usage
@@ -78,26 +78,33 @@ async def _resolve_org_id(campaign_target_id: UUID | None, raw_org_id: str | Non
 
 
 async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | None) -> str:
-    """Pick the campaign-scoped qualification script when this call was
-    placed by the campaign dialer, else the calling org's own script
-    override, else the fixed appointment-booking script used by the
-    single-number Dial page."""
-    if campaign_target_id is not None:
-        async with AsyncSessionLocal() as db:
-            target = await db.get(CampaignTarget, campaign_target_id)
-            campaign = await db.get(CallCampaign, target.campaign_id) if target else None
-        if campaign is not None:
-            return (
-                f"{campaign_qualification_prompt(campaign.criteria).strip()}\n\n"
-                f"{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
-            )
-
+    """The calling org's own script override, else the fixed appointment-
+    booking script used by the single-number Dial page — as the base
+    either way. A campaign-driven call layers its qualification criteria on
+    top of that same base as an addendum (see
+    ``campaign_qualification_append``), rather than replacing it — an org's
+    custom script must still be followed on a campaign call, not silently
+    swapped out for a generic one just because the call came from a
+    campaign.
+    """
     base = OUTBOUND_CALL_PROMPT
     if org_id is not None:
         async with AsyncSessionLocal() as db:
             org = await db.get(Org, org_id)
         if org is not None and org.script:
             base = org.script
+
+    if campaign_target_id is not None:
+        async with AsyncSessionLocal() as db:
+            target = await db.get(CampaignTarget, campaign_target_id)
+            campaign = await db.get(CallCampaign, target.campaign_id) if target else None
+        if campaign is not None:
+            return (
+                f"{base.strip()}\n\n"
+                f"{campaign_qualification_append(campaign.criteria).strip()}\n\n"
+                f"{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
+            )
+
     return f"{base.strip()}\n\n{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
 
 
@@ -266,6 +273,14 @@ async def voice_stream(ws: WebSocket) -> None:
     log = logger.bind(caller=caller, call_uuid=call_uuid, provider=provider)
     log.info("voice_stream_connected")
 
+    # Same fallback used for state.org_id below (billing/leads/conversation
+    # attribution) — _system_instructions must resolve the org's script
+    # against this SAME id, not the raw pre-fallback one, or an inbound call
+    # with no matching dedicated number gets correctly attributed to the
+    # default org everywhere else while silently getting the platform
+    # default script instead of that org's own.
+    resolved_org_id = org_id or UUID(settings.default_org_id)
+
     conversation_id: Any = None
     try:
         user_id, conversation_id = await voice_adapter.open_voice_conversation(
@@ -274,7 +289,7 @@ async def voice_stream(ws: WebSocket) -> None:
         state = voice_adapter.CallState(
             user_id=user_id,
             conversation_id=conversation_id,
-            org_id=org_id or UUID(settings.default_org_id),
+            org_id=resolved_org_id,
             provider=provider,
             campaign_target_id=campaign_target_id,
             tts_provider=settings.voice_tts_provider,
@@ -286,7 +301,7 @@ async def voice_stream(ws: WebSocket) -> None:
             # (campaign_dialer.handle_call_ended) not to re-dial this person
             # just because qualify_lead didn't fire before they hung up.
             await voice_adapter.attach_campaign_conversation(campaign_target_id, conversation_id)
-        instructions = await _system_instructions(campaign_target_id, org_id)
+        instructions = await _system_instructions(campaign_target_id, resolved_org_id)
         state.base_instructions = instructions
 
         # No OpenAI-Beta header on the GA endpoint — sending it alongside a GA
