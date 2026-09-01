@@ -233,3 +233,91 @@ async def test_me_and_login_expose_is_superuser(
         "/auth/me", headers={"X-Session-Token": login.json()["token"]}
     )
     assert me_response.json()["is_superuser"] is True
+
+
+async def test_org_directory_excludes_platform_admin_owned_org(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The platform's own operating org (any org a superuser belongs to)
+    must never appear in the directory a superuser browses to manage
+    *other* orgs — see billing.py's list_orgs."""
+    platform_org = Org(id=ORG_ID, name="Platform Org")
+    customer_org = Org(name="Customer Org")
+    db_session.add_all([platform_org, customer_org])
+    await db_session.flush()
+
+    superuser = AccountUser(
+        email="platform-admin5@example.com", token_hash=hash_token("x"), is_superuser=True
+    )
+    db_session.add(superuser)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=platform_org.id, account_user_id=superuser.id, role="admin"))
+    await db_session.commit()
+
+    response = await client.get("/billing/orgs", headers=ADMIN_HEADERS)
+    assert response.status_code == 200
+    names = {o["name"] for o in response.json()}
+    assert "Platform Org" not in names
+    assert "Customer Org" in names
+
+
+async def test_platform_admin_can_delete_other_org(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    org = Org(id=ORG_ID, name="Deletable Org")
+    db_session.add(org)
+    await db_session.flush()
+    account = AccountUser(email="member-of-deletable-org@example.com", token_hash=hash_token("x"))
+    db_session.add(account)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=org.id, account_user_id=account.id, role="admin"))
+    await db_session.commit()
+
+    response = await client.delete(f"/billing/orgs/{org.id}", headers=ADMIN_HEADERS)
+    assert response.status_code == 204
+    assert (await db_session.get(Org, org.id)) is None
+
+
+async def test_delete_org_rejects_regular_session(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    org = Org(id=ORG_ID, name="Regular Org 2")
+    db_session.add(org)
+    await db_session.flush()
+    login_token = generate_login_token()
+    account = AccountUser(email="regular3@example.com", token_hash=hash_token(login_token))
+    db_session.add(account)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=org.id, account_user_id=account.id, role="admin"))
+    await db_session.commit()
+
+    login = await client.post("/auth/login", json={"token": login_token})
+    token = login.json()["token"]
+
+    response = await client.delete(f"/billing/orgs/{org.id}", headers={"X-Session-Token": token})
+    assert response.status_code == 403
+    assert (await db_session.get(Org, org.id)) is not None
+
+
+async def test_delete_org_refuses_platform_admin_owned_org(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    org = Org(id=ORG_ID, name="Platform Org 3")
+    db_session.add(org)
+    await db_session.flush()
+    superuser = AccountUser(
+        email="platform-admin6@example.com", token_hash=hash_token("x"), is_superuser=True
+    )
+    db_session.add(superuser)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=org.id, account_user_id=superuser.id, role="admin"))
+    await db_session.commit()
+
+    response = await client.delete(f"/billing/orgs/{org.id}", headers=ADMIN_HEADERS)
+    assert response.status_code == 403
+    assert (await db_session.get(Org, org.id)) is not None
+
+
+async def test_delete_org_404_for_unknown_org(client: AsyncClient) -> None:
+    response = await client.delete(f"/billing/orgs/{uuid.uuid4()}", headers=ADMIN_HEADERS)
+    assert response.status_code == 404

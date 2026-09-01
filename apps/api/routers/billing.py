@@ -61,6 +61,7 @@ from apps.api.deps import (
     CurrentOrgDep,
     DbDep,
     RedisDep,
+    _org_is_platform_admin_owned,
     effective_limits,
     require_role,
     verify_platform_admin,
@@ -156,8 +157,27 @@ async def list_orgs(db: DbDep, _admin: PlatformAdminDep) -> list[OrgAdminOut]:
     """Platform-wide org directory — every org on the platform, not just the
     caller's own (see PlatformAdminDep). A regular user never gets this view:
     every non-admin route is scoped to the caller's own org.
+
+    Excludes the platform's own operating org (any org a superuser belongs
+    to) — it isn't a customer org to manage/bill/delete from this directory,
+    it's the one running Veerox itself (see `_org_is_platform_admin_owned`).
     """
-    result = await db.execute(select(Org).order_by(Org.created_at))
+    platform_admin_org_ids = set(
+        (
+            await db.execute(
+                select(OrgMembership.org_id)
+                .join(AccountUser, AccountUser.id == OrgMembership.account_user_id)
+                .where(AccountUser.is_superuser.is_(True))
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    stmt = select(Org).order_by(Org.created_at)
+    if platform_admin_org_ids:
+        stmt = stmt.where(Org.id.notin_(platform_admin_org_ids))
+    result = await db.execute(stmt)
     orgs = result.scalars().all()
 
     plan_ids = {org.plan_id for org in orgs if org.plan_id is not None}
@@ -229,6 +249,45 @@ async def export_orgs_xlsx(db: DbDep, _admin: PlatformAdminDep) -> StreamingResp
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="organizations-{stamp}.xlsx"'},
     )
+
+
+@router.delete("/orgs/{org_id}", status_code=204)
+async def delete_org(org_id: UUID, db: DbDep, redis: RedisDep, _admin: PlatformAdminDep) -> None:
+    """Platform-admin hard-delete of any org on the platform.
+
+    Every org_id-scoped table (Users, Leads, Conversations, Appointments,
+    CallCampaigns/CampaignTargets, OrgMemberships, FollowUpTasks, etc.) is
+    ON DELETE CASCADE at the DB level (see migrations/), so deleting this
+    one row cleans up everything under it in a single transaction. Refuses
+    to delete the platform's own operating org (see
+    `_org_is_platform_admin_owned`) — it's already hidden from GET
+    /billing/orgs, but this is the actual enforcement, not just the list
+    filter, in case a stale org_id ever reaches here another way.
+
+    Sessions for every member are invalidated after the commit — org_id
+    lives in the session payload itself (not re-checked against the DB per
+    request, see deps.py's `get_current_org`), so a stale token would
+    otherwise keep resolving to a now-nonexistent org instead of failing
+    cleanly.
+    """
+    if await _org_is_platform_admin_owned(db, org_id):
+        raise HTTPException(status_code=403, detail="This organization cannot be deleted")
+
+    org_row = await db.get(Org, org_id)
+    if org_row is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    member_ids = (
+        (await db.execute(select(OrgMembership.account_user_id).where(OrgMembership.org_id == org_id)))
+        .scalars()
+        .all()
+    )
+
+    await db.delete(org_row)
+    await db.commit()
+
+    for account_user_id in member_ids:
+        await invalidate_user_sessions(redis, account_user_id)
 
 
 async def _load_org_payments(

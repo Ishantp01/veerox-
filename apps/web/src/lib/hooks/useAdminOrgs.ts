@@ -95,3 +95,20 @@ export function useRegenerateAdminToken() {
       }),
   });
 }
+
+/**
+ * DELETE /billing/orgs/{orgId} → void (platform-admin only). Irreversible:
+ * hard-deletes that org and everything under it (see
+ * apps/api/routers/billing.py::delete_org). The platform's own operating
+ * org is never a valid target — it's excluded from useAdminOrgs() already,
+ * and the backend refuses it too.
+ */
+export function useDeleteOrgAdmin() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (orgId) => apiFetch<void>(`/billing/orgs/${orgId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "orgs"] });
+    },
+  });
+}
