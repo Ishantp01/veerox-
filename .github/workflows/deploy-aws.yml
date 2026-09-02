@@ -1,0 +1,41 @@
+name: Deploy to AWS
+
+# Mirrors Render's auto-deploy (see project memory) for the AWS EC2 box —
+# SSHes in and rebuilds the docker-compose stack (api/web/caddy) on every
+# push to main. Requires these repo secrets (Settings -> Secrets and
+# variables -> Actions):
+#   AWS_SSH_HOST    - the EC2 Elastic IP (e.g. 3.139.241.196)
+#   AWS_SSH_USER    - SSH user (ubuntu)
+#   AWS_SSH_KEY     - contents of the .pem private key
+#   AWS_DEPLOY_PATH - absolute path to the repo clone on the box
+#                     (e.g. /home/ubuntu/veerox-)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: SSH deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AWS_SSH_HOST }}
+          username: ${{ secrets.AWS_SSH_USER }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          script_stop: true
+          script: |
+            cd ${{ secrets.AWS_DEPLOY_PATH }}
+            git fetch origin main
+            git reset --hard origin/main
+            docker compose build
+            docker compose up -d
+            docker compose exec -T api alembic upgrade head
+            docker image prune -f
