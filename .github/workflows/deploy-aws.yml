@@ -35,7 +35,12 @@ jobs:
             cd ${{ secrets.AWS_DEPLOY_PATH }}
             git fetch origin main
             git reset --hard origin/main
-            docker compose build
-            docker compose up -d
-            docker compose exec -T api alembic upgrade head
+            # Explicit -f is required: the repo also has a compose.yml
+            # (local-dev-only: api+db+redis, no caddy/web) alongside this
+            # docker-compose.yml (the real prod stack: api+web+caddy) — a
+            # bare `docker compose` picks compose.yml by Compose v2's file
+            # precedence, silently rebuilding the wrong stack.
+            docker compose -f docker-compose.yml build
+            docker compose -f docker-compose.yml up -d
+            docker compose -f docker-compose.yml exec -T api alembic upgrade head
             docker image prune -f
