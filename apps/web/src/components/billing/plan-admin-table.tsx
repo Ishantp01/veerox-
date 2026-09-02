@@ -21,10 +21,6 @@ import {
 } from "@/lib/hooks/useAdminPlans";
 import { NewPlanDialog } from "./new-plan-dialog";
 
-function formatRupees(cents: number): string {
-  return cents === 0 ? "Free" : `₹${(cents / 100).toLocaleString("en-IN")}`;
-}
-
 function LimitCell({ plan, field }: { plan: AdminPlan; field: string }) {
   const updatePlan = useUpdatePlan();
   const { toast } = useToast();
@@ -76,6 +72,44 @@ function BooleanLimitCell({ plan, field }: { plan: AdminPlan; field: string }) {
       className="h-4 w-4 rounded border-slate-300 text-primary-500 dark:border-slate-700"
       aria-label={`${field} for ${plan.name}`}
     />
+  );
+}
+
+function PriceCell({ plan }: { plan: AdminPlan }) {
+  const updatePlan = useUpdatePlan();
+  const { toast } = useToast();
+  const rupees = plan.price_cents / 100;
+
+  function handleBlur(e: React.FocusEvent<HTMLInputElement>) {
+    const nextRupees = Number(e.target.value);
+    if (Number.isNaN(nextRupees) || nextRupees < 0) {
+      e.target.value = String(rupees);
+      return;
+    }
+    const nextCents = Math.round(nextRupees * 100);
+    if (nextCents === plan.price_cents) return;
+    updatePlan.mutate(
+      { code: plan.code, price_cents: nextCents },
+      {
+        onError: (err) =>
+          toast({ title: "Could not update price", description: err.message, variant: "error" }),
+      }
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-sm text-slate-500 dark:text-slate-400">₹</span>
+      <input
+        type="number"
+        min={0}
+        step="0.01"
+        defaultValue={rupees}
+        onBlur={handleBlur}
+        aria-label={`Price for ${plan.name}`}
+        className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm dark:border-slate-700 dark:bg-slate-900"
+      />
+    </div>
   );
 }
 
@@ -174,7 +208,9 @@ export function PlanAdminTable() {
                 <TableCell>
                   <ResourceTypeCell plan={plan} />
                 </TableCell>
-                <TableCell>{formatRupees(plan.price_cents)}</TableCell>
+                <TableCell>
+                  <PriceCell plan={plan} />
+                </TableCell>
                 <TableCell>
                   <LimitCell plan={plan} field="max_seats" />
                 </TableCell>

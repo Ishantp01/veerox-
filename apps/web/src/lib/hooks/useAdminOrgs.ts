@@ -9,6 +9,9 @@ export interface AdminOrg {
   seat_count: number;
   admin_email: string | null;
   created_at: string;
+  plivo_phone_number: string | null;
+  twilio_phone_number: string | null;
+  whatsapp_phone_number_id: string | null;
 }
 
 /** GET /billing/orgs → AdminOrg[] (platform-admin only) */
@@ -96,6 +99,30 @@ export function useRegenerateAdminToken() {
       apiFetch<RegenerateAdminTokenResult>(`/billing/orgs/${orgId}/regenerate-admin-token`, {
         method: "POST",
       }),
+  });
+}
+
+export interface UpdateOrgInput {
+  orgId: string;
+  name?: string;
+  plivo_phone_number?: string | null;
+  twilio_phone_number?: string | null;
+  whatsapp_phone_number_id?: string | null;
+}
+
+/**
+ * PATCH /billing/orgs/{orgId} → AdminOrg (platform-admin only). Edits the
+ * org's own profile fields only — plan/billing_status stay driven by the
+ * checkout/payment flow (see apps/api/schemas/billing.py's OrgUpdateIn).
+ */
+export function useUpdateOrgAdmin() {
+  const queryClient = useQueryClient();
+  return useMutation<AdminOrg, Error, UpdateOrgInput>({
+    mutationFn: ({ orgId, ...body }) =>
+      apiFetch<AdminOrg>(`/billing/orgs/${orgId}`, { method: "PATCH", body: JSON.stringify(body) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "orgs"] });
+    },
   });
 }
 

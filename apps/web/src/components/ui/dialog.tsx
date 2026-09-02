@@ -163,7 +163,12 @@ export function DialogContent({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cn(
-          "relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col animate-fade-up rounded-2xl border border-slate-200 bg-white shadow-card-lg focus-visible:outline-none dark:border-slate-800 dark:bg-slate-900",
+          // text-left resets alignment for the whole panel — DialogContent
+          // isn't portaled (renders inline wherever it's triggered from), so
+          // without this it silently inherits text-align from whatever
+          // ancestor happens to set one (e.g. a table's right-aligned
+          // Actions cell), even though nothing in the dialog asked for that.
+          "relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col animate-fade-up rounded-2xl border border-slate-200 bg-white text-left shadow-card-lg focus-visible:outline-none dark:border-slate-800 dark:bg-slate-900",
           className,
         )}
         {...props}

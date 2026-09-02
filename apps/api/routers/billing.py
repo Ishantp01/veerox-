@@ -43,6 +43,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from razorpay.errors import SignatureVerificationError
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
@@ -74,6 +75,7 @@ from apps.api.schemas.billing import (
     CheckoutSessionOut,
     OrgAdminOut,
     OrgPaymentAdminOut,
+    OrgUpdateIn,
     PlanAdminOut,
     PlanCreateIn,
     PlatformSettingsOut,
@@ -212,9 +214,83 @@ async def list_orgs(db: DbDep, _admin: PlatformAdminDep) -> list[OrgAdminOut]:
                 seat_count=seat_count,
                 admin_email=admin_email,
                 created_at=org.created_at.isoformat(),
+                plivo_phone_number=org.plivo_phone_number,
+                twilio_phone_number=org.twilio_phone_number,
+                whatsapp_phone_number_id=org.whatsapp_phone_number_id,
             )
         )
     return out
+
+
+@router.patch("/orgs/{org_id}", response_model=OrgAdminOut)
+async def update_org(
+    org_id: UUID, payload: OrgUpdateIn, db: DbDep, _admin: PlatformAdminDep
+) -> OrgAdminOut:
+    """Platform-admin edit of an org's own profile — name and its dedicated
+    calling/WhatsApp numbers (see OrgUpdateIn for why plan/billing_status
+    aren't editable here). Backs the "Edit" action on the Organizations page.
+    """
+    if await _org_is_platform_admin_owned(db, org_id):
+        raise HTTPException(status_code=403, detail="This organization cannot be edited")
+
+    org_row = await db.get(Org, org_id)
+    if org_row is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    fields = payload.model_dump(exclude_unset=True)
+    if "name" in fields:
+        name = (fields["name"] or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Organization name cannot be empty")
+        fields["name"] = name
+    for key in ("plivo_phone_number", "twilio_phone_number", "whatsapp_phone_number_id"):
+        if key in fields and fields[key] is not None:
+            fields[key] = fields[key].strip() or None
+
+    for field, value in fields.items():
+        setattr(org_row, field, value)
+
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="That number is already assigned to another organization",
+        ) from exc
+    await db.refresh(org_row)
+
+    seat_count_result = await db.execute(
+        select(func.count()).select_from(OrgMembership).where(OrgMembership.org_id == org_row.id)
+    )
+    seat_count = seat_count_result.scalar_one()
+
+    admin_result = await db.execute(
+        select(AccountUser.email)
+        .join(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
+        .where(OrgMembership.org_id == org_row.id, OrgMembership.role == "admin")
+        .order_by(OrgMembership.created_at)
+        .limit(1)
+    )
+    admin_email = admin_result.scalar_one_or_none()
+
+    plan_code: str | None = None
+    if org_row.plan_id is not None:
+        plan_result = await db.execute(select(Plan.code).where(Plan.id == org_row.plan_id))
+        plan_code = plan_result.scalar_one_or_none()
+
+    return OrgAdminOut(
+        id=str(org_row.id),
+        name=org_row.name,
+        plan_code=plan_code,
+        billing_status=org_row.billing_status,
+        seat_count=seat_count,
+        admin_email=admin_email,
+        created_at=org_row.created_at.isoformat(),
+        plivo_phone_number=org_row.plivo_phone_number,
+        twilio_phone_number=org_row.twilio_phone_number,
+        whatsapp_phone_number_id=org_row.whatsapp_phone_number_id,
+    )
 
 
 @router.get("/orgs.xlsx")

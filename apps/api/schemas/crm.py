@@ -44,3 +44,15 @@ class ContactUpdateIn(BaseModel):
     company: str | None = None
     tags: list[str] | None = None
     owner_user_id: UUID | None = None
+
+
+class ContactImportError(BaseModel):
+    row: int
+    reason: str
+
+
+class ContactImportResult(BaseModel):
+    imported: int
+    updated: int
+    skipped: int
+    errors: list[ContactImportError]

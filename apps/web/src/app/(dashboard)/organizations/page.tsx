@@ -20,6 +20,7 @@ import { useAuth } from "@/lib/auth-context";
 import { useAdminOrgs } from "@/lib/hooks/useAdminOrgs";
 import { downloadCsv } from "@/lib/download-csv";
 import { NewOrgDialog } from "@/components/organizations/new-org-dialog";
+import { EditOrgDialog } from "@/components/organizations/edit-org-dialog";
 import { RegenerateTokenDialog } from "@/components/organizations/regenerate-token-dialog";
 import { PaymentHistoryDialog } from "@/components/organizations/payment-history-dialog";
 import { DeleteOrgDialog } from "@/components/organizations/delete-org-dialog";
@@ -138,6 +139,7 @@ export default function OrganizationsPage() {
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
                       <PaymentHistoryDialog orgId={org.id} orgName={org.name} />
+                      <EditOrgDialog org={org} />
                       <RegenerateTokenDialog orgId={org.id} orgName={org.name} />
                       <DeleteOrgDialog orgId={org.id} orgName={org.name} />
                     </div>

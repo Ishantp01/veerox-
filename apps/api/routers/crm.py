@@ -1,16 +1,39 @@
 from __future__ import annotations
 
+import csv
+import io
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import openpyxl
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from apps.api.core.tools import _normalize_phone
 from apps.api.db.models import Contact
 from apps.api.deps import DbDep, RequestOrgDep, verify_admin_or_session
-from apps.api.schemas.crm import ContactCreate, ContactOut, ContactUpdateIn, ContactWithLeadsOut
+from apps.api.routers.admin import (
+    _E164_PATTERN,
+    _csv_streaming_response,
+    _iter_csv_rows,
+    _iter_xlsx_rows,
+)
+from apps.api.schemas.crm import (
+    ContactCreate,
+    ContactImportError,
+    ContactImportResult,
+    ContactOut,
+    ContactUpdateIn,
+    ContactWithLeadsOut,
+)
 
 router = APIRouter(prefix="/crm", tags=["crm"], dependencies=[Depends(verify_admin_or_session)])
+
+_CONTACT_SAMPLE_ROWS = [
+    {"name": "Asha Verma", "phone": "+919876543210", "email": "asha@example.com", "company": "Acme Inc."},
+    {"name": "Rohit Singh", "phone": "+919812345678", "email": "", "company": ""},
+]
 
 
 @router.get("/contacts", response_model=list[ContactOut])
@@ -45,6 +68,115 @@ async def create_contact(payload: ContactCreate, db: DbDep, org_id: RequestOrgDe
     await db.commit()
     await db.refresh(contact)
     return contact
+
+
+@router.get("/contacts/sample.csv")
+async def sample_contacts_csv() -> StreamingResponse:
+    """Blank-data template for POST /contacts/import. Registered ahead of
+    GET /contacts/{contact_id} so its literal path isn't swallowed by that
+    route's UUID path param."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["name", "phone", "email", "company"])
+    for row in _CONTACT_SAMPLE_ROWS:
+        writer.writerow([row["name"], row["phone"], row["email"], row["company"]])
+    buf.seek(0)
+    return _csv_streaming_response(buf.getvalue(), "contacts-sample.csv")
+
+
+@router.get("/contacts/sample.xlsx")
+async def sample_contacts_xlsx() -> StreamingResponse:
+    """Same template as GET /contacts/sample.csv, as an .xlsx workbook."""
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Contacts"
+    sheet.append(["name", "phone", "email", "company"])
+    for row in _CONTACT_SAMPLE_ROWS:
+        sheet.append([row["name"], row["phone"], row["email"], row["company"]])
+    for cell in sheet["B"][1:]:
+        cell.number_format = "@"
+
+    buf = io.BytesIO()
+    workbook.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="contacts-sample.xlsx"'},
+    )
+
+
+@router.post("/contacts/import", response_model=ContactImportResult)
+async def import_contacts_file(
+    db: DbDep, org_id: RequestOrgDep, file: UploadFile = File(...)
+) -> ContactImportResult:
+    """Bulk-import contacts from an uploaded CSV or Excel (.xlsx) file. Only
+    'phone' is required (name/email/company are optional columns). A row
+    whose phone matches a contact already in this org updates that contact's
+    other fields instead of erroring on the (org_id, phone) unique
+    constraint — reimporting the same list is a safe way to refresh contacts.
+    Registered ahead of GET /contacts/{contact_id} so its literal path isn't
+    swallowed by that route's UUID path param.
+    """
+    filename = (file.filename or "").lower()
+    raw = await file.read()
+    if filename.endswith(".csv"):
+        rows = list(_iter_csv_rows(raw))
+    elif filename.endswith(".xlsx"):
+        rows = list(_iter_xlsx_rows(raw))
+    else:
+        raise HTTPException(status_code=400, detail="Only .csv or .xlsx files are supported")
+
+    existing_result = await db.execute(select(Contact).where(Contact.org_id == org_id))
+    existing_by_phone = {c.phone: c for c in existing_result.scalars().all()}
+
+    imported = 0
+    updated = 0
+    errors: list[ContactImportError] = []
+    for row_num, row in rows:
+        phone = row.get("phone", "")
+        if not phone:
+            errors.append(ContactImportError(row=row_num, reason="missing phone"))
+            continue
+        normalized = _normalize_phone(phone)
+        if not _E164_PATTERN.match(normalized):
+            errors.append(
+                ContactImportError(
+                    row=row_num,
+                    reason=(
+                        f"phone '{phone}' must include a country code in E.164 format, "
+                        "e.g. +919876543210"
+                    ),
+                )
+            )
+            continue
+
+        name = row.get("name") or None
+        email = row.get("email") or None
+        company = row.get("company") or None
+        tags = [t.strip() for t in row.get("tags", "").split(",") if t.strip()] or None
+
+        existing = existing_by_phone.get(normalized)
+        if existing is not None:
+            if name:
+                existing.name = name
+            if email:
+                existing.email = email
+            if company:
+                existing.company = company
+            if tags:
+                existing.tags = tags
+            updated += 1
+        else:
+            contact = Contact(
+                org_id=org_id, name=name, phone=normalized, email=email, company=company, tags=tags
+            )
+            db.add(contact)
+            existing_by_phone[normalized] = contact
+            imported += 1
+
+    await db.commit()
+    return ContactImportResult(imported=imported, updated=updated, skipped=len(errors), errors=errors)
 
 
 @router.get("/contacts/{contact_id}", response_model=ContactWithLeadsOut)

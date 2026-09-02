@@ -67,6 +67,21 @@ class OrgAdminOut(BaseModel):
     seat_count: int
     admin_email: str | None
     created_at: str
+    plivo_phone_number: str | None = None
+    twilio_phone_number: str | None = None
+    whatsapp_phone_number_id: str | None = None
+
+
+class OrgUpdateIn(BaseModel):
+    """All fields optional — only what's sent gets changed (PATCH semantics).
+    Deliberately excludes plan/billing_status: those are driven by the
+    checkout/payment flow (see POST /billing/checkout-session), not a direct
+    admin edit, to keep them consistent with BillingPayment records."""
+
+    name: str | None = None
+    plivo_phone_number: str | None = None
+    twilio_phone_number: str | None = None
+    whatsapp_phone_number_id: str | None = None
 
 
 class PlanCreateIn(BaseModel):
