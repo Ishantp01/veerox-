@@ -57,6 +57,84 @@ router = APIRouter(tags=["voice"])
 _OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 
 
+async def _connect_to_openai() -> Any:
+    """Open the raw OpenAI Realtime WebSocket — no instructions sent yet.
+
+    websockets.connect(...) returns its own awaitable ``Connect`` object,
+    not a plain coroutine — asyncio.create_task() requires an actual
+    coroutine, hence this wrapper rather than passing it directly.
+    """
+    return await websockets.connect(
+        f"{_OPENAI_REALTIME_URL}?model={settings.openai_realtime_model}",
+        additional_headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+        max_size=None,
+    )
+
+
+# Pre-connected OpenAI sessions started at answer()-time (webhook.py), keyed
+# by call_uuid, claimed here once the media stream actually connects a
+# moment later — see start_precall_connect/claim_precall_connect below.
+_PRECALL_TIMEOUT_SECS = 20
+_pending_precalls: dict[str, asyncio.Task[Any]] = {}
+
+
+def start_precall_connect(
+    call_uuid: str, campaign_target_id: UUID | None, org_id: UUID | None
+) -> None:
+    """Kick off the OpenAI connect + session.update while Plivo/Twilio is
+    still setting up the call (webhook.py's ``answer``), well before the
+    media stream WebSocket connects and lands in ``voice_stream`` below.
+
+    Best-effort and purely additive: if this is never claimed (the call
+    never reaches the media stream — declined, dropped, provider error) the
+    pending connection self-expires and closes after
+    ``_PRECALL_TIMEOUT_SECS`` so it doesn't leak an open, billed OpenAI
+    session. ``voice_stream`` falls back to connecting fresh, exactly as
+    before this existed, whenever nothing was claimed.
+    """
+    if not call_uuid:
+        return
+
+    async def _prepare() -> tuple[Any, str]:
+        resolved_org_id = org_id or UUID(settings.default_org_id)
+        instructions = await _system_instructions(campaign_target_id, resolved_org_id)
+        oai = await _connect_to_openai()
+        await oai.send(json.dumps(_session_update_event(instructions)))
+        return oai, instructions
+
+    task: asyncio.Task[Any] = asyncio.create_task(_prepare())
+    _pending_precalls[call_uuid] = task
+
+    async def _expire() -> None:
+        await asyncio.sleep(_PRECALL_TIMEOUT_SECS)
+        if _pending_precalls.get(call_uuid) is not task:
+            return  # already claimed (and popped) or superseded
+        _pending_precalls.pop(call_uuid, None)
+        if task.done() and not task.cancelled() and task.exception() is None:
+            oai, _instructions = task.result()
+            await oai.close()
+        else:
+            task.cancel()
+
+    asyncio.create_task(_expire())
+
+
+async def claim_precall_connect(call_uuid: str) -> tuple[Any, str] | None:
+    """Pop and await the pre-started OpenAI connection for this call, if
+    ``start_precall_connect`` was called for it. Returns ``None`` if there
+    isn't one (not a campaign/admin-placed call, already expired, or a
+    connect failure) — caller falls back to connecting fresh."""
+    if not call_uuid:
+        return None
+    task = _pending_precalls.pop(call_uuid, None)
+    if task is None:
+        return None
+    try:
+        return await task
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def _resolve_org_id(campaign_target_id: UUID | None, raw_org_id: str | None) -> UUID | None:
     """The org this call's usage/transcripts should be attributed to.
 
@@ -232,30 +310,26 @@ async def voice_stream(ws: WebSocket) -> None:
     """Bridge a single Plivo/Twilio call to an OpenAI Realtime session."""
     await ws.accept()
 
-    # Kick off the OpenAI connection the instant the call arrives, instead
-    # of after the Plivo/Twilio handshake + DB/org-resolution work below.
-    # Connecting doesn't need any of that (instructions are sent separately
-    # via session.update once connected) — this lets its ~1s+ handshake
-    # overlap with that other work instead of adding on top of it. Awaited
-    # once, right before it's actually needed, further down.
-    #
-    # websockets.connect(...) returns its own awaitable ``Connect`` object,
-    # not a plain coroutine — asyncio.create_task() requires an actual
-    # coroutine, hence the wrapper below rather than passing it directly.
-    async def _connect_to_openai() -> Any:
-        return await websockets.connect(
-            f"{_OPENAI_REALTIME_URL}?model={settings.openai_realtime_model}",
-            additional_headers={"Authorization": f"Bearer {settings.openai_api_key}"},
-            max_size=None,
-        )
-
-    oai_connect_task = asyncio.create_task(_connect_to_openai())
-
     caller = ws.query_params.get("from", "unknown")
     call_uuid = ws.query_params.get("call_uuid", "")
     provider = ws.query_params.get("provider", "plivo")
     raw_campaign_target_id = ws.query_params.get("campaign_target_id")
     raw_org_id = ws.query_params.get("org_id")
+
+    # Best case: webhook.py's answer() already started (and by now likely
+    # finished) connecting to OpenAI for this exact call_uuid, well before
+    # this media stream even opened — claim it instead of connecting fresh.
+    # Only works here for Plivo, which preserves the query string (Twilio
+    # doesn't; its call_uuid isn't known until the handshake loop below, so
+    # it gets a second claim attempt there instead).
+    precall = await claim_precall_connect(call_uuid) if call_uuid else None
+
+    # Fallback: nothing pre-connected (not a campaign/admin call, Twilio,
+    # already expired, or a connect failure) — start fresh now, still
+    # overlapping with the Plivo/Twilio handshake + DB/org-resolution work
+    # below rather than waiting for it, same as before this pre-connect
+    # existed. Awaited once, right before it's actually needed, further down.
+    oai_connect_task = None if precall else asyncio.create_task(_connect_to_openai())
 
     # Twilio drops the Stream url's query string on connect (Plivo doesn't),
     # so the above are all still defaults for a Twilio call at this point —
@@ -296,6 +370,16 @@ async def voice_stream(ws: WebSocket) -> None:
     except (asyncio.TimeoutError, WebSocketDisconnect):
         pass
 
+    if precall is None and call_uuid:
+        # Second attempt, now that Twilio's real call_uuid (delivered via
+        # customParameters above, unavailable at the top for Twilio since
+        # it drops the query string) is known. A no-op for Plivo, which
+        # already succeeded above if there was anything to claim.
+        precall = await claim_precall_connect(call_uuid)
+        if precall is not None and oai_connect_task is not None:
+            oai_connect_task.cancel()
+            oai_connect_task = None
+
     campaign_target_id = UUID(raw_campaign_target_id) if raw_campaign_target_id else None
     org_id = await _resolve_org_id(campaign_target_id, raw_org_id)
     log = logger.bind(caller=caller, call_uuid=call_uuid, provider=provider)
@@ -329,14 +413,23 @@ async def voice_stream(ws: WebSocket) -> None:
             # (campaign_dialer.handle_call_ended) not to re-dial this person
             # just because qualify_lead didn't fire before they hung up.
             await voice_adapter.attach_campaign_conversation(campaign_target_id, conversation_id)
-        instructions = await _system_instructions(campaign_target_id, resolved_org_id)
+
+        if precall is not None:
+            # Already connected AND session.update already sent, back at
+            # answer()-time — the biggest possible head start, overlapping
+            # the OpenAI setup with however long Plivo/Twilio took to reach
+            # us after answering, not just the DB/org-resolution work above.
+            oai, instructions = precall
+        else:
+            instructions = await _system_instructions(campaign_target_id, resolved_org_id)
+            # Usually already connected by now regardless — the handshake
+            # ran concurrently with the work above instead of after it.
+            oai = await oai_connect_task
         state.base_instructions = instructions
 
-        # Usually already connected by now — the handshake ran concurrently
-        # with the work above instead of starting after it.
-        oai = await oai_connect_task
         try:
-            await oai.send(json.dumps(_session_update_event(instructions)))
+            if precall is None:
+                await oai.send(json.dumps(_session_update_event(instructions)))
             # Make the agent greet first instead of waiting for the caller.
             await oai.send(
                 json.dumps(
@@ -436,17 +529,21 @@ async def voice_stream(ws: WebSocket) -> None:
         log.warning("voice_stream_error", error=str(exc))
         await record_error()
     finally:
-        if oai_connect_task.done():
-            # Not consumed via `oai` above (an exception hit before that
-            # line) — still close it so a fully-connected session isn't
-            # left dangling. Safe/idempotent if it was already closed.
-            if not oai_connect_task.cancelled() and oai_connect_task.exception() is None:
-                try:
-                    await oai_connect_task.result().close()
-                except Exception:  # noqa: BLE001
-                    pass
-        else:
-            oai_connect_task.cancel()
+        # None when a precall connection was claimed (nothing of its own to
+        # clean up here) or already cancelled after a second, successful
+        # claim attempt above.
+        if oai_connect_task is not None:
+            if oai_connect_task.done():
+                # Not consumed via `oai` above (an exception hit before that
+                # line) — still close it so a fully-connected session isn't
+                # left dangling. Safe/idempotent if it was already closed.
+                if not oai_connect_task.cancelled() and oai_connect_task.exception() is None:
+                    try:
+                        await oai_connect_task.result().close()
+                    except Exception:  # noqa: BLE001
+                        pass
+            else:
+                oai_connect_task.cancel()
         if conversation_id is not None:
             await voice_adapter.close_voice_conversation(
                 conversation_id, campaign_target_id=campaign_target_id

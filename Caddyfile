@@ -1,0 +1,12 @@
+# No domain? Replace YOUR-ELASTIC-IP-WITH-DASHES below with your EC2 Elastic
+# IP, dots swapped for dashes (e.g. 54.12.34.56 -> 54-12-34-56), and this
+# resolves for free via sslip.io — no registrar/DNS purchase needed.
+# Once you do own a real domain, just swap these two hostnames for it.
+
+api.YOUR-ELASTIC-IP-WITH-DASHES.sslip.io {
+    reverse_proxy api:8002
+}
+
+app.YOUR-ELASTIC-IP-WITH-DASHES.sslip.io {
+    reverse_proxy web:3001
+}

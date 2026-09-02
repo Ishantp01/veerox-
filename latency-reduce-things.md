@@ -272,30 +272,113 @@ Beyond this config change, the remaining delay is OpenAI's own model
 response/synthesis time — not something the app controls or can measure
 without a live call.
 
-### Status — not deployed
+### 3a, verified against the actual deployed Render app
+
+3a and 3b were committed and pushed (`0f41d7b`, "update latency reducing
+code"), confirmed matching `origin/main`, Render auto-deployed. Rather than
+trust the local timing numbers above (which include this machine's own
+network noise), tested the **real deployed endpoint** directly: opened a
+WebSocket to `wss://veerox-o2en.onrender.com/voice/stream`, simulated a
+minimal Plivo handshake, and timed connect → first audio the server sent
+back — 3 runs, consistent:
+
+| Component | Time |
+| --- | --- |
+| This machine connecting to Render (not relevant to a real call — Plivo/Twilio's own infra connects very differently) | ~1.17-1.29s |
+| **Render's own server-side work: DB/org lookup → OpenAI connect → session.update → first audio** | **~1.43-1.47s, consistently** |
+
+That second number is the real one — down from the original ~2.2-2.3s
+isolated measurement, and notably more *stable* than this local machine's
+own path to OpenAI turned out to be (see the network-variability caveat
+above). Real callers should be experiencing roughly **~1.5s** now, not the
+original baseline.
+
+### 3c. Answer()-time pre-connect pool (written, tested, NOT deployed)
+
+Went further: instead of only overlapping the OpenAI connect with
+`voice_stream`'s own setup work (3a), start it even earlier — at
+[`answer()`](apps/api/channels/voice/webhook.py#L181), which fires
+*before* the media stream WebSocket even connects. That extends the
+overlap window to also include however long Plivo/Twilio takes to process
+the TwiML/XML response and open the media stream.
+
+**The mechanism**, all in `realtime_bridge.py`:
+- `start_precall_connect(call_uuid, campaign_target_id, org_id)` — called
+  from `answer()`. Fires off a background task that resolves the org's
+  instructions, connects to OpenAI, and sends `session.update`, keyed by
+  `call_uuid` in a module-level dict (`_pending_precalls`).
+- `claim_precall_connect(call_uuid)` — called from `voice_stream`, twice:
+  once immediately (works for Plivo, which preserves the query string —
+  `call_uuid` is known right away) and once more after the handshake loop
+  (covers Twilio, whose real `call_uuid` only arrives via
+  `customParameters`, delivered late — see the existing comment on why
+  Twilio drops the query string). Pops and awaits the pending task; `None`
+  if nothing was started, already expired, or already claimed — falls back
+  to connecting fresh exactly as before this existed.
+- **Self-expiring**: an unclaimed entry (call never reaches the media
+  stream — declined, dropped, provider error) closes itself after 20s so
+  it doesn't leak an open, billed OpenAI session.
+- `_connect_to_openai()` was hoisted out of `voice_stream` to module level
+  so both the precall path and the original fallback path share it.
+
+**A real bug caught mid-testing, worth remembering**: the first version of
+the comparison test made precall look *slower* than no-precall-at-all. Root
+cause turned out to be the test, not the code — it included the test
+script's own HTTP round-trip to `/voice/answer` (~1.3-1.7s, mostly a live
+Plivo API call for call recording that a real caller never waits on) inside
+the "before" timer, while the cold-path timer started later, at the
+WebSocket connect. Once corrected to measure only the WebSocket phase (the
+part a real caller actually experiences), the real picture emerged:
+
+| Gap before media stream connects | vs. cold |
+| --- | --- |
+| 0.0s (claimed before it finished connecting) | worse — briefly, waiting on a connection barely started beats nothing |
+| 0.5s | roughly break-even |
+| 1.0s | **0.2-0.75s faster**, consistently, across repeated runs |
+
+**Honest limits of this result**: verified the mechanism is correct (direct
+isolated test, then full HTTP+WebSocket integration test against a local
+server with real DB/OpenAI) — not fabricated. But the *simulated* gap
+(`asyncio.sleep`) stands in for however long Plivo/Twilio's real
+infrastructure actually takes between answering and opening the media
+stream, which was never measured against a real call. If that real gap is
+close to 0 in practice, this could occasionally be a wash or slightly
+negative; if it's closer to 1s+ (plausible — parsing markup and opening a
+*separate* WebSocket connection isn't instant), the benefit shown above
+should hold. Recommend confirming against one real test call before fully
+trusting this in production.
+
+### Status — not deployed (3c only; 3a/3b are live)
 
 ```
 git status --short
  M apps/api/channels/voice/realtime_bridge.py
+ M apps/api/channels/voice/webhook.py
 ```
 
-Uncommitted. All changes in this section live in that one file. All 275
-backend tests pass locally (no dedicated new test for the voice-stream
-changes — they need a live WebSocket to exercise directly; covered instead
-by direct timing tests against the real OpenAI endpoint, described above,
-which are not part of the repo).
+All 275 backend tests pass locally (a pre-existing, unrelated flaky test —
+`test_handle_turn_parallel_dispatch_distinct_tools`, from part 2 — failed
+once under full-suite load and passed both in isolation and on a full
+re-run immediately after; not caused by anything in this section). No
+dedicated pytest coverage for the voice-stream/webhook changes themselves —
+they need a live WebSocket to exercise directly; covered instead by the
+direct timing tests described above (against the real OpenAI endpoint, and
+against a local server end-to-end), none of which are part of the repo.
 
 ---
 
 ## Net effect so far
 
-- Real, confirmed, live: ~380-390ms/turn saved from the Redis fix (WhatsApp,
-  part 1), plus a narrower win on WhatsApp turns where the model batches
-  independent tool calls together (part 2).
-- Written, tested, waiting on a go-ahead to ship: voice call-start delay
-  reduced (amount varies with OpenAI's own connect-time variability — real
-  but not to any specific target), and a direct 200ms cut on every mid-call
-  voice turn (part 3).
+- **Live in production**: ~380-390ms/turn saved from the Redis fix
+  (WhatsApp, part 1); a narrower win on WhatsApp turns where the model
+  batches independent tool calls together (part 2); voice call-start delay
+  down to a measured, consistent ~1.5s server-side on the real deployed app
+  (down from ~2.2-2.3s), plus a direct 200ms cut on every mid-call voice
+  turn (parts 3a/3b).
+- **Written, tested, waiting on a go-ahead to ship**: the answer()-time
+  pre-connect pool (part 3c) — a further, real but more modest and
+  gap-dependent cut to voice call-start delay, not yet verified against a
+  real Plivo/Twilio call.
 
 ## How to re-check latency
 

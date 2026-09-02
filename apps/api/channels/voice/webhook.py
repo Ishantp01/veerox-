@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 from urllib.parse import parse_qs, urlencode
+from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Request
@@ -31,6 +32,7 @@ from sqlalchemy import select
 from apps.api.channels.voice import adapter as voice_adapter
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.voice import twilio_client as voice_twilio
+from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.config import settings
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.org import Org
@@ -224,6 +226,18 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
             org_id = await _resolve_org_by_last_contact(caller)
 
     provider = "twilio" if is_twilio else "plivo"
+
+    # Start connecting to OpenAI right now, well before Plivo/Twilio even
+    # opens the media stream — see realtime_bridge.py's
+    # start_precall_connect/claim_precall_connect for the handoff. Purely
+    # additive: harmless if never claimed (self-expires), and voice_stream
+    # falls back to connecting fresh exactly as before if this wasn't
+    # called or didn't finish in time.
+    start_precall_connect(
+        call_uuid,
+        UUID(campaign_target_id) if campaign_target_id else None,
+        UUID(org_id) if org_id else None,
+    )
 
     if is_twilio:
         # No query string here — Twilio drops it (see _ws_stream_base_url).
