@@ -317,6 +317,87 @@ async def test_handle_turn_forwards_channel_into_tool_dispatch(
     assert lead.channel == "whatsapp"
 
 
+async def test_handle_turn_parallel_dispatch_distinct_tools(
+    db_session: AsyncSession,
+    test_engine: Any,
+    fake_redis: _FakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two distinct tools in one batch take the isolated-session fan-out
+    branch (agent.py's asyncio.gather path) instead of the sequential one —
+    both must still land correctly and in the right order.
+
+    Each isolated dispatch opens its own AsyncSessionLocal(), so this test
+    repoints that at a session factory bound to the *same* in-memory test
+    engine backing ``db_session`` — otherwise the isolated sessions would
+    try to reach the real production database instead of the test DB.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from apps.api.core import tools as tools_module
+
+    monkeypatch.setattr(tools_module, "get_redis_pool", lambda: fake_redis)
+    monkeypatch.setattr(
+        agent_module,
+        "AsyncSessionLocal",
+        async_sessionmaker(bind=test_engine, expire_on_commit=False),
+    )
+    await _seed_org_and_user(db_session)
+
+    captured_calls = _patch_llm_sequence(
+        monkeypatch,
+        [
+            ChatResult(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        id="call_lookup",
+                        name="lookup_customer",
+                        arguments_json='{"phone":"+910000000001"}',
+                    ),
+                    ToolCall(
+                        id="call_capture",
+                        name="capture_lead",
+                        arguments_json='{"phone":"+910000000002","intent":"quote"}',
+                    ),
+                ],
+                tokens_in=20,
+                tokens_out=5,
+                finish_reason="tool_calls",
+            ),
+            ChatResult(content="Got both done for you.", tokens_in=10, tokens_out=6),
+        ],
+    )
+
+    reply = await agent_core.handle_turn(
+        db=db_session,
+        user_id=USER_ID,
+        channel="whatsapp",
+        input_text="look me up and log a quote lead",
+    )
+
+    assert reply == "Got both done for you."
+
+    # capture_lead ran on its own isolated session and committed against the
+    # *same* test database db_session reads from — proves the fan-out branch
+    # actually engaged and wrote to the right place, not a stray connection.
+    lead = (
+        await db_session.execute(select(Lead).where(Lead.intent == "quote"))
+    ).scalars().one()
+    assert lead.phone == "+910000000002"
+
+    # Tool results are fed back to the model in the same order the calls
+    # were made, matched to the right tool_call_id.
+    second_call_msgs = captured_calls[1]
+    tool_msgs = [m for m in second_call_msgs if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in tool_msgs] == ["call_lookup", "call_capture"]
+    lookup_result = json.loads(tool_msgs[0]["content"])
+    capture_result = json.loads(tool_msgs[1]["content"])
+    assert lookup_result["found"] is True
+    assert lookup_result["name"] == "Test"
+    assert capture_result["status"] == "ok"
+
+
 async def test_handle_turn_unknown_tool_returns_error_to_model(
     db_session: AsyncSession,
     fake_redis: _FakeRedis,

@@ -9,6 +9,7 @@ reach past it. That's the "one brain, two mouths" invariant — see
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
@@ -33,6 +34,7 @@ from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.org import Org
+from apps.api.db.session import AsyncSessionLocal
 from apps.api.redis_client import get_redis_pool
 
 logger = structlog.get_logger(__name__)
@@ -214,6 +216,34 @@ async def _dispatch_tool(
     return result
 
 
+async def _dispatch_tool_isolated(
+    tool_call: ToolCall,
+    user_id: UUID,
+    org_id: UUID,
+    channel: Channel,
+    campaign_target_id: UUID | None,
+    conversation_id: UUID | None,
+    raw_message: str | None,
+) -> dict[str, Any]:
+    """Run one tool call on its own DB session — for fan-out alongside
+    sibling tool calls in the same batch (see the parallel branch in
+    ``handle_turn``). Each handler already commits its own work, and only
+    ever references ``user_id``/``org_id``/``conversation_id`` by plain
+    UUID rather than a shared ORM object, so an isolated session is safe.
+    """
+    async with AsyncSessionLocal() as tool_db:
+        return await _dispatch_tool(
+            tool_db,
+            tool_call,
+            user_id,
+            org_id,
+            channel,
+            campaign_target_id=campaign_target_id,
+            conversation_id=conversation_id,
+            raw_message=raw_message,
+        )
+
+
 class AgentCore:
     """Channel-agnostic AI agent — one brain, two mouths.
 
@@ -310,17 +340,45 @@ class AgentCore:
             # each call, then loop for the model's follow-up reply.
             messages.append(_assistant_message_with_tool_calls(result.tool_calls))
 
-            for tool_call in result.tool_calls:
-                tool_result = await _dispatch_tool(
-                    db,
-                    tool_call,
-                    user_id,
-                    org_id,
-                    channel,
-                    campaign_target_id=campaign_target_id,
-                    conversation_id=conversation.id,
-                    raw_message=input_text,
+            tool_names = [tc.name for tc in result.tool_calls]
+            # Fan out concurrently only when every call in the batch targets
+            # a different tool. Two calls to the *same* mutating tool (e.g.
+            # book_appointment twice) must stay sequential on the shared
+            # session — that's what lets the second call's conflict check
+            # see the first call's just-committed write. Distinct tools
+            # never touch each other's state, so isolated sessions are safe.
+            if len(result.tool_calls) > 1 and len(set(tool_names)) == len(tool_names):
+                tool_results = await asyncio.gather(
+                    *(
+                        _dispatch_tool_isolated(
+                            tool_call,
+                            user_id,
+                            org_id,
+                            channel,
+                            campaign_target_id,
+                            conversation.id,
+                            input_text,
+                        )
+                        for tool_call in result.tool_calls
+                    )
                 )
+            else:
+                tool_results = []
+                for tool_call in result.tool_calls:
+                    tool_results.append(
+                        await _dispatch_tool(
+                            db,
+                            tool_call,
+                            user_id,
+                            org_id,
+                            channel,
+                            campaign_target_id=campaign_target_id,
+                            conversation_id=conversation.id,
+                            raw_message=input_text,
+                        )
+                    )
+
+            for tool_call, tool_result in zip(result.tool_calls, tool_results, strict=True):
                 if tool_call.name == "book_appointment" and tool_result.get("status") == "ok":
                     _appointment_booked_ctx.set(True)
                 messages.append(
