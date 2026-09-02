@@ -2,9 +2,10 @@
 
 Date: 2026-09-02
 
-Two separate pieces of work, done in this order. Part 1 is live in production.
-Part 2 is written and tested but **not deployed yet** — it needs an explicit
-commit + push before it has any real effect (see its own status note below).
+Three separate pieces of work, done in this order. Parts 1 and 2 are live in
+production (WhatsApp text channel). Part 3 (voice channel) is written and
+tested but **not deployed yet** — needs an explicit commit + push before it
+has any real effect (see its own status note below).
 
 Diagnosis throughout used the existing (pre-existing, not created this
 session) debug endpoint `GET /diag/latency` in `apps/api/routers/diag.py`
@@ -71,7 +72,7 @@ done yet, flagged to the user as a follow-up.
 
 ---
 
-## 2. Parallel tool-call dispatch (written + tested, NOT deployed)
+## 2. Parallel tool-call dispatch (live in production)
 
 ### What was found
 
@@ -139,28 +140,166 @@ tools' effects land correctly, results map back to the right
 
 Full suite: **275/275 passing** locally after this change.
 
+### Status — live
+
+Committed as `279682f` ("latency reduced"), pushed to `main`, confirmed
+matching `origin/main`, Render auto-deployed. Verified the deployed app was
+up and responding correctly afterward via `/diag/latency`.
+
+Only helps the subset of turns where the model batches independent tool
+calls together — most turns are single-tool or no-tool and are unaffected
+by it. In the one real batched turn observed during testing, the model
+happened to spread `book_appointment` + `send_whatsapp_message` across two
+separate sequential iterations instead of one batch, so it didn't exercise
+the new parallel branch that particular time — expected model
+non-determinism, not a bug (confirmed the branch itself is correct via the
+dedicated unit test, which forces the batched case directly).
+
+---
+
+## 3. Voice channel: call-start delay + turn-taking delay (written, tested, NOT deployed)
+
+Client feedback (via WhatsApp, forwarded by the user): *"initially it takes
+time to respond whenever we call... takes time to respond."* This is a
+completely different pipeline from parts 1-2 — OpenAI Realtime API over a
+persistent WebSocket + Plivo/Twilio telephony, not the stateless
+`gpt-4o-mini` chat-completions path. Two distinct delays turned out to be
+involved.
+
+### 3a. Call-start delay (connect → caller hears the greeting)
+
+**Measured directly** against the real OpenAI Realtime endpoint, using this
+org's actual (large) instructions, mirroring exactly what
+`realtime_bridge.py` does on a real call: connect → `session.update` →
+`response.create` → first `response.audio.delta`. Result: **~2.2-2.3s**
+end-to-end on a first pass, breaking down as:
+- WebSocket connect to OpenAI: **~1.2-1.3s** (the dominant cost — more than
+  half the total)
+- `session.update` → `response.created`: near-instant (~0.0003s) — **the
+  large system prompt is NOT the bottleneck here**, contrary to the initial
+  assumption
+- → first audio chunk: ~0.3-0.4s more
+
+**Root cause**: [`voice_stream`](apps/api/channels/voice/realtime_bridge.py#L222)
+did everything sequentially — wait for the Plivo/Twilio handshake → resolve
+org → open DB conversation → fetch the org's script → *then* open the
+WebSocket to OpenAI. The OpenAI connection doesn't depend on any of that
+and could start immediately.
+
+**The fix**: kick off the OpenAI WebSocket connection the instant the call
+arrives (right after `ws.accept()`), running concurrently with the
+Plivo/Twilio handshake read and the DB/org-resolution work, instead of
+after it. Awaited once, right before it's actually needed (just before
+`session.update`).
+
+- `websockets.connect(...)` returns its own awaitable `Connect` object, not
+  a plain coroutine — `asyncio.create_task()` requires an actual coroutine,
+  so the connect call is wrapped in a small `async def _connect_to_openai()`
+  helper. **Caught this the hard way**: the first version passed
+  `websockets.connect(...)` directly to `create_task()`, which is a real
+  `TypeError` that would have crashed every single call in production. Only
+  caught it by directly re-running the timing test against the real
+  endpoint before considering this done — worth remembering next time
+  something "obviously correct" touches `websockets.connect`.
+- Connection cleanup: the existing code already closed `oai` inside
+  `pump_call_to_openai`'s `finally` on the normal path; added an outer
+  `finally` as a safety net for the case where something raises before the
+  pumps ever start (so a fully-connected-but-unused session, or a
+  still-connecting task, doesn't leak).
+
+**Verified the mechanism actually saves time** (3 runs, real OpenAI
+endpoint, ~0.35s of simulated concurrent setup work standing in for the
+real DB/handshake work): saved 0.48s, 0.65s, and 2.87s respectively over
+the sequential version — consistently faster, never worse.
+
+**Important caveat found afterward**: raw OpenAI connect time is highly
+variable run-to-run. Measured **~1.2-1.3s** earlier in this session, then
+**~3.5-4.2s** consistently a bit later, from the same machine/network, with
+no code changes in between — pure network/OpenAI-side variability, outside
+anything the app controls. The user test-called locally afterward and saw
+**~2.5s total** — *slower* than the original ~2.2-2.3s target, but actually
+consistent with the fix working, since a bare unparallelized connect alone
+was measuring 3.5-4.2s+ at that same moment (i.e. 2.5s with the fix beats
+3.5-4.2s without it, on the same degraded connection). Production (Render,
+a real datacenter) very likely has a more stable path to OpenAI than a
+local/home connection — the ~2.5s local reading isn't necessarily what a
+real caller on the deployed app would experience, but this hasn't been
+confirmed against Render directly.
+
+**A filler/comfort tone was also built and then removed** (per explicit
+request) — `apps/api/channels/voice/filler_audio.py` (a hand-rolled G.711
+mu-law tone generator, since `audioop` was removed in Python 3.13) plus a
+`play_filler_audio` hook in `adapter.py`, played immediately after the
+Plivo/Twilio handshake to mask the dead-air gap while OpenAI connects. Net
+diff after removal is zero — mentioned here only so the idea and its
+rationale aren't lost if it's worth revisiting later.
+
+**200-400ms for this specific delay (call-start) is not achievable** — established
+directly: OpenAI's own model needs real time just to process instructions
+and start generating the greeting, independent of any network cost. The
+only way to get materially closer would be a pool of pre-warmed,
+already-connected OpenAI sessions ready to be claimed instantly — real
+ongoing cost (Realtime sessions bill by connected time) and real complexity
+(session lifecycle, per-org instruction pre-loading, replenishment) — not
+attempted, flagged as a possible future follow-up only.
+
+### 3b. Turn-taking delay (caller finishes speaking → AI starts responding)
+
+A different, initially-conflated metric — this is mid-call responsiveness,
+not the one-time call-start cost. Good news found while investigating: the
+large org script is sent to OpenAI **once**, at session start
+(`session.update`) — a persistent Realtime session, unlike the stateless
+per-call chat-completions path, so it is **not** re-processed on every
+turn. Mid-call turns were never paying that cost.
+
+**The real, direct lever**: [`_session_update_event`](apps/api/channels/voice/realtime_bridge.py#L111)'s
+voice-activity-detection config had `silence_duration_ms: 500` — the
+caller must go quiet for a full 500ms before their turn is even considered
+over and a response starts generating, before any model processing begins.
+Unlike `threshold` (0.6) and `prefix_padding_ms` (300ms) in the same
+config — both deliberately raised from OpenAI's defaults specifically to
+stop phone-line background noise from being misread as speech — this value
+was just sitting at OpenAI's own default; changing it doesn't touch that
+noise-avoidance tuning.
+
+**The fix**: lowered `silence_duration_ms` from 500 to **300**. Direct
+200ms cut on every mid-call turn. **Tradeoff, not free**: too low risks the
+AI cutting in during a caller's natural mid-sentence pause (e.g. reading
+out a phone number digit by digit) — 300 was picked as a middle ground, not
+verified against a live call yet.
+
+Beyond this config change, the remaining delay is OpenAI's own model
+response/synthesis time — not something the app controls or can measure
+without a live call.
+
 ### Status — not deployed
 
 ```
 git status --short
- M apps/api/core/agent.py
- M apps/api/tests/test_agent_core.py
+ M apps/api/channels/voice/realtime_bridge.py
 ```
 
-Uncommitted. Has **zero effect on production latency** until committed,
-pushed to `main`, and Render redeploys.
+Uncommitted. All changes in this section live in that one file. All 275
+backend tests pass locally (no dedicated new test for the voice-stream
+changes — they need a live WebSocket to exercise directly; covered instead
+by direct timing tests against the real OpenAI endpoint, described above,
+which are not part of the repo).
 
 ---
 
 ## Net effect so far
 
-- Real, confirmed, live: ~380-390ms/turn saved from the Redis fix (part 1).
-- Written and tested, waiting on a go-ahead to ship: a smaller, narrower win
-  on the subset of turns where the model batches independent tool calls
-  together (part 2) — most turns are single-tool or no-tool and are
-  unaffected by it.
+- Real, confirmed, live: ~380-390ms/turn saved from the Redis fix (WhatsApp,
+  part 1), plus a narrower win on WhatsApp turns where the model batches
+  independent tool calls together (part 2).
+- Written, tested, waiting on a go-ahead to ship: voice call-start delay
+  reduced (amount varies with OpenAI's own connect-time variability — real
+  but not to any specific target), and a direct 200ms cut on every mid-call
+  voice turn (part 3).
 
 ## How to re-check latency
+
+WhatsApp:
 
 ```
 curl -H "X-Admin-Token: <ADMIN_TOKEN from .env>" https://veerox-o2en.onrender.com/diag/latency

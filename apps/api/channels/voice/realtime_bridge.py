@@ -135,7 +135,15 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
                     "type": "server_vad",
                     "threshold": 0.6,
                     "prefix_padding_ms": 300,
-                    "silence_duration_ms": 500,
+                    # How long the caller must go quiet before their turn is
+                    # considered over and a response starts generating.
+                    # Lowered from OpenAI's 500ms default to cut perceived
+                    # response latency — unlike threshold/prefix_padding_ms
+                    # above, this wasn't raised for noise reasons, it was
+                    # just sitting at the default. Tradeoff: too low risks
+                    # the AI cutting in during a caller's natural mid-
+                    # sentence pause (e.g. reading out a phone number).
+                    "silence_duration_ms": 300,
                 },
                 "noise_reduction": {"type": "far_field"},
                 "transcription": {"model": "whisper-1"},
@@ -223,6 +231,26 @@ async def _watch_usage_limit(
 async def voice_stream(ws: WebSocket) -> None:
     """Bridge a single Plivo/Twilio call to an OpenAI Realtime session."""
     await ws.accept()
+
+    # Kick off the OpenAI connection the instant the call arrives, instead
+    # of after the Plivo/Twilio handshake + DB/org-resolution work below.
+    # Connecting doesn't need any of that (instructions are sent separately
+    # via session.update once connected) — this lets its ~1s+ handshake
+    # overlap with that other work instead of adding on top of it. Awaited
+    # once, right before it's actually needed, further down.
+    #
+    # websockets.connect(...) returns its own awaitable ``Connect`` object,
+    # not a plain coroutine — asyncio.create_task() requires an actual
+    # coroutine, hence the wrapper below rather than passing it directly.
+    async def _connect_to_openai() -> Any:
+        return await websockets.connect(
+            f"{_OPENAI_REALTIME_URL}?model={settings.openai_realtime_model}",
+            additional_headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            max_size=None,
+        )
+
+    oai_connect_task = asyncio.create_task(_connect_to_openai())
+
     caller = ws.query_params.get("from", "unknown")
     call_uuid = ws.query_params.get("call_uuid", "")
     provider = ws.query_params.get("provider", "plivo")
@@ -304,14 +332,10 @@ async def voice_stream(ws: WebSocket) -> None:
         instructions = await _system_instructions(campaign_target_id, resolved_org_id)
         state.base_instructions = instructions
 
-        # No OpenAI-Beta header on the GA endpoint — sending it alongside a GA
-        # model name causes the connection to be rejected outright.
-        headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
-        url = f"{_OPENAI_REALTIME_URL}?model={settings.openai_realtime_model}"
-
-        async with websockets.connect(
-            url, additional_headers=headers, max_size=None
-        ) as oai:
+        # Usually already connected by now — the handshake ran concurrently
+        # with the work above instead of starting after it.
+        oai = await oai_connect_task
+        try:
             await oai.send(json.dumps(_session_update_event(instructions)))
             # Make the agent greet first instead of waiting for the caller.
             await oai.send(
@@ -403,10 +427,26 @@ async def voice_stream(ws: WebSocket) -> None:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+        finally:
+            # pump_call_to_openai already closes oai in its own finally on
+            # the normal path — this is a safety net for the (unusual) case
+            # where something above raised before the pumps ever started.
+            await oai.close()
     except Exception as exc:  # noqa: BLE001
         log.warning("voice_stream_error", error=str(exc))
         await record_error()
     finally:
+        if oai_connect_task.done():
+            # Not consumed via `oai` above (an exception hit before that
+            # line) — still close it so a fully-connected session isn't
+            # left dangling. Safe/idempotent if it was already closed.
+            if not oai_connect_task.cancelled() and oai_connect_task.exception() is None:
+                try:
+                    await oai_connect_task.result().close()
+                except Exception:  # noqa: BLE001
+                    pass
+        else:
+            oai_connect_task.cancel()
         if conversation_id is not None:
             await voice_adapter.close_voice_conversation(
                 conversation_id, campaign_target_id=campaign_target_id
