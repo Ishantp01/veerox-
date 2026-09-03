@@ -26,9 +26,11 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from sqlalchemy import String, case, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice import plivo_client as voice_plivo
+from apps.api.channels.voice.org_numbers import get_default_numbers, replace_org_phone_numbers
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.llm import chat_completion
@@ -76,6 +78,7 @@ from apps.api.schemas.admin import (
     ScriptOut,
     WhatsAppSettingsOut,
 )
+from apps.api.schemas.org_numbers import OrgPhoneNumberOut
 from apps.api.schemas.campaign import (
     CampaignCounts,
     CampaignCreateResult,
@@ -1903,13 +1906,17 @@ async def get_org_numbers(
     messages/calls on those numbers get attributed to this org instead of
     the platform default (see channels/whatsapp/adapter.py and
     channels/voice/webhook.py)."""
-    record = await db.get(Org, org)
+    result = await db.execute(
+        select(Org).options(selectinload(Org.phone_numbers)).where(Org.id == org)
+    )
+    record = result.scalar_one_or_none()
     if record is None:
         raise HTTPException(status_code=404, detail="Org not found")
     return OrgNumbersOut(
         whatsapp_phone_number_id=record.whatsapp_phone_number_id,
-        plivo_phone_number=record.plivo_phone_number,
-        twilio_phone_number=record.twilio_phone_number,
+        phone_numbers=[
+            OrgPhoneNumberOut.model_validate(n, from_attributes=True) for n in record.phone_numbers
+        ],
     )
 
 
@@ -1920,19 +1927,16 @@ async def update_org_numbers(
     org: RequestOrgDep,
     x_admin_token: str | None = Header(None),
 ) -> OrgNumbersOut:
-    """Set (or, with an empty string, clear) this org's WhatsApp/calling
-    numbers. Each field is independently optional — a field omitted from the
-    request body (as opposed to sent as `null`/`""`) is left untouched, so
-    the calling/WhatsApp settings pages can each save just their own number
-    without clobbering the other.
+    """Set (or, with an empty string, clear) this org's WhatsApp number, and/or
+    replace its full set of dedicated calling numbers. Each field is
+    independently optional — a field omitted from the request body (as
+    opposed to sent as `null`/`[]`) is left untouched, so the calling/
+    WhatsApp settings pages can each save just their own number without
+    clobbering the other.
 
-    Plivo and Twilio numbers are independent fields — an org can have BOTH a
-    dedicated Plivo and a dedicated Twilio number at once (the caller states
-    which provider each number belongs to; this endpoint no longer guesses
-    via channels/voice/number_provider.py::detect_provider or clears the
-    other provider's number). Stored digits-only either way, matching how
-    channels/voice/webhook.py normalizes the provider's `To` param before
-    comparing.
+    `phone_numbers`, when present, REPLACES this org's entire number set
+    (see channels/voice/org_numbers.py::replace_org_phone_numbers) — an org
+    can have several dedicated numbers per provider.
     """
     record = await db.get(Org, org)
     if record is None:
@@ -1941,12 +1945,8 @@ async def update_org_numbers(
     if "whatsapp_phone_number_id" in fields:
         value = fields["whatsapp_phone_number_id"]
         record.whatsapp_phone_number_id = value.strip() if value else None
-    if "plivo_phone_number" in fields:
-        value = fields["plivo_phone_number"]
-        record.plivo_phone_number = re.sub(r"\D", "", value) if value else None
-    if "twilio_phone_number" in fields:
-        value = fields["twilio_phone_number"]
-        record.twilio_phone_number = re.sub(r"\D", "", value) if value else None
+    if body.phone_numbers is not None:
+        await replace_org_phone_numbers(db, record.id, body.phone_numbers)
     try:
         await db.commit()
     except IntegrityError:
@@ -1954,10 +1954,15 @@ async def update_org_numbers(
         raise HTTPException(
             status_code=409, detail="One of these numbers is already assigned to another org."
         )
+    result = await db.execute(
+        select(Org).options(selectinload(Org.phone_numbers)).where(Org.id == org)
+    )
+    record = result.scalar_one()
     return OrgNumbersOut(
         whatsapp_phone_number_id=record.whatsapp_phone_number_id,
-        plivo_phone_number=record.plivo_phone_number,
-        twilio_phone_number=record.twilio_phone_number,
+        phone_numbers=[
+            OrgPhoneNumberOut.model_validate(n, from_attributes=True) for n in record.phone_numbers
+        ],
     )
 
 
@@ -2240,14 +2245,11 @@ async def outbound_call(
         )
         return OutboundCallOut(call_sid=f"STUB-{uuid4()}", status="stub")
 
-    # Dial from this org's own dedicated number(s) when it has them (see
-    # Org.plivo_phone_number / Org.twilio_phone_number — independent, an org
-    # can have both), falling back to each provider's platform default. Both
-    # are stored digits-only (see PUT /admin/org-numbers), so re-add the "+"
-    # the provider APIs expect.
+    # Dial from this org's own default dedicated number per provider (an org
+    # can have several per provider — see db/models/org_phone_number.py),
+    # falling back to each provider's platform default when it has none.
     org_record = await db.get(Org, org_id)
-    plivo_from = f"+{org_record.plivo_phone_number}" if org_record and org_record.plivo_phone_number else None
-    twilio_from = f"+{org_record.twilio_phone_number}" if org_record and org_record.twilio_phone_number else None
+    plivo_from, twilio_from = await get_default_numbers(db, org_id)
 
     # org_id travels on the answer_url so the realtime bridge attributes this
     # call's usage to the org that actually placed it (see

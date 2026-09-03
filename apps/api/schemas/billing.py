@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from apps.api.schemas.org_numbers import OrgPhoneNumberIn, OrgPhoneNumberOut
+
 
 class PlanOut(BaseModel):
     code: str
@@ -67,8 +69,7 @@ class OrgAdminOut(BaseModel):
     seat_count: int
     admin_email: str | None
     created_at: str
-    plivo_phone_number: str | None = None
-    twilio_phone_number: str | None = None
+    phone_numbers: list[OrgPhoneNumberOut] = []
     whatsapp_phone_number_id: str | None = None
 
 
@@ -76,11 +77,14 @@ class OrgUpdateIn(BaseModel):
     """All fields optional — only what's sent gets changed (PATCH semantics).
     Deliberately excludes plan/billing_status: those are driven by the
     checkout/payment flow (see POST /billing/checkout-session), not a direct
-    admin edit, to keep them consistent with BillingPayment records."""
+    admin edit, to keep them consistent with BillingPayment records.
+
+    `phone_numbers` omitted = the org's numbers are left untouched; present
+    (including `[]`) = its full number set is replaced with this one (see
+    channels/voice/org_numbers.py::replace_org_phone_numbers)."""
 
     name: str | None = None
-    plivo_phone_number: str | None = None
-    twilio_phone_number: str | None = None
+    phone_numbers: list[OrgPhoneNumberIn] | None = None
     whatsapp_phone_number_id: str | None = None
 
 

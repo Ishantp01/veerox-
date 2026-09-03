@@ -18,10 +18,11 @@ export function useOrgNumbers() {
 }
 
 /**
- * Set (or, with an empty string, clear) one or both of the org's numbers.
- * Only the keys passed are touched — the other number is left as-is.
+ * Set (or, with an empty string, clear) the org's WhatsApp number, and/or
+ * replace its full set of dedicated calling numbers. Only the keys passed
+ * are touched — omitting `phone_numbers` entirely leaves it as-is.
  *
- * PUT /admin/org-numbers { whatsapp_phone_number_id?, plivo_phone_number? } → OrgNumbers
+ * PUT /admin/org-numbers { whatsapp_phone_number_id?, phone_numbers? } → OrgNumbers
  */
 export function useUpdateOrgNumbers() {
   const queryClient = useQueryClient();

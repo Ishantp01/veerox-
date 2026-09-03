@@ -45,7 +45,9 @@ export default function CallingDialPage() {
   // Only worth letting someone choose when the org actually has a dedicated
   // number on both providers — otherwise there's nothing to pick between,
   // the single configured (or platform default) number is just used.
-  const hasBothProviders = Boolean(orgNumbers?.plivo_phone_number) && Boolean(orgNumbers?.twilio_phone_number);
+  const hasBothProviders =
+    Boolean(orgNumbers?.phone_numbers.some((n) => n.provider === "plivo")) &&
+    Boolean(orgNumbers?.phone_numbers.some((n) => n.provider === "twilio"));
   const [provider, setProvider] = useState<"plivo" | "twilio">("plivo");
 
   const {

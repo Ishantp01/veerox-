@@ -11,7 +11,6 @@ to re-invite or a platform admin to re-provision.
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
@@ -24,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 
 from apps.api.channels.email import brevo_client
 from apps.api.channels.voice import failover as voice_failover
+from apps.api.channels.voice.org_numbers import replace_org_phone_numbers
 from apps.api.config import settings
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import create_session, delete_session, invalidate_user_sessions
@@ -114,23 +114,12 @@ async def provision_org(
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Each provider's number is an independent, explicitly-labeled field now
-    # (an org can have a dedicated number on both at once) — stored
-    # digits-only, matching how channels/voice/webhook.py normalizes the
-    # provider's `To` param before comparing.
-    plivo_number = re.sub(r"\D", "", payload.plivo_phone_number) if payload.plivo_phone_number else None
-    twilio_number = (
-        re.sub(r"\D", "", payload.twilio_phone_number) if payload.twilio_phone_number else None
-    )
-
     # No plan assigned yet on purpose: `Org.plan_id is None` is exactly the
     # signal the frontend's dashboard layout gates on to force new orgs
     # through /billing (choose-a-plan, even the free one) before anything
     # else in the app becomes reachable. See DashboardLayout in apps/web.
     org = Org(
         name=payload.org_name,
-        plivo_phone_number=plivo_number,
-        twilio_phone_number=twilio_number,
         whatsapp_phone_number_id=payload.whatsapp_phone_number_id.strip()
         if payload.whatsapp_phone_number_id
         else None,
@@ -138,6 +127,9 @@ async def provision_org(
     db.add(org)
     try:
         await db.flush()
+        if payload.phone_numbers:
+            await replace_org_phone_numbers(db, org.id, payload.phone_numbers)
+            await db.flush()
     except IntegrityError:
         await db.rollback()
         raise HTTPException(

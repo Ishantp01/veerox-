@@ -15,20 +15,17 @@ import {
   Label,
   useToast,
 } from "@/components/ui";
+import { PhoneNumberListField, type PhoneNumberEntry } from "./phone-number-list-field";
 import { useProvisionOrg, type ProvisionOrgResult } from "@/lib/hooks/useAdminOrgs";
+import { E164_REGEX, E164_MESSAGE } from "@/lib/phone";
 
 const EMPTY = {
   orgName: "",
   email: "",
   fullName: "",
   mobile: "",
-  plivoNumber: "",
-  twilioNumber: "",
   whatsappNumberId: "",
 };
-
-const E164_REGEX = /^\+\d{8,15}$/;
-const E164_MESSAGE = "Enter a valid E.164 number, e.g. +919876543210";
 
 const orgSchema = z.object({
   orgName: z.string().trim().min(1, "Organization name is required"),
@@ -39,16 +36,6 @@ const orgSchema = z.object({
     .regex(/^[A-Za-z\s'.-]*$/, "Name should only contain letters")
     .optional(),
   mobile: z.string().trim().regex(E164_REGEX, E164_MESSAGE),
-  plivoNumber: z
-    .string()
-    .trim()
-    .optional()
-    .refine((v) => !v || E164_REGEX.test(v), E164_MESSAGE),
-  twilioNumber: z
-    .string()
-    .trim()
-    .optional()
-    .refine((v) => !v || E164_REGEX.test(v), E164_MESSAGE),
   whatsappNumberId: z
     .string()
     .trim()
@@ -70,6 +57,8 @@ export function NewOrgDialog() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [fieldErrors, setFieldErrors] = useState<OrgFieldErrors>({});
+  const [plivoNumbers, setPlivoNumbers] = useState<PhoneNumberEntry[]>([]);
+  const [twilioNumbers, setTwilioNumbers] = useState<PhoneNumberEntry[]>([]);
   const [result, setResult] = useState<ProvisionOrgResult | null>(null);
   const provisionOrg = useProvisionOrg();
   const { toast } = useToast();
@@ -109,8 +98,10 @@ export function NewOrgDialog() {
         email: form.email.trim(),
         full_name: form.fullName.trim() || undefined,
         mobile: form.mobile.trim(),
-        plivo_phone_number: form.plivoNumber.trim() || undefined,
-        twilio_phone_number: form.twilioNumber.trim() || undefined,
+        phone_numbers: [
+          ...plivoNumbers.map((n) => ({ provider: "plivo" as const, ...n })),
+          ...twilioNumbers.map((n) => ({ provider: "twilio" as const, ...n })),
+        ],
         whatsapp_phone_number_id: form.whatsappNumberId.trim() || undefined,
       },
       {
@@ -129,6 +120,8 @@ export function NewOrgDialog() {
     if (!next) {
       setForm(EMPTY);
       setFieldErrors({});
+      setPlivoNumbers([]);
+      setTwilioNumbers([]);
       setResult(null);
       provisionOrg.reset();
     }
@@ -248,47 +241,23 @@ export function NewOrgDialog() {
                   </p>
                 )}
               </div>
+              <PhoneNumberListField
+                id="org-plivo-number"
+                label="Dedicated Plivo numbers"
+                value={plivoNumbers}
+                onChange={setPlivoNumbers}
+              />
               <div>
-                <Label htmlFor="org-plivo-number">Dedicated Plivo number</Label>
-                <Input
-                  id="org-plivo-number"
-                  type="tel"
-                  inputMode="tel"
-                  maxLength={16}
-                  value={form.plivoNumber}
-                  onChange={(e) => updateField("plivoNumber", e.target.value.replace(/[^\d+]/g, ""))}
-                  placeholder="Optional — leave blank to use the default number"
-                  aria-invalid={fieldErrors.plivoNumber ? true : undefined}
-                  aria-describedby={fieldErrors.plivoNumber ? "org-plivo-number-error" : undefined}
-                />
-                {fieldErrors.plivoNumber && (
-                  <p id="org-plivo-number-error" className="mt-1.5 text-xs text-red-600">
-                    {fieldErrors.plivoNumber}
-                  </p>
-                )}
-              </div>
-              <div>
-                <Label htmlFor="org-twilio-number">Dedicated Twilio number</Label>
-                <Input
+                <PhoneNumberListField
                   id="org-twilio-number"
-                  type="tel"
-                  inputMode="tel"
-                  maxLength={16}
-                  value={form.twilioNumber}
-                  onChange={(e) => updateField("twilioNumber", e.target.value.replace(/[^\d+]/g, ""))}
-                  placeholder="Optional — leave blank to use the default number"
-                  aria-invalid={fieldErrors.twilioNumber ? true : undefined}
-                  aria-describedby={fieldErrors.twilioNumber ? "org-twilio-number-error" : undefined}
+                  label="Dedicated Twilio numbers"
+                  value={twilioNumbers}
+                  onChange={setTwilioNumbers}
                 />
-                <p className="mt-1 text-xs text-slate-500">
-                  Set both to give this org a dedicated number on each provider — the calling
-                  page then lets them choose which one to dial from.
+                <p className="mt-1.5 text-xs text-slate-500">
+                  Add numbers on both to give this org dedicated lines on each provider — the
+                  calling page then lets them choose which one to dial from.
                 </p>
-                {fieldErrors.twilioNumber && (
-                  <p id="org-twilio-number-error" className="mt-1.5 text-xs text-red-600">
-                    {fieldErrors.twilioNumber}
-                  </p>
-                )}
               </div>
               <div>
                 <Label htmlFor="org-whatsapp-number">Dedicated WhatsApp number ID</Label>

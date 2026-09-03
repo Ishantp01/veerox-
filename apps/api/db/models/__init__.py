@@ -11,6 +11,7 @@ from apps.api.db.models.lead import Lead
 from apps.api.db.models.message import Message
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
+from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.models.plan import Plan
 from apps.api.db.models.platform_settings import PlatformSettings
 from apps.api.db.models.support_ticket import SupportTicket
@@ -33,6 +34,7 @@ __all__ = [
     "Message",
     "Org",
     "OrgMembership",
+    "OrgPhoneNumber",
     "Plan",
     "PlatformSettings",
     "SupportTicket",

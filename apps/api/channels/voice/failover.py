@@ -43,8 +43,8 @@ async def initiate_call(
 
     ``plivo_from_number`` / ``twilio_from_number``, when given, override each
     provider's configured caller ID — used to dial from an org's own
-    dedicated number (see ``Org.plivo_phone_number`` /
-    ``Org.twilio_phone_number``) instead of the platform default. An org can
+    dedicated number (see ``channels/voice/org_numbers.py::get_default_numbers``
+    and ``db/models/org_phone_number.py``) instead of the platform default. An org can
     have a dedicated number on BOTH providers at once, so when
     ``twilio_from_number`` is set and ``plivo_from_number`` isn't, Twilio is
     tried FIRST — dialing from Plivo with no matching number for this org

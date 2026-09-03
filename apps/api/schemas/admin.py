@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from apps.api.schemas.org_numbers import OrgPhoneNumberIn, OrgPhoneNumberOut
+
 
 class OutboundWhatsappIn(BaseModel):
     phone: str = Field(..., description="Recipient phone number in E.164 format.")
@@ -76,25 +78,23 @@ class ScriptIn(BaseModel):
 
 class OrgNumbersOut(BaseModel):
     whatsapp_phone_number_id: str | None
-    # An org can have BOTH a dedicated Plivo and a dedicated Twilio number at
-    # once — each field is independent (see routers/admin.py::update_org_numbers).
-    plivo_phone_number: str | None
-    twilio_phone_number: str | None = None
+    # An org can have several dedicated numbers per provider — see
+    # db/models/org_phone_number.py.
+    phone_numbers: list[OrgPhoneNumberOut] = []
 
 
 class OrgNumbersIn(BaseModel):
-    # Empty/omit clears the corresponding number, falling back to the
-    # platform default org for messages/calls on it (see
-    # channels/whatsapp/adapter.py::_resolve_org_id and
-    # channels/voice/webhook.py::_resolve_org_by_number).
+    # Empty/omit clears the WhatsApp number, falling back to the platform
+    # default org for messages on it (see
+    # channels/whatsapp/adapter.py::_resolve_org_id).
     whatsapp_phone_number_id: str | None = Field(
         None, description="This org's WhatsApp Business phone_number_id, from the Meta dashboard."
     )
-    plivo_phone_number: str | None = Field(
-        None, description="This org's dedicated Plivo calling number, e.g. +14155551234."
-    )
-    twilio_phone_number: str | None = Field(
-        None, description="This org's dedicated Twilio calling number, e.g. +14155551234."
+    # Omitted = the org's calling numbers are left untouched; present
+    # (including []) = its full number set is replaced with this one (see
+    # channels/voice/org_numbers.py::replace_org_phone_numbers).
+    phone_numbers: list[OrgPhoneNumberIn] | None = Field(
+        None, description="This org's full set of dedicated Plivo/Twilio calling numbers."
     )
 
 

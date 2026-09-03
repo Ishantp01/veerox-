@@ -35,7 +35,7 @@ from apps.api.channels.voice import twilio_client as voice_twilio
 from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.config import settings
 from apps.api.db.models.conversation import Conversation
-from apps.api.db.models.org import Org
+from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.models.user import User
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.workers import campaign_dialer
@@ -105,19 +105,18 @@ def _ws_stream_base_url() -> str:
 
 
 def _normalize_phone(value: str) -> str:
-    """Digits only, no `+` — the stored convention for `Org.plivo_phone_number`
-    (see routers/admin.py's update_calling_number, which normalizes the same
-    way on save) so lookups here are a plain equality check."""
+    """Digits only, no `+` — the stored convention for `OrgPhoneNumber.phone_number`
+    (see channels/voice/org_numbers.py::replace_org_phone_numbers, which
+    normalizes the same way on save) so lookups here are a plain equality check."""
     return re.sub(r"\D", "", value or "")
 
 
 async def _resolve_org_by_number(to_number: str | None, is_twilio: bool) -> str | None:
-    """The org whose dedicated number this inbound call was dialed on, if any.
+    """The org that owns this inbound call's dialed number, if any.
 
-    Checks ``Org.twilio_phone_number`` for calls routed via Twilio and
-    ``Org.plivo_phone_number`` for Plivo — an org's dedicated number lives on
-    whichever provider's account actually owns it (see
-    ``channels/voice/number_provider.py::detect_provider``), never both.
+    Matches against *any* of the org's OrgPhoneNumber rows for the provider
+    that routed the call (not just its default one) — an org can have
+    several dedicated numbers per provider (see db/models/org_phone_number.py).
 
     Only meaningful for calls Plivo/Twilio route to us unprompted (a real
     inbound call) — an admin/campaign-placed outbound call already carries
@@ -130,9 +129,15 @@ async def _resolve_org_by_number(to_number: str | None, is_twilio: bool) -> str 
     normalized = _normalize_phone(to_number)
     if not normalized:
         return None
-    column = Org.twilio_phone_number if is_twilio else Org.plivo_phone_number
+    provider = "twilio" if is_twilio else "plivo"
     async with AsyncSessionLocal() as db:
-        org_id = (await db.execute(select(Org.id).where(column == normalized))).scalar_one_or_none()
+        org_id = (
+            await db.execute(
+                select(OrgPhoneNumber.org_id).where(
+                    OrgPhoneNumber.provider == provider, OrgPhoneNumber.phone_number == normalized
+                )
+            )
+        ).scalar_one_or_none()
     return str(org_id) if org_id else None
 
 

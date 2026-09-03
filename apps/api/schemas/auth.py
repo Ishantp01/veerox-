@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
 
+from apps.api.schemas.org_numbers import OrgPhoneNumberIn
+
 
 class LoginIn(BaseModel):
     token: str
@@ -44,18 +46,12 @@ class ProvisionOrgIn(BaseModel):
     # E.164 mobile number the login token is SMS'd to (see
     # routers/auth.py's provision_org).
     mobile: str
-    # Optional dedicated numbers for this org. Left unset (None), inbound
-    # calls/messages on the platform default numbers keep resolving to this
-    # org until an admin sets these later via PUT /admin/org-numbers (see
-    # Org.plivo_phone_number / Org.twilio_phone_number / Org.whatsapp_phone_number_id).
-    # Independent fields — an org can be provisioned with a dedicated number
-    # on both providers at once, or just one, or neither.
-    plivo_phone_number: str | None = Field(
-        None, description="Dedicated Plivo calling number for this org, e.g. +14155551234. Optional."
-    )
-    twilio_phone_number: str | None = Field(
-        None, description="Dedicated Twilio calling number for this org, e.g. +14155551234. Optional."
-    )
+    # Optional dedicated numbers for this org — any mix of Plivo/Twilio
+    # entries, several per provider allowed. Left empty, inbound calls on the
+    # platform default numbers keep resolving to this org until an admin
+    # sets these later via PATCH /billing/orgs/{id} or PUT /admin/org-numbers
+    # (see db/models/org_phone_number.py).
+    phone_numbers: list[OrgPhoneNumberIn] = Field(default_factory=list)
     whatsapp_phone_number_id: str | None = Field(
         None, description="Dedicated WhatsApp Business phone_number_id for this org, from the Meta dashboard. Optional — falls back to the platform default."
     )

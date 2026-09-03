@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
+import type { OrgPhoneNumber } from "@/lib/types";
 
 export interface AdminOrg {
   id: string;
@@ -9,9 +10,16 @@ export interface AdminOrg {
   seat_count: number;
   admin_email: string | null;
   created_at: string;
-  plivo_phone_number: string | null;
-  twilio_phone_number: string | null;
+  phone_numbers: OrgPhoneNumber[];
   whatsapp_phone_number_id: string | null;
+}
+
+// Input shape for one number in ProvisionOrgInput/UpdateOrgInput's
+// phone_numbers array — no `id`/`created_at` since the server assigns those.
+export interface OrgPhoneNumberInput {
+  provider: "plivo" | "twilio";
+  phone_number: string;
+  is_default?: boolean;
 }
 
 /** GET /billing/orgs → AdminOrg[] (platform-admin only) */
@@ -27,13 +35,11 @@ export interface ProvisionOrgInput {
   email: string;
   full_name?: string;
   mobile: string;
-  // Optional dedicated numbers for this org. Omit to use the platform
-  // default calling/WhatsApp numbers (see apps/api/schemas/auth.py's
-  // ProvisionOrgIn) — can be set later from the org's own settings pages.
-  // plivo_phone_number/twilio_phone_number are independent — an org can be
-  // given a dedicated number on both providers at once.
-  plivo_phone_number?: string;
-  twilio_phone_number?: string;
+  // Optional dedicated numbers for this org — any mix of Plivo/Twilio
+  // entries, several per provider allowed. Omit/empty to use the platform
+  // default calling numbers (see apps/api/schemas/auth.py's ProvisionOrgIn)
+  // — can be set later from the Edit dialog.
+  phone_numbers?: OrgPhoneNumberInput[];
   whatsapp_phone_number_id?: string;
 }
 
@@ -105,8 +111,9 @@ export function useRegenerateAdminToken() {
 export interface UpdateOrgInput {
   orgId: string;
   name?: string;
-  plivo_phone_number?: string | null;
-  twilio_phone_number?: string | null;
+  // Omitted = the org's numbers are left untouched; present (including [])
+  // = its full number set is replaced with this one.
+  phone_numbers?: OrgPhoneNumberInput[];
   whatsapp_phone_number_id?: string | null;
 }
 

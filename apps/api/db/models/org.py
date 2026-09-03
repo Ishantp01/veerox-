@@ -5,9 +5,10 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from apps.api.db.base import Base
+from apps.api.db.models.org_phone_number import OrgPhoneNumber
 
 
 class Org(Base):
@@ -62,18 +63,15 @@ class Org(Base):
     whatsapp_phone_number_id: Mapped[str | None] = mapped_column(
         String(64), nullable=True, unique=True
     )
-    # This org's dedicated Plivo number (E.164) — Plivo's answer webhook
+    # This org's dedicated Plivo/Twilio numbers — an org can have several of
+    # each (see db/models/org_phone_number.py). Plivo/Twilio's answer webhook
     # passes the dialed number as `To`, letting channels/voice/webhook.py
-    # resolve the org for an *inbound* call the same way. NULL = not yet
-    # provisioned with a dedicated number.
-    plivo_phone_number: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True)
-    # This org's dedicated Twilio number (E.164), mutually exclusive with
-    # plivo_phone_number — set instead of it when the number an admin enters
-    # is found in the Twilio account rather than the Plivo one (see
-    # channels/voice/number_provider.py::detect_provider), so a call can
-    # fail over from Plivo to Twilio (or vice versa) while still dialing
-    # from this org's own number on whichever provider actually owns it.
-    twilio_phone_number: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True)
+    # resolve the org for an *inbound* call on any of them; outbound calls
+    # dial from whichever row per provider has is_default=True (see
+    # channels/voice/org_numbers.py::get_default_numbers).
+    phone_numbers: Mapped[list["OrgPhoneNumber"]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True
+    )
     # Explicit override of failover.py's automatic Plivo-first/Twilio-
     # fallback ordering — "plivo", "twilio", or NULL (automatic, the
     # default: prefer whichever provider this org has a dedicated number

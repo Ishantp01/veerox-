@@ -15,23 +15,11 @@ import {
   Label,
   useToast,
 } from "@/components/ui";
+import { PhoneNumberListField, type PhoneNumberEntry } from "./phone-number-list-field";
 import { useUpdateOrgAdmin, type AdminOrg } from "@/lib/hooks/useAdminOrgs";
-
-const E164_REGEX = /^\+\d{8,15}$/;
-const E164_MESSAGE = "Enter a valid E.164 number, e.g. +919876543210";
 
 const editOrgSchema = z.object({
   orgName: z.string().trim().min(1, "Organization name is required"),
-  plivoNumber: z
-    .string()
-    .trim()
-    .optional()
-    .refine((v) => !v || E164_REGEX.test(v), E164_MESSAGE),
-  twilioNumber: z
-    .string()
-    .trim()
-    .optional()
-    .refine((v) => !v || E164_REGEX.test(v), E164_MESSAGE),
   whatsappNumberId: z.string().trim().optional(),
 });
 
@@ -41,10 +29,17 @@ type OrgFieldErrors = Partial<Record<keyof EditOrgForm, string>>;
 function formFromOrg(org: AdminOrg): EditOrgForm {
   return {
     orgName: org.name,
-    plivoNumber: org.plivo_phone_number ?? "",
-    twilioNumber: org.twilio_phone_number ?? "",
     whatsappNumberId: org.whatsapp_phone_number_id ?? "",
   };
+}
+
+function numbersFromOrg(org: AdminOrg, provider: "plivo" | "twilio"): PhoneNumberEntry[] {
+  // Stored digits-only (see apps/api/channels/voice/org_numbers.py) — the
+  // list field works in "+"-prefixed E.164 throughout, so numbers coming
+  // back from the server need it re-added.
+  return org.phone_numbers
+    .filter((n) => n.provider === provider)
+    .map((n) => ({ phone_number: `+${n.phone_number}`, is_default: n.is_default }));
 }
 
 /**
@@ -57,6 +52,10 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<EditOrgForm>(() => formFromOrg(org));
   const [fieldErrors, setFieldErrors] = useState<OrgFieldErrors>({});
+  const [plivoNumbers, setPlivoNumbers] = useState<PhoneNumberEntry[]>(() => numbersFromOrg(org, "plivo"));
+  const [twilioNumbers, setTwilioNumbers] = useState<PhoneNumberEntry[]>(() =>
+    numbersFromOrg(org, "twilio"),
+  );
   const updateOrg = useUpdateOrgAdmin();
   const { toast } = useToast();
 
@@ -93,8 +92,10 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
       {
         orgId: org.id,
         name: parsed.data.orgName.trim(),
-        plivo_phone_number: parsed.data.plivoNumber?.trim() || null,
-        twilio_phone_number: parsed.data.twilioNumber?.trim() || null,
+        phone_numbers: [
+          ...plivoNumbers.map((n) => ({ provider: "plivo" as const, ...n })),
+          ...twilioNumbers.map((n) => ({ provider: "twilio" as const, ...n })),
+        ],
         whatsapp_phone_number_id: parsed.data.whatsappNumberId?.trim() || null,
       },
       {
@@ -112,6 +113,8 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
     setOpen(next);
     if (next) {
       setForm(formFromOrg(org));
+      setPlivoNumbers(numbersFromOrg(org, "plivo"));
+      setTwilioNumbers(numbersFromOrg(org, "twilio"));
     } else {
       setFieldErrors({});
       updateOrg.reset();
@@ -145,44 +148,18 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
                 </p>
               )}
             </div>
-            <div>
-              <Label htmlFor="edit-org-plivo-number">Dedicated Plivo number</Label>
-              <Input
-                id="edit-org-plivo-number"
-                type="tel"
-                inputMode="tel"
-                maxLength={16}
-                value={form.plivoNumber}
-                onChange={(e) => updateField("plivoNumber", e.target.value.replace(/[^\d+]/g, ""))}
-                placeholder="Leave blank to use the default number"
-                aria-invalid={fieldErrors.plivoNumber ? true : undefined}
-                aria-describedby={fieldErrors.plivoNumber ? "edit-org-plivo-number-error" : undefined}
-              />
-              {fieldErrors.plivoNumber && (
-                <p id="edit-org-plivo-number-error" className="mt-1.5 text-xs text-red-600">
-                  {fieldErrors.plivoNumber}
-                </p>
-              )}
-            </div>
-            <div>
-              <Label htmlFor="edit-org-twilio-number">Dedicated Twilio number</Label>
-              <Input
-                id="edit-org-twilio-number"
-                type="tel"
-                inputMode="tel"
-                maxLength={16}
-                value={form.twilioNumber}
-                onChange={(e) => updateField("twilioNumber", e.target.value.replace(/[^\d+]/g, ""))}
-                placeholder="Leave blank to use the default number"
-                aria-invalid={fieldErrors.twilioNumber ? true : undefined}
-                aria-describedby={fieldErrors.twilioNumber ? "edit-org-twilio-number-error" : undefined}
-              />
-              {fieldErrors.twilioNumber && (
-                <p id="edit-org-twilio-number-error" className="mt-1.5 text-xs text-red-600">
-                  {fieldErrors.twilioNumber}
-                </p>
-              )}
-            </div>
+            <PhoneNumberListField
+              id="edit-org-plivo-number"
+              label="Dedicated Plivo numbers"
+              value={plivoNumbers}
+              onChange={setPlivoNumbers}
+            />
+            <PhoneNumberListField
+              id="edit-org-twilio-number"
+              label="Dedicated Twilio numbers"
+              value={twilioNumbers}
+              onChange={setTwilioNumbers}
+            />
             <div>
               <Label htmlFor="edit-org-whatsapp-number">Dedicated WhatsApp number ID</Label>
               <Input

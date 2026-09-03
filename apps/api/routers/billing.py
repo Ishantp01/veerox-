@@ -45,7 +45,9 @@ from razorpay.errors import SignatureVerificationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from apps.api.channels.voice.org_numbers import replace_org_phone_numbers
 from apps.api.config import settings
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import invalidate_user_sessions
@@ -87,6 +89,7 @@ from apps.api.schemas.billing import (
     UsageMetricOut,
     VerifyPaymentIn,
 )
+from apps.api.schemas.org_numbers import OrgPhoneNumberOut
 
 # Plan definitions are a platform-wide catalog shared by every org, not an
 # org-scoped resource. Gated by X-Admin-Token or `AccountUser.is_superuser`
@@ -176,7 +179,7 @@ async def list_orgs(db: DbDep, _admin: PlatformAdminDep) -> list[OrgAdminOut]:
         .all()
     )
 
-    stmt = select(Org).order_by(Org.created_at)
+    stmt = select(Org).options(selectinload(Org.phone_numbers)).order_by(Org.created_at)
     if platform_admin_org_ids:
         stmt = stmt.where(Org.id.notin_(platform_admin_org_ids))
     result = await db.execute(stmt)
@@ -214,8 +217,9 @@ async def list_orgs(db: DbDep, _admin: PlatformAdminDep) -> list[OrgAdminOut]:
                 seat_count=seat_count,
                 admin_email=admin_email,
                 created_at=org.created_at.isoformat(),
-                plivo_phone_number=org.plivo_phone_number,
-                twilio_phone_number=org.twilio_phone_number,
+                phone_numbers=[
+                    OrgPhoneNumberOut.model_validate(n, from_attributes=True) for n in org.phone_numbers
+                ],
                 whatsapp_phone_number_id=org.whatsapp_phone_number_id,
             )
         )
@@ -238,17 +242,19 @@ async def update_org(
         raise HTTPException(status_code=404, detail="Organization not found")
 
     fields = payload.model_dump(exclude_unset=True)
+    phone_numbers = fields.pop("phone_numbers", None)
     if "name" in fields:
         name = (fields["name"] or "").strip()
         if not name:
             raise HTTPException(status_code=400, detail="Organization name cannot be empty")
         fields["name"] = name
-    for key in ("plivo_phone_number", "twilio_phone_number", "whatsapp_phone_number_id"):
-        if key in fields and fields[key] is not None:
-            fields[key] = fields[key].strip() or None
+    if "whatsapp_phone_number_id" in fields and fields["whatsapp_phone_number_id"] is not None:
+        fields["whatsapp_phone_number_id"] = fields["whatsapp_phone_number_id"].strip() or None
 
     for field, value in fields.items():
         setattr(org_row, field, value)
+    if phone_numbers is not None:
+        await replace_org_phone_numbers(db, org_row.id, payload.phone_numbers or [])
 
     try:
         await db.commit()
@@ -258,7 +264,11 @@ async def update_org(
             status_code=409,
             detail="That number is already assigned to another organization",
         ) from exc
-    await db.refresh(org_row)
+
+    result = await db.execute(
+        select(Org).options(selectinload(Org.phone_numbers)).where(Org.id == org_row.id)
+    )
+    org_row = result.scalar_one()
 
     seat_count_result = await db.execute(
         select(func.count()).select_from(OrgMembership).where(OrgMembership.org_id == org_row.id)
@@ -287,8 +297,9 @@ async def update_org(
         seat_count=seat_count,
         admin_email=admin_email,
         created_at=org_row.created_at.isoformat(),
-        plivo_phone_number=org_row.plivo_phone_number,
-        twilio_phone_number=org_row.twilio_phone_number,
+        phone_numbers=[
+            OrgPhoneNumberOut.model_validate(n, from_attributes=True) for n in org_row.phone_numbers
+        ],
         whatsapp_phone_number_id=org_row.whatsapp_phone_number_id,
     )
 

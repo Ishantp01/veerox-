@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.voice import failover as voice_failover
+from apps.api.channels.voice.org_numbers import get_default_numbers
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.db.models.account_user import AccountUser
@@ -1104,8 +1105,7 @@ async def initiate_ai_call(
 
     normalized = _normalize_phone(target_phone)
     org = await db.get(Org, org_id)
-    plivo_from = f"+{org.plivo_phone_number}" if org and org.plivo_phone_number else None
-    twilio_from = f"+{org.twilio_phone_number}" if org and org.twilio_phone_number else None
+    plivo_from, twilio_from = await get_default_numbers(db, org_id) if org else (None, None)
 
     answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer?org_id={org_id}"
     try:

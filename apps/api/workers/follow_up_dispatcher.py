@@ -29,8 +29,10 @@ import httpx
 import structlog
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.voice import failover as voice_failover
+from apps.api.channels.voice.org_numbers import get_default_numbers
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.agent import _is_kill_switch_active
@@ -259,7 +261,7 @@ async def _voice_call_permitted(org_id: UUID) -> bool:
     return False
 
 
-async def _place_follow_up_call(task_id: UUID, lead: Lead, org_record: Org | None) -> None:
+async def _place_follow_up_call(db: AsyncSession, task_id: UUID, lead: Lead, org_record: Org | None) -> None:
     """Places an outbound voice call for a voice-channel lead's follow-up
     task — the same one-off single-call pattern as ``routers/admin.py``'s
     ``outbound_call`` (an org_id-scoped answer_url, no CallCampaign/
@@ -276,11 +278,8 @@ async def _place_follow_up_call(task_id: UUID, lead: Lead, org_record: Org | Non
         await _resolve_task(task_id, "skipped")
         return
 
-    plivo_from = (
-        f"+{org_record.plivo_phone_number}" if org_record and org_record.plivo_phone_number else None
-    )
-    twilio_from = (
-        f"+{org_record.twilio_phone_number}" if org_record and org_record.twilio_phone_number else None
+    plivo_from, twilio_from = (
+        await get_default_numbers(db, org_record.id) if org_record else (None, None)
     )
     answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer?org_id={lead.org_id}"
 
@@ -334,7 +333,7 @@ async def _execute_task(task_id: UUID) -> None:
                     # before answering "no".
                     await _resolve_task(task_id, "skipped")
                     return
-                await _place_follow_up_call(task_id, lead, org_record)
+                await _place_follow_up_call(db, task_id, lead, org_record)
                 return
             if lead.channel != "whatsapp":
                 # No automated send path for any other/unknown channel —

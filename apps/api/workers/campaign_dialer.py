@@ -18,6 +18,7 @@ from uuid import UUID
 import httpx
 import structlog
 from sqlalchemy import func, select, update
+from sqlalchemy.orm import aliased
 
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.config import settings
@@ -26,6 +27,7 @@ from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
+from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
@@ -114,9 +116,11 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
     Returns ``[(target_id, phone, attempt_count, plivo_from, twilio_from,
     preferred_provider), ...]`` as strings/int so the caller can place the
     calls outside this short-lived session. ``plivo_from``/``twilio_from``
-    are the owning org's dedicated number on that provider (see
-    ``Org.plivo_phone_number`` / ``Org.twilio_phone_number`` — independent,
-    an org can have both), or ``None`` to fall back to that provider's
+    are the owning org's *default* dedicated number on that provider (see
+    ``db/models/org_phone_number.py`` — an org can have several per
+    provider, joined here filtered to ``is_default`` for this hot path
+    instead of going through ``channels/voice/org_numbers.py::
+    get_default_numbers``), or ``None`` to fall back to that provider's
     platform default. ``preferred_provider`` is the org's explicit
     Plivo/Twilio override (``Org.preferred_voice_provider``), or ``None``
     for automatic ordering. Empty if there's nothing to
@@ -149,16 +153,30 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
         # contending with unrelated admin operations on those tables. A
         # no-op with a single dialer instance — the lock only ever
         # contends against a second instance's own claim attempt.
+        plivo_default = aliased(OrgPhoneNumber)
+        twilio_default = aliased(OrgPhoneNumber)
         stmt = (
             select(
                 CampaignTarget,
                 CallCampaign.org_id,
-                Org.plivo_phone_number,
-                Org.twilio_phone_number,
+                plivo_default.phone_number,
+                twilio_default.phone_number,
                 Org.preferred_voice_provider,
             )
             .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
             .join(Org, Org.id == CallCampaign.org_id)
+            .outerjoin(
+                plivo_default,
+                (plivo_default.org_id == Org.id)
+                & (plivo_default.provider == "plivo")
+                & plivo_default.is_default.is_(True),
+            )
+            .outerjoin(
+                twilio_default,
+                (twilio_default.org_id == Org.id)
+                & (twilio_default.provider == "twilio")
+                & twilio_default.is_default.is_(True),
+            )
             .where(
                 CampaignTarget.status == "pending",
                 CallCampaign.status == "running",

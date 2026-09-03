@@ -224,13 +224,21 @@ export interface Script {
   is_default: boolean;
 }
 
+// One of an org's dedicated Plivo/Twilio numbers — an org can have several
+// per provider (see apps/api/db/models/org_phone_number.py). Outbound calls
+// dial from whichever row per provider has is_default true.
+export interface OrgPhoneNumber {
+  id: string;
+  provider: "plivo" | "twilio";
+  phone_number: string;
+  is_default: boolean;
+  created_at: string;
+}
+
 // GET/PUT /admin/org-numbers — the org's dedicated WhatsApp/calling numbers.
-// Only one of plivo_phone_number/twilio_phone_number is ever set — whichever
-// provider's account was found to own the calling number entered.
 export interface OrgNumbers {
   whatsapp_phone_number_id: string | null;
-  plivo_phone_number: string | null;
-  twilio_phone_number: string | null;
+  phone_numbers: OrgPhoneNumber[];
 }
 
 // GET/PATCH /billing/platform-settings — platform-admin-only view of the

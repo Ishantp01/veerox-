@@ -19,7 +19,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
-from apps.api.db.models import CallCampaign, CampaignTarget, Conversation, Lead, Message, Org, User
+from apps.api.db.models import (
+    CallCampaign,
+    CampaignTarget,
+    Conversation,
+    Lead,
+    Message,
+    Org,
+    OrgPhoneNumber,
+    User,
+)
 from apps.api.deps import get_db, get_redis_dep
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -1058,24 +1067,48 @@ async def test_update_org_numbers_sets_both_providers_independently(
 
     response = await client.put(
         "/admin/org-numbers",
-        json={"plivo_phone_number": "+15550001111", "twilio_phone_number": "+15550002222"},
+        json={
+            "phone_numbers": [
+                {"provider": "plivo", "phone_number": "+15550001111"},
+                {"provider": "twilio", "phone_number": "+15550002222"},
+            ]
+        },
         headers=ADMIN_HEADERS,
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["plivo_phone_number"] == "15550001111"
-    assert body["twilio_phone_number"] == "15550002222"
+    numbers = {n["provider"]: n["phone_number"] for n in body["phone_numbers"]}
+    assert numbers == {"plivo": "15550001111", "twilio": "15550002222"}
 
-    # Updating just one field later must leave the other untouched.
+    # `phone_numbers` omitted entirely leaves the org's numbers untouched.
     response2 = await client.put(
         "/admin/org-numbers",
-        json={"plivo_phone_number": "+15550003333"},
+        json={"whatsapp_phone_number_id": "wa-123"},
         headers=ADMIN_HEADERS,
     )
     assert response2.status_code == 200
     body2 = response2.json()
-    assert body2["plivo_phone_number"] == "15550003333"
-    assert body2["twilio_phone_number"] == "15550002222"
+    numbers2 = {n["provider"]: n["phone_number"] for n in body2["phone_numbers"]}
+    assert numbers2 == {"plivo": "15550001111", "twilio": "15550002222"}
+
+    # Sending phone_numbers again REPLACES the full set — e.g. two Plivo
+    # numbers now, Twilio dropped.
+    response3 = await client.put(
+        "/admin/org-numbers",
+        json={
+            "phone_numbers": [
+                {"provider": "plivo", "phone_number": "+15550003333", "is_default": True},
+                {"provider": "plivo", "phone_number": "+15550004444"},
+            ]
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert response3.status_code == 200
+    body3 = response3.json()
+    plivo_numbers = [n for n in body3["phone_numbers"] if n["provider"] == "plivo"]
+    assert {n["phone_number"] for n in plivo_numbers} == {"15550003333", "15550004444"}
+    assert not any(n["provider"] == "twilio" for n in body3["phone_numbers"])
+    assert next(n for n in plivo_numbers if n["phone_number"] == "15550003333")["is_default"] is True
 
 
 async def test_outbound_call_passes_chosen_provider_through(
@@ -1087,9 +1120,12 @@ async def test_outbound_call_passes_chosen_provider_through(
     from apps.api.routers import admin as admin_module
 
     await _seed_org(db_session)
-    org = await db_session.get(Org, ORG_ID)
-    org.plivo_phone_number = "15550001111"
-    org.twilio_phone_number = "15550002222"
+    db_session.add_all(
+        [
+            OrgPhoneNumber(org_id=ORG_ID, provider="plivo", phone_number="15550001111", is_default=True),
+            OrgPhoneNumber(org_id=ORG_ID, provider="twilio", phone_number="15550002222", is_default=True),
+        ]
+    )
     await db_session.commit()
 
     monkeypatch.setattr(admin_module.voice_failover, "is_configured", lambda: True)
