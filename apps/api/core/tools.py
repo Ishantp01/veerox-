@@ -277,6 +277,12 @@ _HANDOFF_QUEUE_KEY = "human_handoff_queue"
 _LEAD_DEDUPE_PREFIX = "veerox:lead_dedupe:"
 _LEAD_DEDUPE_TTL_SECS = 10 * 60  # 10 minutes per spec §2.3
 
+# Per-org round-robin pointer for transfer_to_human's team notification (see
+# below) — an ever-incrementing counter, not a bounded index, so the team
+# list can grow/shrink between calls without needing to reset or clamp it;
+# the modulo against the current team size happens at read time instead.
+_TRANSFER_ROUND_ROBIN_PREFIX = "veerox:transfer_round_robin:"
+
 # All bookings are interpreted in IST unless the caller explicitly asks for a
 # different timezone on that specific booking (see book_appointment's
 # ``timezone`` arg) — the org has no configured locale of its own, so this is
@@ -605,33 +611,38 @@ async def book_appointment(
     }
 
 
-async def _resolve_team_notify_phone(db: AsyncSession, org_id: UUID) -> str | None:
-    """Best-effort org contact to WhatsApp-notify on a human handoff.
+# Template for transfer_to_human's team notification (see below) — two
+# params: the caller's own number, and an optional reason. Meta requires
+# every {{n}} to be filled on every send, so "optional" is handled by
+# substituting _NO_REASON_GIVEN when the caller/LLM didn't supply one,
+# rather than omitting the placeholder.
+#
+# Submitted to Meta for review but not yet approved — sending an
+# unapproved template name fails outright, so transfer_to_human falls back
+# to the older (worse-fitting, but already-approved) appointment_confirmation
+# template until this flips to True. Check the WhatsApp Templates dashboard
+# page (or wa_client.list_templates()) for APPROVED status, then flip it.
+_AGENT_CONNECT_TEMPLATE_NAME = "agent_connect_request"
+_AGENT_CONNECT_TEMPLATE_APPROVED = False
+_NO_REASON_GIVEN = "Not specified"
 
-    Prefers the org owner's mobile (the ``AccountUser`` behind the
-    ``OrgMembership`` row with no ``invited_by_id`` — the account that
-    provisioned the org). Falls back to the earliest-added teammate with a
-    mobile on file, of ANY role — not just admins, since a plain "member"
-    invite (the dashboard's invite form default role) is just as valid a
-    notify target once someone's bothered to give them a phone number.
-    Returns ``None`` when nobody on the org has a mobile number on file
-    (``AccountUser.mobile`` is optional — only set when SMS'd a login token
-    at provisioning, or filled in on the team invite form).
+
+async def _resolve_team_notify_phones(db: AsyncSession, org_id: UUID) -> list[str]:
+    """Every org teammate's WhatsApp-notify number for a human handoff, in a
+    stable order (earliest-added membership first).
+
+    Includes everyone on the org with a mobile on file — of ANY role, not
+    just admins, since a plain "member" invite (the dashboard's invite
+    form default role) is just as valid a notify target once someone's
+    bothered to give them a phone number. Order matters here: callers use
+    this list for round-robin assignment (see ``transfer_to_human``), which
+    only spreads leads evenly if the same teammate lands at the same index
+    on every call. Returns an empty list when nobody on the org has a
+    mobile number on file (``AccountUser.mobile`` is optional — only set
+    when SMS'd a login token at provisioning, or filled in on the team
+    invite form).
     """
-    owner_result = await db.execute(
-        select(AccountUser.mobile)
-        .join(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
-        .where(
-            OrgMembership.org_id == org_id,
-            OrgMembership.invited_by_id.is_(None),
-            AccountUser.mobile.is_not(None),
-        )
-    )
-    mobile = owner_result.scalar_one_or_none()
-    if mobile:
-        return mobile
-
-    teammate_result = await db.execute(
+    result = await db.execute(
         select(AccountUser.mobile)
         .join(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
         .where(
@@ -639,9 +650,18 @@ async def _resolve_team_notify_phone(db: AsyncSession, org_id: UUID) -> str | No
             AccountUser.mobile.is_not(None),
         )
         .order_by(OrgMembership.created_at)
-        .limit(1)
     )
-    return teammate_result.scalar_one_or_none()
+    seen: set[str] = set()
+    phones: list[str] = []
+    for mobile in result.scalars().all():
+        # A teammate could theoretically hold more than one membership row
+        # on the same org; de-dupe here in Python instead of SELECT DISTINCT
+        # so the ORDER BY above (on a column not in the SELECT list) stays
+        # valid under Postgres's DISTINCT rules.
+        if mobile and mobile not in seen:
+            seen.add(mobile)
+            phones.append(mobile)
+    return phones
 
 
 async def transfer_to_human(
@@ -655,12 +675,17 @@ async def transfer_to_human(
     **_: Any,
 ) -> dict[str, Any]:
     """Escalate to a human: enqueue in Redis, write an escalation ``Lead``,
-    and best-effort WhatsApp-notify the org's team (see
-    ``_resolve_team_notify_phone``) with the lead's name/number via the
-    pre-approved ``appointment_confirmation`` template — reused here since
-    it's the only Meta-approved template on hand; its (name, date, time)
-    slots carry (lead name, a fixed "new lead" label, the lead's phone)
-    instead of actual appointment details.
+    and best-effort WhatsApp-notify one team member on the org, picked by
+    round-robin over ``_resolve_team_notify_phones`` (see
+    ``_TRANSFER_ROUND_ROBIN_PREFIX``). Round-robin instead of notifying
+    everyone every time so leads land on whoever's turn it is rather than
+    piling every handoff on the whole team at once.
+
+    Sends ``agent_connect_request`` (caller's number + reason) once that
+    template is Meta-approved (``_AGENT_CONNECT_TEMPLATE_APPROVED``);
+    until then, falls back to the already-approved
+    ``appointment_confirmation`` template reused with escalation-shaped
+    params, same as before that template existed.
 
     The ``Lead`` row is only written when the agent layer supplies a
     ``user_id`` (the LLM args don't carry one). When absent, the Redis
@@ -680,25 +705,41 @@ async def transfer_to_human(
             phone = user.phone
             name = user.name
 
-    notify_phone = await _resolve_team_notify_phone(db, org_id)
-    if notify_phone:
+    notify_phones = await _resolve_team_notify_phones(db, org_id)
+    if notify_phones:
+        # INCR is atomic across concurrent calls, so two escalations landing
+        # at the same instant still get distinct, consecutive turns instead
+        # of racing onto the same teammate. The counter only ever grows —
+        # taking it modulo the *current* team size at read time is what
+        # lets people be added/removed between calls with no reset needed.
+        turn = await redis.incr(f"{_TRANSFER_ROUND_ROBIN_PREFIX}{org_id}")
+        notify_phone = notify_phones[(turn - 1) % len(notify_phones)]
+
+        if _AGENT_CONNECT_TEMPLATE_APPROVED:
+            template_name = _AGENT_CONNECT_TEMPLATE_NAME
+            body_params = [phone or "not provided", reason or _NO_REASON_GIVEN]
+        else:
+            template_name = _APPOINTMENT_TEMPLATE_NAME
+            body_params = [
+                name or "there",
+                "a new lead requesting human follow-up",
+                phone or "not provided",
+            ]
+
         org = await db.get(Org, org_id)
         phone_number_id = org.whatsapp_phone_number_id if org else None
         try:
             await wa_client.send_template(
                 _normalize_phone(notify_phone),
-                _APPOINTMENT_TEMPLATE_NAME,
-                body_params=[
-                    name or "there",
-                    "a new lead requesting human follow-up",
-                    phone or "not provided",
-                ],
+                template_name,
+                body_params=body_params,
                 phone_number_id=phone_number_id,
             )
         except httpx.HTTPError:
             logger.warning(
                 "transfer_to_human_notify_send_error",
                 org_id=str(org_id),
+                notify_phone=notify_phone,
                 exc_info=True,
             )
     else:

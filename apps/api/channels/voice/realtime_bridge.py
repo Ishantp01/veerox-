@@ -187,7 +187,7 @@ async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | N
 
 
 def _session_update_event(instructions: str) -> dict[str, Any]:
-    """Initial session config: mu-law I/O, server VAD, shared tool schemas.
+    """Initial session config: mu-law I/O, semantic VAD, shared tool schemas.
 
     GA Realtime API shape (the beta shape — flat input_audio_format /
     output_audio_format / top-level voice / temperature — was removed on
@@ -199,29 +199,20 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
         "audio": {
             "input": {
                 "format": {"type": "audio/pcmu"},
-                # Defaults (threshold 0.5, no prefix_padding_ms, no noise
-                # reduction) are tuned for close-mic audio and false-trigger
-                # on phone-line background noise/crosstalk, which then gets
-                # transcribed as bogus user speech and fed to the model as if
-                # it were real input. threshold raised + prefix_padding_ms
-                # added to require a clearer, sustained speech onset before
-                # treating it as a turn; far_field noise_reduction is
-                # OpenAI's profile for telephony/speakerphone-style audio
-                # (as opposed to near_field headset audio) and filters
-                # background noise before VAD/transcription ever see it.
+                # semantic_vad (not server_vad's fixed threshold/silence
+                # timer) decides turn-end from the *content* of what was
+                # said, not just when the caller goes quiet. That's what
+                # stops a short backchannel ("ok", "haan", "theek hai")
+                # from being treated as the caller taking the turn and
+                # barging in on the agent's current response — server_vad
+                # can't tell those apart from a real interruption since
+                # both look identical at the moment speech starts.
+                # eagerness "low" biases toward giving the caller more room
+                # before ending their turn (fewer false interruptions),
+                # trading a little perceived response latency for it.
                 "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": 0.6,
-                    "prefix_padding_ms": 300,
-                    # How long the caller must go quiet before their turn is
-                    # considered over and a response starts generating.
-                    # Lowered from OpenAI's 500ms default to cut perceived
-                    # response latency — unlike threshold/prefix_padding_ms
-                    # above, this wasn't raised for noise reasons, it was
-                    # just sitting at the default. Tradeoff: too low risks
-                    # the AI cutting in during a caller's natural mid-
-                    # sentence pause (e.g. reading out a phone number).
-                    "silence_duration_ms": 300,
+                    "type": "semantic_vad",
+                    "eagerness": "low",
                 },
                 "noise_reduction": {"type": "far_field"},
                 "transcription": {"model": "whisper-1"},

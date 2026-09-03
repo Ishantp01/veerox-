@@ -11,8 +11,9 @@ class TeamMemberOut(BaseModel):
     email: str
     full_name: str | None = None
     # E.164 mobile number, if this teammate has one on file — see
-    # core/tools.py's _resolve_team_notify_phone, which WhatsApp-notifies
-    # this number when a lead asks to be connected to a human.
+    # core/tools.py's _resolve_team_notify_phones, which round-robins a
+    # WhatsApp notification to one team member's number when a lead asks
+    # to be connected to a human.
     mobile: str | None = None
     role: str
     is_active: bool
@@ -27,9 +28,9 @@ class TeamMemberOut(BaseModel):
 class InviteMemberIn(BaseModel):
     email: EmailStr
     full_name: str | None = None
-    # E.164 mobile number. Optional — but without it, this teammate can't be
-    # the one WhatsApp-notified on a human handoff (see
-    # core/tools.py::_resolve_team_notify_phone).
+    # E.164 mobile number. Optional — but without it, this teammate is
+    # skipped by the round-robin WhatsApp notification on a human handoff
+    # (see core/tools.py::_resolve_team_notify_phones).
     mobile: str | None = None
     role: str = "member"
 

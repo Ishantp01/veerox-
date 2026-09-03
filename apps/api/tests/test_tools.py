@@ -42,7 +42,7 @@ ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 class _FakeRedis:
     """Minimal Redis stand-in for the bits the tool handlers touch.
 
-    Implements just ``set(... nx=, ex=)``, ``rpush``, ``get``.
+    Implements just ``set(... nx=, ex=)``, ``rpush``, ``get``, ``incr``.
     """
 
     def __init__(self) -> None:
@@ -68,6 +68,11 @@ class _FakeRedis:
     async def rpush(self, key: str, value: str) -> int:
         self.lists.setdefault(key, []).append(value)
         return len(self.lists[key])
+
+    async def incr(self, key: str) -> int:
+        value = int(self.kv.get(key, "0")) + 1
+        self.kv[key] = str(value)
+        return value
 
 
 @pytest.fixture
@@ -516,7 +521,8 @@ async def test_transfer_to_human_notifies_org_owner_via_whatsapp(
     db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The org owner's mobile gets the appointment_confirmation template
-    with the lead's name/number filling the (name, date, time) slots."""
+    (agent_connect_request isn't Meta-approved yet) with the lead's
+    name/number filling the (name, date, time) slots."""
     sent: list[dict[str, object]] = []
 
     async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
@@ -555,9 +561,11 @@ async def test_transfer_to_human_notifies_org_owner_via_whatsapp(
 async def test_transfer_to_human_falls_back_to_any_teammate_when_owner_has_no_mobile(
     db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Falls back to a plain "member"-role teammate (the invite form's
-    default role), not just admins — role shouldn't gate who can be the
-    notify target, only whether they have a mobile on file."""
+    """Includes a plain "member"-role teammate (the invite form's default
+    role) in the notify pool, not just admins — role shouldn't gate who can
+    be a notify target, only whether they have a mobile on file. The owner
+    has no mobile so is excluded entirely, leaving the member as the only
+    (and therefore every-turn) pick."""
     sent: list[dict[str, object]] = []
 
     async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
