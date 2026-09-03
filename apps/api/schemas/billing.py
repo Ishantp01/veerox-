@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn, OrgPhoneNumberOut
 
@@ -68,6 +68,8 @@ class OrgAdminOut(BaseModel):
     billing_status: str
     seat_count: int
     admin_email: str | None
+    admin_name: str | None = None
+    admin_mobile: str | None = None
     created_at: str
     phone_numbers: list[OrgPhoneNumberOut] = []
     whatsapp_phone_number_id: str | None = None
@@ -81,9 +83,19 @@ class OrgUpdateIn(BaseModel):
 
     `phone_numbers` omitted = the org's numbers are left untouched; present
     (including `[]`) = its full number set is replaced with this one (see
-    channels/voice/org_numbers.py::replace_org_phone_numbers)."""
+    channels/voice/org_numbers.py::replace_org_phone_numbers).
+
+    `admin_email`/`admin_name`/`admin_mobile` edit the org's own admin
+    AccountUser (the earliest `role="admin"` membership) — same fields
+    collected on creation (see ProvisionOrgIn), now editable afterward too.
+    Deliberately excludes the login token itself: that's rotated via the
+    dedicated POST /billing/orgs/{id}/regenerate-admin-token instead of a
+    plain field edit, since a new token can only ever be shown once."""
 
     name: str | None = None
+    admin_email: EmailStr | None = None
+    admin_name: str | None = None
+    admin_mobile: str | None = None
     phone_numbers: list[OrgPhoneNumberIn] | None = None
     whatsapp_phone_number_id: str | None = None
 

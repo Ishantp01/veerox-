@@ -99,7 +99,7 @@ export default function OrganizationsPage() {
           <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
-                <SkeletonRows rows={5} cols={6} />
+                <SkeletonRows rows={5} cols={8} />
               </tbody>
             </Table>
           </div>
@@ -114,6 +114,7 @@ export default function OrganizationsPage() {
               <TableRow isHeader>
                 <TableHeader>Organization</TableHeader>
                 <TableHeader>Admin</TableHeader>
+                <TableHeader>Email</TableHeader>
                 <TableHeader>Plan</TableHeader>
                 <TableHeader>Status</TableHeader>
                 <TableHeader>Team members</TableHeader>
@@ -127,6 +128,7 @@ export default function OrganizationsPage() {
                   <TableCell className="font-medium text-slate-900 dark:text-slate-100">
                     {org.name}
                   </TableCell>
+                  <TableCell>{org.admin_name ?? "—"}</TableCell>
                   <TableCell>{org.admin_email ?? "—"}</TableCell>
                   <TableCell>{org.plan_code ?? "No plan"}</TableCell>
                   <TableCell>

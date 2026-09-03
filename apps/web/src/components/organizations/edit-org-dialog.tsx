@@ -17,9 +17,21 @@ import {
 } from "@/components/ui";
 import { PhoneNumberListField, type PhoneNumberEntry } from "./phone-number-list-field";
 import { useUpdateOrgAdmin, type AdminOrg } from "@/lib/hooks/useAdminOrgs";
+import { E164_REGEX, E164_MESSAGE } from "@/lib/phone";
 
 const editOrgSchema = z.object({
   orgName: z.string().trim().min(1, "Organization name is required"),
+  adminEmail: z.string().trim().email(),
+  adminName: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z\s'.-]*$/, "Name should only contain letters")
+    .optional(),
+  adminMobile: z
+    .string()
+    .trim()
+    .optional()
+    .refine((v) => !v || E164_REGEX.test(v), E164_MESSAGE),
   whatsappNumberId: z.string().trim().optional(),
 });
 
@@ -29,6 +41,9 @@ type OrgFieldErrors = Partial<Record<keyof EditOrgForm, string>>;
 function formFromOrg(org: AdminOrg): EditOrgForm {
   return {
     orgName: org.name,
+    adminEmail: org.admin_email ?? "",
+    adminName: org.admin_name ?? "",
+    adminMobile: org.admin_mobile ?? "",
     whatsappNumberId: org.whatsapp_phone_number_id ?? "",
   };
 }
@@ -43,10 +58,13 @@ function numbersFromOrg(org: AdminOrg, provider: "plivo" | "twilio"): PhoneNumbe
 }
 
 /**
- * Platform-admin-only: edits an existing org's own profile — name and its
- * dedicated calling/WhatsApp numbers. Plan/billing status aren't editable
- * here since they're driven by the checkout/payment flow (see
- * apps/api/schemas/billing.py's OrgUpdateIn for why).
+ * Platform-admin-only: edits an existing org's own profile — name, its
+ * admin's email/name/mobile, and its dedicated calling/WhatsApp numbers.
+ * The admin's login token itself isn't editable here — that's rotated via
+ * RegenerateTokenDialog instead, since a new token can only be shown once.
+ * Plan/billing status aren't editable here either since they're driven by
+ * the checkout/payment flow (see apps/api/schemas/billing.py's OrgUpdateIn
+ * for why).
  */
 export function EditOrgDialog({ org }: { org: AdminOrg }) {
   const [open, setOpen] = useState(false);
@@ -92,6 +110,9 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
       {
         orgId: org.id,
         name: parsed.data.orgName.trim(),
+        admin_email: parsed.data.adminEmail.trim(),
+        admin_name: parsed.data.adminName?.trim() ?? "",
+        admin_mobile: parsed.data.adminMobile?.trim() ?? "",
         phone_numbers: [
           ...plivoNumbers.map((n) => ({ provider: "plivo" as const, ...n })),
           ...twilioNumbers.map((n) => ({ provider: "twilio" as const, ...n })),
@@ -145,6 +166,58 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
               {fieldErrors.orgName && (
                 <p id="edit-org-name-error" className="mt-1.5 text-xs text-red-600">
                   {fieldErrors.orgName}
+                </p>
+              )}
+            </div>
+            <div>
+              <Label htmlFor="edit-org-admin-email">Admin email *</Label>
+              <Input
+                id="edit-org-admin-email"
+                type="email"
+                required
+                value={form.adminEmail}
+                onChange={(e) => updateField("adminEmail", e.target.value)}
+                aria-invalid={fieldErrors.adminEmail ? true : undefined}
+                aria-describedby={fieldErrors.adminEmail ? "edit-org-admin-email-error" : undefined}
+              />
+              {fieldErrors.adminEmail && (
+                <p id="edit-org-admin-email-error" className="mt-1.5 text-xs text-red-600">
+                  {fieldErrors.adminEmail}
+                </p>
+              )}
+            </div>
+            <div>
+              <Label htmlFor="edit-org-admin-name">Admin name</Label>
+              <Input
+                id="edit-org-admin-name"
+                value={form.adminName}
+                onChange={(e) => updateField("adminName", e.target.value)}
+                placeholder="Optional"
+                aria-invalid={fieldErrors.adminName ? true : undefined}
+                aria-describedby={fieldErrors.adminName ? "edit-org-admin-name-error" : undefined}
+              />
+              {fieldErrors.adminName && (
+                <p id="edit-org-admin-name-error" className="mt-1.5 text-xs text-red-600">
+                  {fieldErrors.adminName}
+                </p>
+              )}
+            </div>
+            <div>
+              <Label htmlFor="edit-org-admin-mobile">Admin mobile number</Label>
+              <Input
+                id="edit-org-admin-mobile"
+                type="tel"
+                inputMode="tel"
+                maxLength={16}
+                value={form.adminMobile}
+                onChange={(e) => updateField("adminMobile", e.target.value.replace(/[^\d+]/g, ""))}
+                placeholder="+919876543210"
+                aria-invalid={fieldErrors.adminMobile ? true : undefined}
+                aria-describedby={fieldErrors.adminMobile ? "edit-org-admin-mobile-error" : undefined}
+              />
+              {fieldErrors.adminMobile && (
+                <p id="edit-org-admin-mobile-error" className="mt-1.5 text-xs text-red-600">
+                  {fieldErrors.adminMobile}
                 </p>
               )}
             </div>

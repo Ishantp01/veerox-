@@ -9,6 +9,8 @@ export interface AdminOrg {
   billing_status: string;
   seat_count: number;
   admin_email: string | null;
+  admin_name: string | null;
+  admin_mobile: string | null;
   created_at: string;
   phone_numbers: OrgPhoneNumber[];
   whatsapp_phone_number_id: string | null;
@@ -111,6 +113,9 @@ export function useRegenerateAdminToken() {
 export interface UpdateOrgInput {
   orgId: string;
   name?: string;
+  admin_email?: string;
+  admin_name?: string;
+  admin_mobile?: string;
   // Omitted = the org's numbers are left untouched; present (including [])
   // = its full number set is replaced with this one.
   phone_numbers?: OrgPhoneNumberInput[];

@@ -11,6 +11,7 @@ import uuid
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
@@ -321,3 +322,91 @@ async def test_delete_org_refuses_platform_admin_owned_org(
 async def test_delete_org_404_for_unknown_org(client: AsyncClient) -> None:
     response = await client.delete(f"/billing/orgs/{uuid.uuid4()}", headers=ADMIN_HEADERS)
     assert response.status_code == 404
+
+
+async def test_org_directory_lists_admin_name_and_mobile(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """GET /billing/orgs must surface the admin's name/mobile alongside
+    email — the Organizations table shows the admin's name (falling back to
+    email) and the edit dialog needs all three to prefill."""
+    provision_response = await client.post(
+        "/auth/provision-org",
+        json={
+            "org_name": "Directory Co",
+            "email": "dir-admin@example.com",
+            "full_name": "Dana Admin",
+            "mobile": "+919876500001",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert provision_response.status_code == 201
+    org_id = provision_response.json()["org_id"]
+
+    response = await client.get("/billing/orgs", headers=ADMIN_HEADERS)
+    assert response.status_code == 200
+    org = next(o for o in response.json() if o["id"] == org_id)
+    assert org["admin_email"] == "dir-admin@example.com"
+    assert org["admin_name"] == "Dana Admin"
+    assert org["admin_mobile"] == "+919876500001"
+
+
+async def test_update_org_edits_admin_email_name_and_mobile(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    provision_response = await client.post(
+        "/auth/provision-org",
+        json={"org_name": "Edit Co", "email": "before@example.com", "mobile": "+919876500002"},
+        headers=ADMIN_HEADERS,
+    )
+    assert provision_response.status_code == 201
+    org_id = provision_response.json()["org_id"]
+
+    response = await client.patch(
+        f"/billing/orgs/{org_id}",
+        json={
+            "admin_email": "after@example.com",
+            "admin_name": "New Name",
+            "admin_mobile": "+919876500003",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["admin_email"] == "after@example.com"
+    assert body["admin_name"] == "New Name"
+    assert body["admin_mobile"] == "+919876500003"
+
+    # The old email no longer works for anything, and the org's own admin
+    # login token (unchanged — only the profile fields were edited) still
+    # authenticates the new email.
+    account_result = await db_session.execute(
+        select(AccountUser).where(AccountUser.email == "after@example.com")
+    )
+    assert account_result.scalar_one().full_name == "New Name"
+
+
+async def test_update_org_admin_email_conflict_returns_409(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    first = await client.post(
+        "/auth/provision-org",
+        json={"org_name": "First Co", "email": "taken@example.com", "mobile": "+919876500004"},
+        headers=ADMIN_HEADERS,
+    )
+    assert first.status_code == 201
+
+    second = await client.post(
+        "/auth/provision-org",
+        json={"org_name": "Second Co", "email": "second@example.com", "mobile": "+919876500005"},
+        headers=ADMIN_HEADERS,
+    )
+    assert second.status_code == 201
+    second_org_id = second.json()["org_id"]
+
+    response = await client.patch(
+        f"/billing/orgs/{second_org_id}",
+        json={"admin_email": "taken@example.com"},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 409

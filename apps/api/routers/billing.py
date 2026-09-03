@@ -199,13 +199,14 @@ async def list_orgs(db: DbDep, _admin: PlatformAdminDep) -> list[OrgAdminOut]:
         seat_count = seat_count_result.scalar_one()
 
         admin_result = await db.execute(
-            select(AccountUser.email)
+            select(AccountUser.email, AccountUser.full_name, AccountUser.mobile)
             .join(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
             .where(OrgMembership.org_id == org.id, OrgMembership.role == "admin")
             .order_by(OrgMembership.created_at)
             .limit(1)
         )
-        admin_email = admin_result.scalar_one_or_none()
+        admin_row = admin_result.first()
+        admin_email, admin_name, admin_mobile = admin_row if admin_row else (None, None, None)
 
         plan = plans_by_id.get(org.plan_id) if org.plan_id else None
         out.append(
@@ -216,6 +217,8 @@ async def list_orgs(db: DbDep, _admin: PlatformAdminDep) -> list[OrgAdminOut]:
                 billing_status=org.billing_status,
                 seat_count=seat_count,
                 admin_email=admin_email,
+                admin_name=admin_name,
+                admin_mobile=admin_mobile,
                 created_at=org.created_at.isoformat(),
                 phone_numbers=[
                     OrgPhoneNumberOut.model_validate(n, from_attributes=True) for n in org.phone_numbers
@@ -243,6 +246,9 @@ async def update_org(
 
     fields = payload.model_dump(exclude_unset=True)
     phone_numbers = fields.pop("phone_numbers", None)
+    admin_fields = {
+        key: fields.pop(key) for key in ("admin_email", "admin_name", "admin_mobile") if key in fields
+    }
     if "name" in fields:
         name = (fields["name"] or "").strip()
         if not name:
@@ -256,14 +262,34 @@ async def update_org(
     if phone_numbers is not None:
         await replace_org_phone_numbers(db, org_row.id, payload.phone_numbers or [])
 
+    if admin_fields:
+        admin_user_result = await db.execute(
+            select(AccountUser)
+            .join(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
+            .where(OrgMembership.org_id == org_row.id, OrgMembership.role == "admin")
+            .order_by(OrgMembership.created_at)
+            .limit(1)
+        )
+        admin_user = admin_user_result.scalar_one_or_none()
+        if admin_user is None:
+            raise HTTPException(status_code=404, detail="This organization has no admin account to edit")
+        if "admin_email" in admin_fields:
+            admin_user.email = admin_fields["admin_email"].strip()
+        if "admin_name" in admin_fields:
+            admin_user.full_name = (admin_fields["admin_name"] or "").strip() or None
+        if "admin_mobile" in admin_fields:
+            admin_user.mobile = (admin_fields["admin_mobile"] or "").strip() or None
+
     try:
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="That number is already assigned to another organization",
-        ) from exc
+        detail = (
+            "That email is already used by another account"
+            if "admin_email" in admin_fields
+            else "That number is already assigned to another organization"
+        )
+        raise HTTPException(status_code=409, detail=detail) from exc
 
     result = await db.execute(
         select(Org).options(selectinload(Org.phone_numbers)).where(Org.id == org_row.id)
@@ -276,13 +302,14 @@ async def update_org(
     seat_count = seat_count_result.scalar_one()
 
     admin_result = await db.execute(
-        select(AccountUser.email)
+        select(AccountUser.email, AccountUser.full_name, AccountUser.mobile)
         .join(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
         .where(OrgMembership.org_id == org_row.id, OrgMembership.role == "admin")
         .order_by(OrgMembership.created_at)
         .limit(1)
     )
-    admin_email = admin_result.scalar_one_or_none()
+    admin_row = admin_result.first()
+    admin_email, admin_name, admin_mobile = admin_row if admin_row else (None, None, None)
 
     plan_code: str | None = None
     if org_row.plan_id is not None:
@@ -296,6 +323,8 @@ async def update_org(
         billing_status=org_row.billing_status,
         seat_count=seat_count,
         admin_email=admin_email,
+        admin_name=admin_name,
+        admin_mobile=admin_mobile,
         created_at=org_row.created_at.isoformat(),
         phone_numbers=[
             OrgPhoneNumberOut.model_validate(n, from_attributes=True) for n in org_row.phone_numbers
