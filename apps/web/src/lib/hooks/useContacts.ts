@@ -54,6 +54,29 @@ export function useCreateContact() {
   });
 }
 
+export interface ContactUpdateInput {
+  name?: string | null;
+  email?: string | null;
+  company?: string | null;
+}
+
+/** PATCH /crm/contacts/{id} → Contact. Phone isn't editable — it's the contact's unique identity key. */
+export function useUpdateContact() {
+  const queryClient = useQueryClient();
+
+  return useMutation<Contact, Error, { id: string } & ContactUpdateInput>({
+    mutationFn: ({ id, ...body }) =>
+      apiFetch<Contact>(`/crm/contacts/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ["contacts"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.contact(id) });
+    },
+  });
+}
+
 /** DELETE /crm/contacts/{id} — leads/appointments keep existing, just lose the contact link. */
 export function useDeleteContact() {
   const queryClient = useQueryClient();

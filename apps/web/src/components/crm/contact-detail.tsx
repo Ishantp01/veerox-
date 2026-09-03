@@ -7,6 +7,7 @@ import { ArrowLeft, Building2, Trash2, UserCheck } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { ChannelBadge } from "@/components/conversations/channel-badge";
+import { EditContactDialog } from "@/components/crm/edit-contact-dialog";
 import { IntentBadge } from "@/components/leads/intent-badge";
 import { StatusBadge } from "@/components/leads/status-badge";
 import {
@@ -84,15 +85,18 @@ export function ContactDetail({ id }: ContactDetailProps) {
               title={contact.data.name ?? formatPhone(contact.data.phone)}
               description={formatPhone(contact.data.phone)}
               action={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDelete}
-                  loading={deleteContact.isPending}
-                >
-                  {!deleteContact.isPending && <Trash2 size={14} aria-hidden />}
-                  Delete contact
-                </Button>
+                <div className="flex items-center gap-2">
+                  <EditContactDialog contact={contact.data} />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDelete}
+                    loading={deleteContact.isPending}
+                  >
+                    {!deleteContact.isPending && <Trash2 size={14} aria-hidden />}
+                    Delete contact
+                  </Button>
+                </div>
               }
             />
 

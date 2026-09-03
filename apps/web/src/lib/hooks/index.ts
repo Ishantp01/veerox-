@@ -51,8 +51,10 @@ export {
   useContacts,
   useContact,
   useCreateContact,
+  useUpdateContact,
   useDeleteContact,
   type ContactCreateInput,
+  type ContactUpdateInput,
 } from "./useContacts";
 export {
   useAppointments,
