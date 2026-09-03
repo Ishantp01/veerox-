@@ -207,12 +207,14 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
                 # barging in on the agent's current response — server_vad
                 # can't tell those apart from a real interruption since
                 # both look identical at the moment speech starts.
-                # eagerness "low" biases toward giving the caller more room
-                # before ending their turn (fewer false interruptions),
-                # trading a little perceived response latency for it.
+                # eagerness "medium" (was "low") trims the wait before the
+                # agent decides the caller is done talking, cutting response
+                # latency at the cost of a somewhat higher chance of the
+                # agent barging in on a caller who paused mid-sentence — see
+                # CHANGES_voice_latency.md for the tradeoff writeup.
                 "turn_detection": {
                     "type": "semantic_vad",
-                    "eagerness": "low",
+                    "eagerness": "medium",
                 },
                 "noise_reduction": {"type": "far_field"},
                 "transcription": {"model": "whisper-1"},
