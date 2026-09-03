@@ -43,7 +43,7 @@ export default function ForgotTokenPage() {
   }
 
   return (
-    <div className="flex min-h-full items-center justify-center">
+    <div className="flex min-h-screen items-center justify-center bg-canvas-950 bg-mesh-dark p-6">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-8">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 text-white mb-4 shadow-glow-lg">

@@ -17,7 +17,7 @@ from uuid import UUID
 
 import httpx
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
@@ -30,6 +30,7 @@ from apps.api.core.sessions import create_session, delete_session, invalidate_us
 from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
+from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import CurrentUserDep, DbDep, RedisDep, verify_platform_admin
 from apps.api.rate_limit import limiter
 from apps.api.schemas.auth import (
@@ -53,26 +54,31 @@ DEFAULT_OWNER_ID = UUID("00000000-0000-0000-0000-0000000000a1")
 DEFAULT_OWNER_EMAIL = "owner@veerox-admin.com"
 
 
-async def _ensure_default_org_owner(db: DbDep) -> tuple[AccountUser, OrgMembership]:
-    """Return the (account, membership) pair for the default org's admin
-    account, creating whichever half is missing.
+async def _ensure_default_org_owner(db: DbDep) -> tuple[AccountUser, OrgMembership, str | None]:
+    """Return the (account, membership, org_name) triple for the default
+    org's admin account, creating whichever half is missing.
 
-    One combined outer-join lookup instead of two separate selects — DB is a
-    remote Neon instance (see .env), so each extra round trip is real
-    latency on the admin-token login path, not just an extra local query.
+    One combined outer-join lookup (now also pulling Org.name) instead of
+    separate selects — DB is a remote Neon instance (see .env), so each
+    extra round trip is real latency on the admin-token login path, not
+    just an extra local query. The Org.name join costs nothing extra here
+    since DEFAULT_ORG_ID is a constant, and it saves login() a whole
+    separate round trip to fetch the org afterward.
     """
     result = await db.execute(
-        select(AccountUser, OrgMembership)
+        select(AccountUser, OrgMembership, Org.name)
         .outerjoin(
             OrgMembership,
             (OrgMembership.account_user_id == AccountUser.id)
             & (OrgMembership.org_id == DEFAULT_ORG_ID),
         )
+        .outerjoin(Org, Org.id == DEFAULT_ORG_ID)
         .where(AccountUser.id == DEFAULT_OWNER_ID)
     )
     row = result.first()
     account_user = row[0] if row else None
     membership = row[1] if row else None
+    org_name = row[2] if row else None
 
     if account_user is None:
         account_user = AccountUser(
@@ -98,8 +104,12 @@ async def _ensure_default_org_owner(db: DbDep) -> tuple[AccountUser, OrgMembersh
         )
         db.add(membership)
 
-    await db.flush()
-    return account_user, membership
+    # Commit (not just flush) — this function may be creating the default
+    # org owner for the first time, and the login endpoint below no longer
+    # commits on its own (last_login_at moved to a background task), so
+    # this is the only place those rows get persisted.
+    await db.commit()
+    return account_user, membership, org_name
 
 
 @router.post("/provision-org", response_model=ProvisionOrgOut, status_code=201)
@@ -177,47 +187,62 @@ async def provision_org(
     )
 
 
+async def _record_last_login(account_user_id: UUID) -> None:
+    """Runs as a background task, off the login request's critical path, in
+    its own session — the request's `db` session may already be torn down
+    by the time this executes. last_login_at is purely informational, so
+    it doesn't need to block the client getting its session token back
+    (saves a full extra round trip against the remote Neon instance)."""
+    async with AsyncSessionLocal() as session:
+        account_user = await session.get(AccountUser, account_user_id)
+        if account_user is not None:
+            account_user.last_login_at = datetime.now(UTC)
+            await session.commit()
+
+
 @router.post("/login", response_model=SessionOut)
-async def login(payload: LoginIn, db: DbDep, redis: RedisDep) -> SessionOut:
+async def login(payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: BackgroundTasks) -> SessionOut:
     account_user: AccountUser | None
     membership: OrgMembership | None
+    org_name: str | None
 
     # The shared admin token never matches a real hashed token (see
     # core/security.py — every real token is high-entropy and unique), so
     # looking it up by hash first is a guaranteed-miss round trip on this
     # path. Going straight to the dev/admin account skips it.
     if payload.token == settings.admin_token:
-        account_user, membership = await _ensure_default_org_owner(db)
+        account_user, membership, org_name = await _ensure_default_org_owner(db)
     else:
         # One outer-join query instead of a separate account lookup + a
-        # separate membership lookup — real latency savings against a
-        # remote DB (see .env), not just fewer local queries.
+        # separate membership lookup + a separate org lookup — real latency
+        # savings against a remote DB (see .env), not just fewer local
+        # queries. Org.name rides along in this same query instead of a
+        # trailing db.get(Org, ...) after the session is created.
         result = await db.execute(
-            select(AccountUser, OrgMembership)
+            select(AccountUser, OrgMembership, Org.name)
             .outerjoin(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
+            .outerjoin(Org, Org.id == OrgMembership.org_id)
             .where(AccountUser.token_hash == hash_token(payload.token))
             .order_by(OrgMembership.created_at)
             .limit(1)
         )
         row = result.first()
-        account_user, membership = row if row else (None, None)
+        account_user, membership, org_name = row if row else (None, None, None)
 
     if account_user is None or not account_user.is_active:
         raise HTTPException(status_code=401, detail="Invalid login token")
     if membership is None:
         raise HTTPException(status_code=403, detail="Account has no org membership")
 
-    account_user.last_login_at = datetime.now(UTC)
-    await db.commit()
+    background_tasks.add_task(_record_last_login, account_user.id)
 
     token = await create_session(
         redis, account_user_id=account_user.id, org_id=membership.org_id, role=membership.role
     )
-    org = await db.get(Org, membership.org_id)
     return SessionOut(
         token=token,
         org_id=membership.org_id,
-        org_name=org.name if org else "",
+        org_name=org_name or "",
         role=membership.role,
         account_user_id=account_user.id,
         email=account_user.email,
@@ -290,18 +315,22 @@ async def logout(redis: RedisDep, x_session_token: str | None = Header(None)) ->
 
 @router.get("/me", response_model=MeOut)
 async def me(current_user: CurrentUserDep, db: DbDep) -> MeOut:
+    # Org.name folded into the same round trip via an outer join instead of
+    # a trailing db.get(Org, ...) — this endpoint runs on every dashboard
+    # hydration/reload, and DB here is a remote Neon instance (see .env).
     result = await db.execute(
-        select(OrgMembership)
+        select(OrgMembership, Org.name)
+        .outerjoin(Org, Org.id == OrgMembership.org_id)
         .where(OrgMembership.account_user_id == current_user.id)
         .order_by(OrgMembership.created_at)
     )
-    membership = result.scalars().first()
+    row = result.first()
+    membership, org_name = row if row else (None, None)
     if membership is None:
         raise HTTPException(status_code=403, detail="Account has no org membership")
-    org = await db.get(Org, membership.org_id)
     return MeOut(
         org_id=membership.org_id,
-        org_name=org.name if org else "",
+        org_name=org_name or "",
         role=membership.role,
         account_user_id=current_user.id,
         email=current_user.email,

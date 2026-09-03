@@ -4,12 +4,14 @@ import os
 import time
 from collections.abc import AsyncGenerator
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from apps.api.db.base import Base
 from apps.api.deps import get_db
+from apps.api.routers import auth as auth_router
 
 
 class FakeRedis:
@@ -125,12 +127,21 @@ async def fake_redis() -> FakeRedis:
 
 @pytest_asyncio.fixture
 async def client(
-    db_session: AsyncSession, fake_redis: FakeRedis
+    db_session: AsyncSession, fake_redis: FakeRedis, test_engine, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncGenerator[AsyncClient, None]:
     from apps.api.deps import get_redis_dep
     from apps.api.main import create_app
 
     app = create_app()
+
+    # /auth/login records last_login_at (and the admin-token bootstrap path
+    # persists the default org owner) via its own AsyncSessionLocal() call
+    # rather than the request's `db` — same pattern/reasoning as
+    # campaign_dialer, follow_up_dispatcher, etc. below — so it needs the
+    # same test-engine redirect those already get.
+    monkeypatch.setattr(
+        auth_router, "AsyncSessionLocal", async_sessionmaker(bind=test_engine, expire_on_commit=False)
+    )
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session

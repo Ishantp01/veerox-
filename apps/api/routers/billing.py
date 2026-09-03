@@ -667,12 +667,31 @@ async def get_billing_status(org: CurrentOrgDep, db: DbDep) -> BillingStatusOut:
         .correlate(Org)
         .scalar_subquery()
     )
+    # Latest paid recharge folded into the same round trip as a second
+    # correlated subquery — same reasoning as seat_count_subq above, and
+    # avoids a second remote query (this endpoint is loaded on every
+    # dashboard page). Ordered by period_start (when the recharge landed),
+    # not period_end — period_end is null now that credits don't expire on
+    # a timer.
+    latest_recharge_subq = (
+        select(BillingPayment.period_start)
+        .where(BillingPayment.org_id == Org.id, BillingPayment.status == "paid")
+        .order_by(BillingPayment.period_start.desc())
+        .limit(1)
+        .correlate(Org)
+        .scalar_subquery()
+    )
     org_result = await db.execute(
-        select(Org, Plan, seat_count_subq.label("seat_count"))
+        select(
+            Org,
+            Plan,
+            seat_count_subq.label("seat_count"),
+            latest_recharge_subq.label("last_recharge_at"),
+        )
         .outerjoin(Plan, Org.plan_id == Plan.id)
         .where(Org.id == org.org_id)
     )
-    target_org, plan, seat_count = org_result.one()
+    target_org, plan, seat_count, last_recharge_at = org_result.one()
 
     plan_out: PlanOut | None = None
     if plan is not None:
@@ -684,25 +703,11 @@ async def get_billing_status(org: CurrentOrgDep, db: DbDep) -> BillingStatusOut:
             resource_type=plan.resource_type,
         )
 
-    # Ordered by period_start (when the recharge landed), not period_end —
-    # period_end is null now that credits don't expire on a timer.
-    payment_result = await db.execute(
-        select(BillingPayment)
-        .where(BillingPayment.org_id == org.org_id, BillingPayment.status == "paid")
-        .order_by(BillingPayment.period_start.desc())
-        .limit(1)
-    )
-    latest_payment = payment_result.scalar_one_or_none()
-
     return BillingStatusOut(
         billing_status=target_org.billing_status,
         plan=plan_out,
         seat_count=seat_count,
-        last_recharge_at=(
-            latest_payment.period_start.isoformat()
-            if latest_payment and latest_payment.period_start
-            else None
-        ),
+        last_recharge_at=last_recharge_at.isoformat() if last_recharge_at else None,
         free_plan_claimed=target_org.free_plan_claimed_at is not None,
     )
 
