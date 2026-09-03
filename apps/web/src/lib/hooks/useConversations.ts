@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api";
 import { POLL, queryKeys } from "@/lib/query";
@@ -28,9 +28,16 @@ function buildConversationsPath(filters?: ConversationFilters): string {
  */
 export function useConversations(filters?: ConversationFilters) {
   return useQuery<Conversation[]>({
-    queryKey: queryKeys.conversations(filters && { channel: filters.channel }),
+    // Cache key includes limit/offset (not just channel) — otherwise every
+    // page of results would collide on the same cache entry and paging
+    // would just keep re-showing page 1.
+    queryKey: queryKeys.conversations(filters),
     queryFn: () => apiFetch<Conversation[]>(buildConversationsPath(filters)),
     refetchInterval: POLL.conversationList,
+    // Keep the previous page's rows on screen while the next page loads —
+    // otherwise every Prev/Next click flashes the loading skeleton because
+    // a new offset means a fresh (empty) cache entry.
+    placeholderData: keepPreviousData,
   });
 }
 

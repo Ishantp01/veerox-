@@ -31,6 +31,9 @@ export type { SpinnerProps } from "./spinner";
 export { EmptyState } from "./empty-state";
 export type { EmptyStateProps } from "./empty-state";
 
+export { Pagination } from "./pagination";
+export type { PaginationProps } from "./pagination";
+
 export {
   ToastProvider,
   Toaster,

@@ -88,6 +88,12 @@ async def export_members_xlsx(org: OrgMemberDep, db: DbDep) -> StreamingResponse
     sheet = workbook.active
     sheet.title = "Team"
     sheet.append(["name", "email", "mobile", "role", "active", "invited_at", "joined_at"])
+    # Default column width is ~8.4 chars — too narrow for the formatted
+    # datetime cells below (Excel shows "####" rather than truncating a
+    # numeric/date value that doesn't fit, unlike a text cell) and for a
+    # typical email address.
+    for col, width in (("A", 20), ("B", 28), ("C", 16), ("D", 10), ("E", 8), ("F", 18), ("G", 18)):
+        sheet.column_dimensions[col].width = width
     for account_user, membership in result.all():
         # The org owner (the account that bought the plan) isn't a "team
         # member" — GET /team/members' own JSON response leaves it in, but
@@ -104,10 +110,19 @@ async def export_members_xlsx(org: OrgMemberDep, db: DbDep) -> StreamingResponse
                 account_user.mobile or "",
                 membership.role,
                 account_user.is_active,
-                membership.invited_at.isoformat() if membership.invited_at else "",
-                membership.joined_at.isoformat() if membership.joined_at else "",
+                # openpyxl only recognizes a real datetime value as a date
+                # cell — a raw .isoformat() string (the old behavior) lands
+                # as left-aligned text Excel won't sort/filter as a date.
+                # Excel dates can't carry a timezone, so tzinfo is dropped
+                # here (these are stored as UTC — see OrgMembership).
+                membership.invited_at.replace(tzinfo=None) if membership.invited_at else "",
+                membership.joined_at.replace(tzinfo=None) if membership.joined_at else "",
             ]
         )
+        for col_idx in (6, 7):
+            cell = sheet.cell(row=sheet.max_row, column=col_idx)
+            if isinstance(cell.value, datetime):
+                cell.number_format = "yyyy-mm-dd hh:mm"
 
     buf = io.BytesIO()
     workbook.save(buf)

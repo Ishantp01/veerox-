@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api";
 import { POLL, queryKeys } from "@/lib/query";
@@ -12,6 +12,10 @@ export interface LeadFilters {
   tag?: string;
   /** Unified search box — matches against intent OR tags. */
   search?: string;
+  /** Page size — the backend defaults to 50 and caps at 200. */
+  limit?: number;
+  /** Row offset for pagination — 0 is the first page. */
+  offset?: number;
 }
 
 function buildLeadsPath(filters?: LeadFilters): string {
@@ -22,6 +26,8 @@ function buildLeadsPath(filters?: LeadFilters): string {
   if (filters?.qualification_status) params.set("qualification_status", filters.qualification_status);
   if (filters?.tag) params.set("tag", filters.tag);
   if (filters?.search) params.set("search", filters.search);
+  if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
+  if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
   const qs = params.toString();
   return qs ? `/admin/leads?${qs}` : "/admin/leads";
 }
@@ -29,7 +35,9 @@ function buildLeadsPath(filters?: LeadFilters): string {
 /**
  * Captured leads, newest first. Polls every 30s (POLL.leads). Optional
  * `intent`/`channel`/`status` filters are forwarded to the backend as query
- * params.
+ * params. Pass `limit`/`offset` to page through orgs with more leads than
+ * one page — omitting them falls back to the backend's default first page
+ * (50 rows), so existing callers keep working unchanged.
  *
  * GET /admin/leads → Lead[]
  */
@@ -38,6 +46,10 @@ export function useLeads(filters?: LeadFilters) {
     queryKey: queryKeys.leads(filters),
     queryFn: () => apiFetch<Lead[]>(buildLeadsPath(filters)),
     refetchInterval: POLL.leads,
+    // Keep the previous page's rows on screen while the next page loads —
+    // otherwise every Prev/Next click flashes the loading skeleton because
+    // a new offset means a fresh (empty) cache entry.
+    placeholderData: keepPreviousData,
   });
 }
 

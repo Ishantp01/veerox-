@@ -63,6 +63,24 @@ a {
   text-decoration: none;
 }
 
+/* Without this, hovering directly over a button's own label text (rather
+   than its padding) falls back to the browser's text-selection I-beam
+   cursor instead of a pointer, since button labels are selectable text by
+   default — same fix already applied locally on ui/button.tsx, extended
+   here to the ~16 places that render a raw <button> or role="button"
+   element instead of that shared component (nav, topbar, dialogs, toasts,
+   etc.), so nowhere in the app shows a caret over a clickable control.
+   :not(:disabled) leaves a disabled button's native cursor (already
+   "not-allowed"/"default" from the UA stylesheet) alone. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
+button {
+  user-select: none;
+}
+
 /* Animated shimmer sweep for Skeleton — reads as "actively loading" rather
    than a static pulsing block, closer to a premium product's loading state. */
 @keyframes shimmer {

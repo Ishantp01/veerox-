@@ -9,7 +9,7 @@ import { QueryBoundary } from "@/components/layout/query-boundary";
 import { LeadTable } from "@/components/leads/lead-table";
 import { LEAD_QUALIFICATION_LABELS } from "@/components/leads/qualification-badge";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
-import { Button, EmptyState, Input, Select, SkeletonRows, Table, useToast } from "@/components/ui";
+import { Button, EmptyState, Input, Pagination, Select, SkeletonRows, Table, useToast } from "@/components/ui";
 import { SESSION_TOKEN_KEY } from "@/lib/api";
 import { downloadCsv } from "@/lib/download-csv";
 import { useLeads } from "@/lib/hooks";
@@ -26,6 +26,7 @@ interface ImportLeadsResult {
 type LeadImportStartMode = "draft" | "now" | "scheduled";
 
 const INTENT_SEARCH_DEBOUNCE_MS = 300;
+const LEADS_PAGE_SIZE = 20;
 
 // status and qualification_status are independently editable (the lead
 // table's Review Stage dropdown writes qualification_status only, never
@@ -146,11 +147,21 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
     return () => clearTimeout(t);
   }, [searchInput]);
 
+  // Reset to page 1 whenever a filter changes — otherwise switching filters
+  // while sitting on, say, page 3 would request an offset that no longer
+  // makes sense against the newly filtered result set.
+  const [page, setPage] = useState(0);
+  useEffect(() => {
+    setPage(0);
+  }, [effectiveChannel, status, qualificationFilter, search]);
+
   const filters = {
     channel: effectiveChannel,
     ...(status ? { status } : {}),
     ...(qualificationFilter ? { qualification_status: qualificationFilter } : {}),
     ...(search ? { search } : {}),
+    limit: LEADS_PAGE_SIZE,
+    offset: page * LEADS_PAGE_SIZE,
   };
   const { data, isLoading, isError, error, refetch } = useLeads(filters);
   const leads = data ?? [];
@@ -342,6 +353,14 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
         }
       >
         <LeadTable leads={leads} detailBasePath={detailBasePath} />
+        <Pagination
+          page={page}
+          pageSize={LEADS_PAGE_SIZE}
+          rowCount={leads.length}
+          hasNextPage={leads.length === LEADS_PAGE_SIZE}
+          onPrev={() => setPage((p) => Math.max(0, p - 1))}
+          onNext={() => setPage((p) => p + 1)}
+        />
       </QueryBoundary>
     </div>
   );

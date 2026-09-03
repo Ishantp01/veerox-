@@ -484,16 +484,22 @@ async def list_conversations(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[dict]:
-    msg_count_subq = (
-        select(Message.conversation_id, func.count().label("message_count"))
-        .group_by(Message.conversation_id)
-        .subquery()
+    # Correlated per-row COUNT instead of a table-wide GROUP BY join — the
+    # previous version aggregated every row in `messages` across every org
+    # before this query's org/channel filter and LIMIT/OFFSET ever applied,
+    # so every page load paid for scanning the whole table regardless of
+    # page size. This way Postgres filters + orders + limits Conversation
+    # first (using the org_id/started_at indexes) and only counts messages
+    # for the handful of rows actually returned.
+    message_count = (
+        select(func.count())
+        .where(Message.conversation_id == Conversation.id)
+        .correlate(Conversation)
+        .scalar_subquery()
     )
 
-    stmt = (
-        select(Conversation, func.coalesce(msg_count_subq.c.message_count, 0), User.phone, User.name)
-        .outerjoin(msg_count_subq, Conversation.id == msg_count_subq.c.conversation_id)
-        .join(User, User.id == Conversation.user_id)
+    stmt = select(Conversation, message_count, User.phone, User.name).join(
+        User, User.id == Conversation.user_id
     )
     if scope_org_id is not None:
         stmt = stmt.where(Conversation.org_id == scope_org_id)
@@ -725,14 +731,16 @@ async def get_lead(
     if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    msg_count_subq = (
-        select(Message.conversation_id, func.count().label("message_count"))
-        .group_by(Message.conversation_id)
-        .subquery()
+    # Correlated per-row COUNT — see list_conversations above for why this
+    # replaced a table-wide GROUP BY join.
+    message_count = (
+        select(func.count())
+        .where(Message.conversation_id == Conversation.id)
+        .correlate(Conversation)
+        .scalar_subquery()
     )
     conv_stmt = (
-        select(Conversation, func.coalesce(msg_count_subq.c.message_count, 0), User.phone, User.name)
-        .outerjoin(msg_count_subq, Conversation.id == msg_count_subq.c.conversation_id)
+        select(Conversation, message_count, User.phone, User.name)
         .join(User, User.id == Conversation.user_id)
         .where(Conversation.user_id == lead.user_id)
         .order_by(Conversation.started_at.desc())

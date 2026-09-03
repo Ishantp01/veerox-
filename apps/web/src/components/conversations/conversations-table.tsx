@@ -1,11 +1,13 @@
 ﻿"use client";
 
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Inbox } from "lucide-react";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import {
   Badge,
   EmptyState,
+  Pagination,
   SkeletonRows,
   Table,
   TableCell,
@@ -30,9 +32,18 @@ export interface ConversationsTableProps {
  * view and the per-channel /whatsapp and /calling sections — pass `channel`
  * to scope the query and drop the redundant Channel column.
  */
+const PAGE_SIZE = 20;
+
 export function ConversationsTable({ channel, detailBasePath }: ConversationsTableProps) {
   const router = useRouter();
-  const conversations = useConversations({ channel });
+  // Reset to page 1 whenever the channel filter changes — an offset from
+  // the previous filter's result set wouldn't make sense against this one.
+  const [page, setPage] = useState(0);
+  useEffect(() => {
+    setPage(0);
+  }, [channel]);
+
+  const conversations = useConversations({ channel, limit: PAGE_SIZE, offset: page * PAGE_SIZE });
 
   const rows = conversations.data ?? [];
   const columns = channel
@@ -104,6 +115,17 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
           </QueryBoundaryRows>
         </tbody>
       </Table>
+      {!conversations.isLoading && !conversations.isError && rows.length > 0 && (
+        <Pagination
+          page={page}
+          pageSize={PAGE_SIZE}
+          rowCount={rows.length}
+          hasNextPage={rows.length === PAGE_SIZE}
+          onPrev={() => setPage((p) => Math.max(0, p - 1))}
+          onNext={() => setPage((p) => p + 1)}
+          className="border-t border-slate-200/80 dark:border-slate-800"
+        />
+      )}
     </div>
   );
 }

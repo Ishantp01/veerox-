@@ -304,6 +304,34 @@ async def update_org(
     )
 
 
+_CALLING_NUMBERS_CELL_LIMIT = 5
+
+
+def _format_calling_numbers(phone_numbers: list[OrgPhoneNumberOut]) -> str:
+    """Render an org's calling numbers for one Excel cell, capped so an org
+    with a large pool (bulk-purchased campaign numbers can run into the
+    dozens or more) doesn't produce one unreadable comma-joined wall of
+    text. Each provider's default (the number outbound calls actually dial
+    from — the only one that's operationally load-bearing day to day) is
+    always shown; everything else fills the remaining slots up to the cap,
+    with a "+N more" tail for whatever didn't fit. The full list is still
+    available in the dashboard's Edit Org dialog.
+    """
+    if not phone_numbers:
+        return ""
+    defaults = [n for n in phone_numbers if n.is_default]
+    rest = [n for n in phone_numbers if not n.is_default]
+    ordered = defaults + rest
+    shown = ordered[:_CALLING_NUMBERS_CELL_LIMIT]
+    text = ", ".join(
+        f"{n.provider}:{n.phone_number}{' (default)' if n.is_default else ''}" for n in shown
+    )
+    remaining = len(ordered) - len(shown)
+    if remaining > 0:
+        text += f", +{remaining} more"
+    return text
+
+
 @router.get("/orgs.xlsx")
 async def export_orgs_xlsx(db: DbDep, _admin: PlatformAdminDep) -> StreamingResponse:
     """Same data as GET /billing/orgs, as a downloadable .xlsx workbook —
@@ -313,8 +341,41 @@ async def export_orgs_xlsx(db: DbDep, _admin: PlatformAdminDep) -> StreamingResp
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Organizations"
-    sheet.append(["organization", "admin_email", "plan", "billing_status", "team_members", "created_at"])
+    sheet.append(
+        [
+            "organization",
+            "admin_email",
+            "plan",
+            "billing_status",
+            "team_members",
+            "created_at",
+            "calling_numbers",
+            "whatsapp_phone_number_id",
+        ]
+    )
+    # Default column width is ~8.4 chars — too narrow for the formatted
+    # datetime cell below (Excel shows "####" rather than truncating a
+    # numeric/date value that doesn't fit, unlike a text cell) and for a
+    # typical org name/email address.
+    for col, width in (
+        ("A", 24), ("B", 28), ("C", 14), ("D", 14), ("E", 13), ("F", 18), ("G", 30), ("H", 22),
+    ):
+        sheet.column_dimensions[col].width = width
     for org in orgs:
+        # org.created_at is OrgAdminOut's serialized .isoformat() string (see
+        # list_orgs above) — parse it back to a real datetime so openpyxl
+        # writes an actual date cell instead of left-aligned ISO text Excel
+        # won't sort/filter as a date. Excel dates can't carry a timezone,
+        # so tzinfo is dropped (org.created_at is UTC).
+        created_at = datetime.fromisoformat(org.created_at).replace(tzinfo=None)
+        # An org's dedicated Plivo/Twilio calling numbers weren't in this
+        # export at all before — OrgAdminOut carries them (phone-number-list-
+        # field.tsx in the Edit Org dialog is the only place they were
+        # otherwise visible), just never rendered here. Also surfaces
+        # whatsapp_phone_number_id so a misconfigured value (e.g. a phone
+        # number typed in instead of Meta's numeric phone_number_id) is
+        # visible across every org at a glance instead of only on inspection.
+        calling_numbers = _format_calling_numbers(org.phone_numbers)
         sheet.append(
             [
                 org.name,
@@ -322,9 +383,12 @@ async def export_orgs_xlsx(db: DbDep, _admin: PlatformAdminDep) -> StreamingResp
                 org.plan_code or "No plan",
                 org.billing_status,
                 org.seat_count,
-                org.created_at,
+                created_at,
+                calling_numbers,
+                org.whatsapp_phone_number_id or "",
             ]
         )
+        sheet.cell(row=sheet.max_row, column=6).number_format = "yyyy-mm-dd hh:mm"
 
     buf = io.BytesIO()
     workbook.save(buf)
