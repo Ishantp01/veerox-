@@ -17,6 +17,7 @@ import {
 } from "@/components/ui";
 import { useUpdateContact } from "@/lib/hooks";
 import type { Contact } from "@/lib/types";
+import { E164_MESSAGE, E164_REGEX } from "@/lib/phone";
 
 const editContactSchema = z.object({
   name: z
@@ -24,6 +25,7 @@ const editContactSchema = z.object({
     .trim()
     .min(1, "Name is required")
     .regex(/^[A-Za-z\s'.-]+$/, "Name should only contain letters"),
+  phone: z.string().trim().regex(E164_REGEX, E164_MESSAGE),
   email: z.string().trim().email().optional().or(z.literal("")),
   company: z
     .string()
@@ -38,12 +40,14 @@ type ContactFieldErrors = Partial<Record<keyof EditContactForm, string>>;
 function formFromContact(contact: Contact): EditContactForm {
   return {
     name: contact.name ?? "",
+    phone: contact.phone,
     email: contact.email ?? "",
     company: contact.company ?? "",
   };
 }
 
-/** Edits a contact's name, email, and company. Phone isn't editable — it's the contact's unique identity key. */
+/** Edits a contact's name, phone, email, and company. `phone` must stay
+ * unique within the org — a conflict surfaces as an inline error on submit. */
 export function EditContactDialog({ contact }: { contact: Contact }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<EditContactForm>(() => formFromContact(contact));
@@ -84,6 +88,7 @@ export function EditContactDialog({ contact }: { contact: Contact }) {
       {
         id: contact.id,
         name: parsed.data.name.trim(),
+        phone: parsed.data.phone.trim(),
         email: parsed.data.email?.trim() || null,
         company: parsed.data.company?.trim() || null,
       },
@@ -133,6 +138,26 @@ export function EditContactDialog({ contact }: { contact: Contact }) {
               {fieldErrors.name && (
                 <p id="edit-contact-name-error" className="mt-1.5 text-xs text-red-600">
                   {fieldErrors.name}
+                </p>
+              )}
+            </div>
+            <div>
+              <Label htmlFor="edit-contact-phone">Phone *</Label>
+              <Input
+                id="edit-contact-phone"
+                type="tel"
+                inputMode="tel"
+                required
+                maxLength={16}
+                value={form.phone}
+                onChange={(e) => updateField("phone", e.target.value.replace(/[^\d+]/g, ""))}
+                placeholder="+91XXXXXXXXXX"
+                aria-invalid={fieldErrors.phone ? true : undefined}
+                aria-describedby={fieldErrors.phone ? "edit-contact-phone-error" : undefined}
+              />
+              {fieldErrors.phone && (
+                <p id="edit-contact-phone-error" className="mt-1.5 text-xs text-red-600">
+                  {fieldErrors.phone}
                 </p>
               )}
             </div>

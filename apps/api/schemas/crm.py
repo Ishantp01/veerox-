@@ -37,9 +37,14 @@ class ContactWithLeadsOut(ContactOut):
 
 
 class ContactUpdateIn(BaseModel):
-    """Partial update — only fields explicitly set by the caller are applied."""
+    """Partial update — only fields explicitly set by the caller are applied.
+
+    `phone` is optional but, when set, must stay unique within the org (see
+    Contact's uq_contacts_org_phone) — routers/crm.py::update_contact 409s
+    on a conflict, same as POST /crm/contacts."""
 
     name: str | None = None
+    phone: str | None = None
     email: str | None = None
     company: str | None = None
     tags: list[str] | None = None

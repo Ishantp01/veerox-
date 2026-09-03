@@ -8,6 +8,7 @@ import openpyxl
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from apps.api.core.tools import _normalize_phone
@@ -201,9 +202,18 @@ async def update_contact(
     contact = (await db.execute(stmt)).scalar_one_or_none()
     if contact is None:
         raise HTTPException(status_code=404, detail="Contact not found")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    fields = payload.model_dump(exclude_unset=True)
+    if "phone" in fields and not fields["phone"]:
+        raise HTTPException(status_code=400, detail="Phone cannot be empty")
+    for field, value in fields.items():
         setattr(contact, field, value)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409, detail="Another contact in this org already has that phone number"
+        )
     await db.refresh(contact)
     return contact
 

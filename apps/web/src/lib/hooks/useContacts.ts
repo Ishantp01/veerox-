@@ -56,11 +56,13 @@ export function useCreateContact() {
 
 export interface ContactUpdateInput {
   name?: string | null;
+  phone?: string;
   email?: string | null;
   company?: string | null;
 }
 
-/** PATCH /crm/contacts/{id} → Contact. Phone isn't editable — it's the contact's unique identity key. */
+/** PATCH /crm/contacts/{id} → Contact. `phone` must stay unique within the
+ * org — a conflicting number 409s (see apps/api/routers/crm.py::update_contact). */
 export function useUpdateContact() {
   const queryClient = useQueryClient();
 
