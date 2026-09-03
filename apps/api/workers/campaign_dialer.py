@@ -21,6 +21,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import aliased
 
 from apps.api.channels.voice import failover as voice_failover
+from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.config import settings
 from apps.api.core.agent import _is_kill_switch_active
 from apps.api.core.usage import get_credit_usage
@@ -109,13 +110,13 @@ async def _count_calls_in_flight(db) -> int:
     return (await db.execute(stmt)).scalar_one()
 
 
-async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, str | None]]:
+async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, str | None, UUID]]:
     """Atomically claim up to the remaining concurrency budget's worth of the
     oldest pending targets of running campaigns.
 
     Returns ``[(target_id, phone, attempt_count, plivo_from, twilio_from,
-    preferred_provider), ...]`` as strings/int so the caller can place the
-    calls outside this short-lived session. ``plivo_from``/``twilio_from``
+    preferred_provider, org_id), ...]`` as strings/int so the caller can place
+    the calls outside this short-lived session. ``plivo_from``/``twilio_from``
     are the owning org's *default* dedicated number on that provider (see
     ``db/models/org_phone_number.py`` — an org can have several per
     provider, joined here filtered to ``is_default`` for this hot path
@@ -213,6 +214,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
                     plivo_from,
                     twilio_from,
                     preferred_provider,
+                    org_id,
                 )
             )
         if claimed:
@@ -264,6 +266,7 @@ async def _dial_one(
     plivo_from: str | None,
     twilio_from: str | None,
     preferred_provider: str | None,
+    org_id: UUID,
 ) -> None:
     answer_url = (
         f"{settings.public_base_url.rstrip('/')}/voice/answer?campaign_target_id={target_id}"
@@ -283,7 +286,7 @@ async def _dial_one(
         return
 
     try:
-        _, provider = await voice_failover.initiate_call(
+        result, provider = await voice_failover.initiate_call(
             phone,
             answer_url,
             hangup_url=hangup_url,
@@ -296,6 +299,12 @@ async def _dial_one(
         # — see failover.initiate_call's provider-ordering docstring.
         if provider == "twilio" and not twilio_from and preferred_provider != "twilio":
             logger.warning("campaign_dialer_fell_back_to_twilio", target_id=target_id)
+        request_uuid = result.get("request_uuid") or result.get("sid")
+        if isinstance(request_uuid, str):
+            # Warm up the OpenAI Realtime session for the whole ring
+            # duration instead of waiting for the callee to answer — see
+            # start_precall_connect's docstring.
+            start_precall_connect(request_uuid, UUID(target_id), org_id)
     except httpx.HTTPError:
         logger.warning("campaign_dialer_initiate_call_failed", target_id=target_id)
         await _mark_target(target_id, "pending" if attempt_count < _MAX_ATTEMPTS else "failed")
@@ -307,8 +316,10 @@ async def _dial_batch() -> None:
         return
     await asyncio.gather(
         *(
-            _dial_one(target_id, phone, attempt_count, plivo_from, twilio_from, preferred_provider)
-            for target_id, phone, attempt_count, plivo_from, twilio_from, preferred_provider in claimed
+            _dial_one(
+                target_id, phone, attempt_count, plivo_from, twilio_from, preferred_provider, org_id
+            )
+            for target_id, phone, attempt_count, plivo_from, twilio_from, preferred_provider, org_id in claimed
         )
     )
 

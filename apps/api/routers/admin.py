@@ -31,6 +31,7 @@ from sqlalchemy.orm import selectinload
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.voice.org_numbers import get_default_numbers, replace_org_phone_numbers
+from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.llm import chat_completion
@@ -2290,6 +2291,12 @@ async def outbound_call(
 
     request_uuid = result.get("request_uuid") or result.get("sid")
     call_sid = request_uuid if isinstance(request_uuid, str) else str(uuid4())
+    if isinstance(request_uuid, str):
+        # Start warming up the OpenAI Realtime session right now instead of
+        # waiting for the callee to actually answer — see start_precall_
+        # connect's docstring for why this id is trustworthy for Twilio and
+        # a safe no-op-if-wrong bet for Plivo.
+        start_precall_connect(request_uuid, None, org_id)
     return OutboundCallOut(call_sid=call_sid, status="queued")
 
 

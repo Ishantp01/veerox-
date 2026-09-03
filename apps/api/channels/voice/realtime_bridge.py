@@ -85,6 +85,17 @@ def start_precall_connect(
     still setting up the call (webhook.py's ``answer``), well before the
     media stream WebSocket connects and lands in ``voice_stream`` below.
 
+    Also called for outbound calls right after they're placed (see
+    ``routers/admin.py``'s ``outbound_call`` and ``workers/campaign_dialer.
+    py``'s ``_dial_one``), keyed by the provider's own call-request id
+    (Plivo ``request_uuid`` / Twilio ``sid``) — Twilio guarantees that id is
+    the same ``CallSid`` the answer webhook later reports, so that whole
+    ring duration becomes head start instead of just the post-answer gap.
+    Plivo's ``request_uuid`` isn't documented as always equal to the later
+    ``CallUUID``, so the idempotency guard below is what makes this safe to
+    try anyway: if it doesn't match, this entry just self-expires unclaimed
+    and ``answer()``'s own call starts a fresh one exactly as before.
+
     Best-effort and purely additive: if this is never claimed (the call
     never reaches the media stream — declined, dropped, provider error) the
     pending connection self-expires and closes after
@@ -93,6 +104,12 @@ def start_precall_connect(
     before this existed, whenever nothing was claimed.
     """
     if not call_uuid:
+        return
+    if call_uuid in _pending_precalls:
+        # Already have one in flight for this id (e.g. the dial-time call
+        # below and answer()'s own call landed on the same id, which is the
+        # normal/expected case for Twilio) — don't clobber it with a second
+        # OpenAI connection.
         return
 
     async def _prepare() -> tuple[Any, str]:

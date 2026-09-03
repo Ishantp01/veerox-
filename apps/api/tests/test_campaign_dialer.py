@@ -154,13 +154,14 @@ async def test_claim_targets_claims_pending_voice_campaign(
     claimed = await campaign_dialer._claim_targets()
 
     assert len(claimed) == 1
-    target_id, phone, attempt_count, plivo_from, twilio_from, preferred_provider = claimed[0]
+    target_id, phone, attempt_count, plivo_from, twilio_from, preferred_provider, org_id = claimed[0]
     assert target_id == str(target.id)
     assert phone == target.phone
     assert attempt_count == 1
     assert plivo_from is None
     assert twilio_from is None
     assert preferred_provider is None
+    assert org_id == target.org_id
 
 
 async def test_claim_targets_carries_org_preferred_provider(db_session: AsyncSession) -> None:
@@ -173,7 +174,7 @@ async def test_claim_targets_carries_org_preferred_provider(db_session: AsyncSes
     claimed = await campaign_dialer._claim_targets()
 
     assert len(claimed) == 1
-    *_, preferred_provider = claimed[0]
+    *_, preferred_provider, org_id = claimed[0]
     assert preferred_provider == "twilio"
 
 
