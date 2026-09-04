@@ -369,6 +369,30 @@ async def resolve_request_org_id(
 RequestOrgDep = Annotated[UUID, Depends(resolve_request_org_id)]
 
 
+async def resolve_request_account_user_id(
+    payload: SessionPayloadDep,
+    x_admin_token: str | None = Header(None),
+) -> UUID:
+    """Which account_user this write should be attributed to — e.g.
+    routers/crm.py's Contact.created_by_account_user_id, so a contact a
+    teammate adds is recorded as theirs.
+
+    A dashboard session resolves to that session's own account_user_id.
+    `X-Admin-Token`-only callers (internal tooling, scripts, no session)
+    fall back to `DEFAULT_OWNER_ID` — the platform admin's own seeded
+    account — same fallback convention as `resolve_request_org_id`'s
+    `settings.default_org_id`, rather than attributing that traffic to some
+    arbitrary account.
+    """
+    _ = x_admin_token  # validity already enforced by verify_admin_or_session
+    if payload is not None:
+        return UUID(payload["account_user_id"])
+    return DEFAULT_OWNER_ID
+
+
+RequestAccountUserDep = Annotated[UUID, Depends(resolve_request_account_user_id)]
+
+
 async def resolve_analytics_scope_org_id(
     db: DbDep,
     payload: SessionPayloadDep,

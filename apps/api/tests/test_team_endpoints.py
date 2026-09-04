@@ -165,6 +165,96 @@ async def test_admin_can_change_member_role(
     assert response.json()["role"] == "admin"
 
 
+async def test_admin_can_edit_member_profile_fields(
+    client: AsyncClient, admin_session: tuple[AccountUser, str]
+) -> None:
+    _, session_token = admin_session
+    invite_response = await client.post(
+        "/team/members",
+        json={"email": "teammate@example.com", "role": "member"},
+        headers=_auth(session_token),
+    )
+    account_user_id = invite_response.json()["account_user_id"]
+
+    response = await client.patch(
+        f"/team/members/{account_user_id}",
+        json={"full_name": "Priya Sharma", "mobile": "+919876543210", "email": "priya@example.com"},
+        headers=_auth(session_token),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["full_name"] == "Priya Sharma"
+    assert body["mobile"] == "+919876543210"
+    assert body["email"] == "priya@example.com"
+    # role untouched since this request didn't send it
+    assert body["role"] == "member"
+
+
+async def test_update_member_partial_only_touches_sent_fields(
+    client: AsyncClient, admin_session: tuple[AccountUser, str]
+) -> None:
+    _, session_token = admin_session
+    invite_response = await client.post(
+        "/team/members",
+        json={"email": "teammate2@example.com", "full_name": "Original Name", "role": "member"},
+        headers=_auth(session_token),
+    )
+    account_user_id = invite_response.json()["account_user_id"]
+
+    response = await client.patch(
+        f"/team/members/{account_user_id}",
+        json={"mobile": "+919876543211"},
+        headers=_auth(session_token),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mobile"] == "+919876543211"
+    assert body["full_name"] == "Original Name"
+    assert body["email"] == "teammate2@example.com"
+
+
+async def test_update_member_rejects_email_already_in_use(
+    client: AsyncClient, admin_session: tuple[AccountUser, str]
+) -> None:
+    admin, session_token = admin_session
+    invite_response = await client.post(
+        "/team/members",
+        json={"email": "teammate3@example.com", "role": "member"},
+        headers=_auth(session_token),
+    )
+    account_user_id = invite_response.json()["account_user_id"]
+
+    response = await client.patch(
+        f"/team/members/{account_user_id}",
+        json={"email": admin.email},
+        headers=_auth(session_token),
+    )
+    assert response.status_code == 409
+
+
+async def test_member_cannot_edit_other_members(
+    client: AsyncClient, admin_session: tuple[AccountUser, str]
+) -> None:
+    _, admin_token = admin_session
+    invite_response = await client.post(
+        "/team/members",
+        json={"email": "teammate4@example.com", "role": "member"},
+        headers=_auth(admin_token),
+    )
+    account_user_id = invite_response.json()["account_user_id"]
+    login_token = invite_response.json()["login_token"]
+
+    member_login = await client.post("/auth/login", json={"token": login_token})
+    member_session_token = member_login.json()["token"]
+
+    response = await client.patch(
+        f"/team/members/{account_user_id}",
+        json={"full_name": "Self Edit"},
+        headers=_auth(member_session_token),
+    )
+    assert response.status_code == 403
+
+
 async def test_cannot_demote_last_admin(
     client: AsyncClient, admin_session: tuple[AccountUser, str]
 ) -> None:

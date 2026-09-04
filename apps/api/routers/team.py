@@ -21,6 +21,7 @@ import openpyxl
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import invalidate_user_sessions
@@ -40,7 +41,7 @@ from apps.api.schemas.team import (
     InviteMemberOut,
     RegenerateMemberTokenOut,
     TeamMemberOut,
-    UpdateMemberRoleIn,
+    UpdateMemberIn,
 )
 
 router = APIRouter(prefix="/team", tags=["team"])
@@ -233,22 +234,41 @@ async def _other_admins_count(db: DbDep, org_id: UUID, excluding_account_user_id
 
 
 @router.patch("/members/{account_user_id}", response_model=TeamMemberOut)
-async def update_member_role(
-    account_user_id: UUID, payload: UpdateMemberRoleIn, org: ManagerDep, db: DbDep
+async def update_member(
+    account_user_id: UUID, payload: UpdateMemberIn, org: ManagerDep, db: DbDep
 ) -> TeamMemberOut:
-    if payload.role not in ORG_MEMBERSHIP_ROLES:
-        raise HTTPException(status_code=400, detail=f"role must be one of {ORG_MEMBERSHIP_ROLES}")
-
+    """Admin-only. Partial update: only fields the caller actually sent are
+    touched. `full_name`/`mobile`/`email` edit the AccountUser itself (see
+    UpdateMemberIn's docstring — that's shared across every org this person
+    belongs to, not just this one)."""
+    updates = payload.model_dump(exclude_unset=True)
     membership = await _get_membership(db, org.org_id, account_user_id)
-    if membership.role == "admin" and payload.role != "admin":
-        if await _other_admins_count(db, org.org_id, account_user_id) == 0:
-            raise HTTPException(status_code=400, detail="Org must keep at least one admin")
 
-    membership.role = payload.role
-    await db.commit()
+    if "role" in updates:
+        role = updates["role"]
+        if role not in ORG_MEMBERSHIP_ROLES:
+            raise HTTPException(status_code=400, detail=f"role must be one of {ORG_MEMBERSHIP_ROLES}")
+        if membership.role == "admin" and role != "admin":
+            if await _other_admins_count(db, org.org_id, account_user_id) == 0:
+                raise HTTPException(status_code=400, detail="Org must keep at least one admin")
+        membership.role = role
 
     account_user_result = await db.execute(select(AccountUser).where(AccountUser.id == account_user_id))
     account_user = account_user_result.scalar_one()
+
+    if "full_name" in updates:
+        account_user.full_name = updates["full_name"]
+    if "mobile" in updates:
+        account_user.mobile = updates["mobile"]
+    if "email" in updates:
+        account_user.email = updates["email"]
+
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="That email is already in use") from exc
+
     return _member_out(account_user, membership)
 
 

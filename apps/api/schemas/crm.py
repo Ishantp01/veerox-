@@ -28,6 +28,10 @@ class ContactOut(BaseModel):
     company: str | None
     tags: list[str] | None
     owner_user_id: UUID | None
+    # Who created this contact — visibility is siloed on this field (see
+    # db/models/contact.py); read-only, not settable via ContactCreate/
+    # ContactUpdateIn.
+    created_by_account_user_id: UUID | None
     created_at: datetime
     updated_at: datetime
 

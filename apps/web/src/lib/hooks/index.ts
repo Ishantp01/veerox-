@@ -5,11 +5,12 @@ export { useStats } from "./useStats";
 export {
   useTeamMembers,
   useInviteMember,
-  useUpdateMemberRole,
+  useUpdateMember,
   useRemoveMember,
   type TeamMember,
   type InviteMemberInput,
   type InviteMemberResult,
+  type UpdateMemberInput,
 } from "./useTeam";
 export {
   useConversations,

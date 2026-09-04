@@ -15,6 +15,15 @@ class Contact(Base):
     `User` (the per-channel messaging identity the webhook pipeline keys off)
     — a Contact is the cross-channel parent that `Lead` rows optionally roll
     up under via `Lead.contact_id`.
+
+    Visibility is siloed by creator: routers/crm.py's list/get/update/delete
+    only ever see a contact where `created_by_account_user_id` matches the
+    caller, for EVERY role including admin — unlike Lead (see
+    Lead.claimed_by_account_user_id), there's no org-wide visibility
+    exception here. Nullable because contacts written before this column
+    existed (or by very old import paths) have no recorded creator, and are
+    therefore nobody's — visible to no one via the API without a direct DB
+    fix, same as any orphaned row.
     """
 
     __tablename__ = "contacts"
@@ -29,6 +38,9 @@ class Contact(Base):
     tags: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     owner_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by_account_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("account_users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

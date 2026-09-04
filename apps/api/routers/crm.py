@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from apps.api.core.tools import _normalize_phone
 from apps.api.db.models import Contact
-from apps.api.deps import DbDep, RequestOrgDep, verify_admin_or_session
+from apps.api.deps import DbDep, RequestAccountUserDep, RequestOrgDep, verify_admin_or_session
 from apps.api.routers.admin import (
     _E164_PATTERN,
     _csv_streaming_response,
@@ -41,11 +41,18 @@ _CONTACT_SAMPLE_ROWS = [
 async def list_contacts(
     db: DbDep,
     org_id: RequestOrgDep,
+    account_user_id: RequestAccountUserDep,
     q: str | None = Query(None, description="Filter by name/phone substring"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[Contact]:
-    stmt = select(Contact).where(Contact.org_id == org_id).order_by(Contact.created_at.desc())
+    """Siloed by creator — every caller, admin included, only ever sees
+    contacts they personally created (see db/models/contact.py)."""
+    stmt = (
+        select(Contact)
+        .where(Contact.org_id == org_id, Contact.created_by_account_user_id == account_user_id)
+        .order_by(Contact.created_at.desc())
+    )
     if q:
         like = f"%{q}%"
         stmt = stmt.where((Contact.name.ilike(like)) | (Contact.phone.ilike(like)))
@@ -55,7 +62,9 @@ async def list_contacts(
 
 
 @router.post("/contacts", response_model=ContactOut, status_code=201)
-async def create_contact(payload: ContactCreate, db: DbDep, org_id: RequestOrgDep) -> Contact:
+async def create_contact(
+    payload: ContactCreate, db: DbDep, org_id: RequestOrgDep, account_user_id: RequestAccountUserDep
+) -> Contact:
     contact = Contact(
         org_id=org_id,
         name=payload.name,
@@ -64,6 +73,7 @@ async def create_contact(payload: ContactCreate, db: DbDep, org_id: RequestOrgDe
         company=payload.company,
         tags=payload.tags,
         owner_user_id=payload.owner_user_id,
+        created_by_account_user_id=account_user_id,
     )
     db.add(contact)
     await db.commit()
@@ -109,13 +119,21 @@ async def sample_contacts_xlsx() -> StreamingResponse:
 
 @router.post("/contacts/import", response_model=ContactImportResult)
 async def import_contacts_file(
-    db: DbDep, org_id: RequestOrgDep, file: UploadFile = File(...)
+    db: DbDep,
+    org_id: RequestOrgDep,
+    account_user_id: RequestAccountUserDep,
+    file: UploadFile = File(...),
 ) -> ContactImportResult:
     """Bulk-import contacts from an uploaded CSV or Excel (.xlsx) file. Only
     'phone' is required (name/email/company are optional columns). A row
-    whose phone matches a contact already in this org updates that contact's
-    other fields instead of erroring on the (org_id, phone) unique
-    constraint — reimporting the same list is a safe way to refresh contacts.
+    whose phone matches a contact the importer already owns updates that
+    contact's other fields instead of erroring on the (org_id, phone) unique
+    constraint — reimporting the same list is a safe way to refresh your own
+    contacts. A phone already used by a contact someone ELSE in the org
+    created is reported as an error row instead — the org-wide phone
+    uniqueness constraint means it can't become a second, separately-owned
+    contact, and it isn't the importer's to silently overwrite (see
+    db/models/contact.py's creator-siloing docstring).
     Registered ahead of GET /contacts/{contact_id} so its literal path isn't
     swallowed by that route's UUID path param.
     """
@@ -128,8 +146,14 @@ async def import_contacts_file(
     else:
         raise HTTPException(status_code=400, detail="Only .csv or .xlsx files are supported")
 
-    existing_result = await db.execute(select(Contact).where(Contact.org_id == org_id))
-    existing_by_phone = {c.phone: c for c in existing_result.scalars().all()}
+    org_result = await db.execute(select(Contact.phone).where(Contact.org_id == org_id))
+    own_result = await db.execute(
+        select(Contact).where(
+            Contact.org_id == org_id, Contact.created_by_account_user_id == account_user_id
+        )
+    )
+    existing_by_phone = {c.phone: c for c in own_result.scalars().all()}
+    other_owned_phones = set(org_result.scalars().all()) - set(existing_by_phone.keys())
 
     imported = 0
     updated = 0
@@ -148,6 +172,14 @@ async def import_contacts_file(
                         f"phone '{phone}' must include a country code in E.164 format, "
                         "e.g. +919876543210"
                     ),
+                )
+            )
+            continue
+        if normalized in other_owned_phones:
+            errors.append(
+                ContactImportError(
+                    row=row_num,
+                    reason=f"phone '{phone}' already belongs to another team member's contact",
                 )
             )
             continue
@@ -170,7 +202,13 @@ async def import_contacts_file(
             updated += 1
         else:
             contact = Contact(
-                org_id=org_id, name=name, phone=normalized, email=email, company=company, tags=tags
+                org_id=org_id,
+                name=name,
+                phone=normalized,
+                email=email,
+                company=company,
+                tags=tags,
+                created_by_account_user_id=account_user_id,
             )
             db.add(contact)
             existing_by_phone[normalized] = contact
@@ -181,10 +219,16 @@ async def import_contacts_file(
 
 
 @router.get("/contacts/{contact_id}", response_model=ContactWithLeadsOut)
-async def get_contact(contact_id: UUID, db: DbDep, org_id: RequestOrgDep) -> Contact:
+async def get_contact(
+    contact_id: UUID, db: DbDep, org_id: RequestOrgDep, account_user_id: RequestAccountUserDep
+) -> Contact:
     stmt = (
         select(Contact)
-        .where(Contact.id == contact_id, Contact.org_id == org_id)
+        .where(
+            Contact.id == contact_id,
+            Contact.org_id == org_id,
+            Contact.created_by_account_user_id == account_user_id,
+        )
         .options(selectinload(Contact.leads))
     )
     result = await db.execute(stmt)
@@ -196,9 +240,17 @@ async def get_contact(contact_id: UUID, db: DbDep, org_id: RequestOrgDep) -> Con
 
 @router.patch("/contacts/{contact_id}", response_model=ContactOut)
 async def update_contact(
-    contact_id: UUID, payload: ContactUpdateIn, db: DbDep, org_id: RequestOrgDep
+    contact_id: UUID,
+    payload: ContactUpdateIn,
+    db: DbDep,
+    org_id: RequestOrgDep,
+    account_user_id: RequestAccountUserDep,
 ) -> Contact:
-    stmt = select(Contact).where(Contact.id == contact_id, Contact.org_id == org_id)
+    stmt = select(Contact).where(
+        Contact.id == contact_id,
+        Contact.org_id == org_id,
+        Contact.created_by_account_user_id == account_user_id,
+    )
     contact = (await db.execute(stmt)).scalar_one_or_none()
     if contact is None:
         raise HTTPException(status_code=404, detail="Contact not found")
@@ -219,10 +271,16 @@ async def update_contact(
 
 
 @router.delete("/contacts/{contact_id}")
-async def delete_contact(contact_id: UUID, db: DbDep, org_id: RequestOrgDep) -> dict[str, bool]:
+async def delete_contact(
+    contact_id: UUID, db: DbDep, org_id: RequestOrgDep, account_user_id: RequestAccountUserDep
+) -> dict[str, bool]:
     """Delete a contact. Leads/appointments that reference it (``ondelete="SET NULL"``
     on their ``contact_id`` FK) are kept — they just lose the contact link, not deleted."""
-    stmt = select(Contact).where(Contact.id == contact_id, Contact.org_id == org_id)
+    stmt = select(Contact).where(
+        Contact.id == contact_id,
+        Contact.org_id == org_id,
+        Contact.created_by_account_user_id == account_user_id,
+    )
     contact = (await db.execute(stmt)).scalar_one_or_none()
     if contact is None:
         raise HTTPException(status_code=404, detail="Contact not found")

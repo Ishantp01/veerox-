@@ -58,14 +58,29 @@ export function useInviteMember() {
   });
 }
 
-/** PATCH /team/members/{accountUserId} → TeamMember (admin only). */
-export function useUpdateMemberRole() {
+export interface UpdateMemberInput {
+  accountUserId: string;
+  role?: string;
+  full_name?: string;
+  mobile?: string;
+  email?: string;
+}
+
+/**
+ * PATCH /team/members/{accountUserId} → TeamMember (admin only). Partial —
+ * only the fields present on the input are sent, so passing just `{
+ * accountUserId, role }` leaves full_name/mobile/email untouched.
+ * full_name/mobile/email edit the underlying AccountUser directly, which is
+ * shared across every org that person belongs to (see
+ * apps/api/schemas/team.py::UpdateMemberIn).
+ */
+export function useUpdateMember() {
   const queryClient = useQueryClient();
-  return useMutation<TeamMember, Error, { accountUserId: string; role: string }>({
-    mutationFn: ({ accountUserId, role }) =>
+  return useMutation<TeamMember, Error, UpdateMemberInput>({
+    mutationFn: ({ accountUserId, ...body }) =>
       apiFetch<TeamMember>(`/team/members/${accountUserId}`, {
         method: "PATCH",
-        body: JSON.stringify({ role }),
+        body: JSON.stringify(body),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["team", "members"] });

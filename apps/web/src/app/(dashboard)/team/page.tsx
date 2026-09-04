@@ -20,8 +20,9 @@ import {
 import { useAuth } from "@/lib/auth-context";
 import { downloadCsv } from "@/lib/download-csv";
 import { useBillingStatus } from "@/lib/hooks/useBilling";
-import { useRemoveMember, useTeamMembers, useUpdateMemberRole, type TeamMember } from "@/lib/hooks/useTeam";
+import { useRemoveMember, useTeamMembers, useUpdateMember, type TeamMember } from "@/lib/hooks/useTeam";
 import { InviteMemberDialog } from "@/components/team/invite-member-dialog";
+import { EditMemberDialog } from "@/components/team/edit-member-dialog";
 import { RegenerateMemberTokenDialog } from "@/components/team/regenerate-member-token-dialog";
 
 async function exportTeamXlsx(): Promise<void> {
@@ -44,7 +45,7 @@ export default function TeamPage() {
   const { user } = useAuth();
   const { data, isLoading, isError, error, refetch } = useTeamMembers();
   const billing = useBillingStatus();
-  const updateRole = useUpdateMemberRole();
+  const updateMember = useUpdateMember();
   const removeMember = useRemoveMember();
   const { toast } = useToast();
   const confirm = useConfirm();
@@ -89,7 +90,7 @@ export default function TeamPage() {
   }
 
   function handleRoleChange(member: TeamMember, role: string) {
-    updateRole.mutate(
+    updateMember.mutate(
       { accountUserId: member.account_user_id, role },
       {
         onError: (err) =>
@@ -181,7 +182,7 @@ export default function TeamPage() {
                         value={member.role}
                         onChange={(role) => handleRoleChange(member, role)}
                         aria-label={`Role for ${member.email}`}
-                        disabled={updateRole.isPending}
+                        disabled={updateMember.isPending}
                       >
                         <option value="admin">Admin</option>
                         <option value="member">Member</option>
@@ -196,6 +197,7 @@ export default function TeamPage() {
                   {isAdmin && (
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
+                        <EditMemberDialog member={member} />
                         <RegenerateMemberTokenDialog
                           accountUserId={member.account_user_id}
                           email={member.email}

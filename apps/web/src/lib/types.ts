@@ -85,6 +85,7 @@ export interface Contact {
   company: string | null;
   tags: string[] | null;
   owner_user_id: string | null;
+  created_by_account_user_id: string | null;
   created_at: string;
   updated_at: string;
 }
