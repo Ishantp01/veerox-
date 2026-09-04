@@ -18,9 +18,13 @@ class OrgPhoneNumberIn(BaseModel):
     phone_number: str = Field(..., description="E.164, e.g. +14155551234.")
     is_default: bool = Field(
         False,
-        description="The number outbound calls dial from for this provider. "
-        "If a provider has entries but none marked default, the first one "
-        "becomes it; if more than one is marked, all but the first are demoted.",
+        description="The 'Primary' badge for this provider — display only, "
+        "doesn't affect which number outbound calls use (calls round-robin "
+        "across every number for the provider; see "
+        "channels/voice/org_numbers.py::get_rotating_numbers). If a "
+        "provider has entries but none marked default, the first one "
+        "becomes it; if more than one is marked, all but the first are "
+        "demoted. Numbers otherwise dial in the order submitted here.",
     )
 
 

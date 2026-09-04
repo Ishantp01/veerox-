@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from apps.api.db.base import Base
@@ -16,13 +16,22 @@ class OrgPhoneNumber(Base):
     Org.plivo_phone_number/twilio_phone_number (see migration
     <rev>_add_org_phone_numbers_table).
 
+    Outbound calls round-robin across every number an org has per provider
+    (see channels/voice/org_numbers.py::get_rotating_numbers), in `position`
+    order — not `created_at`, which is unreliable for this: multiple rows
+    written in the same replace_org_phone_numbers call (the normal case, one
+    PUT from the settings page) can land in the same DB transaction and get
+    an identical timestamp. `position` is that provider's 0-based index in
+    the submission order instead, set by replace_org_phone_numbers.
+
     Exactly one row per (org_id, provider) is expected to carry
-    is_default=True — the number outbound calls dial from (see
-    channels/voice/org_numbers.py::get_default_numbers); the rest are
-    reachable for inbound routing only (channels/voice/webhook.py::
-    _resolve_org_by_number). Enforced in application code, not a DB
-    constraint, since a partial unique index doesn't translate to the
-    SQLite backend the test suite runs against.
+    is_default=True — purely a "Primary" label for the settings UI (see
+    channels/voice/org_numbers.py::get_default_numbers) and no longer
+    affects which number a call goes out from; the rest are reachable for
+    inbound routing only (channels/voice/webhook.py::_resolve_org_by_number).
+    Enforced in application code, not a DB constraint, since a partial
+    unique index doesn't translate to the SQLite backend the test suite runs
+    against.
     """
 
     __tablename__ = "org_phone_numbers"
@@ -36,6 +45,8 @@ class OrgPhoneNumber(Base):
     # (see channels/voice/webhook.py::_normalize_phone).
     phone_number: Mapped[str] = mapped_column(String(32), nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # This provider's 0-based rotation order — see class docstring.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

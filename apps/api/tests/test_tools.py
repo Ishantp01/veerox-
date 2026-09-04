@@ -558,6 +558,59 @@ async def test_transfer_to_human_notifies_org_owner_via_whatsapp(
     ]
 
 
+async def test_transfer_to_human_auto_assigns_lead_to_notified_teammate(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The escalation Lead's claimed_by_account_user_id must be set to
+    whichever teammate the round robin notified — automatically, so it shows
+    up on that person's own Leads dashboard immediately with no separate
+    claim step (there's no manual "assign lead" action anywhere else)."""
+
+    async def _fake_send_template(*args: object, **kwargs: object) -> None:
+        pass
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
+    await _seed_org(db_session)
+
+    owner = AccountUser(email="owner2@example.com", token_hash="x", mobile="+919999999998")
+    db_session.add(owner)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+
+    lead_user = User(org_id=ORG_ID, phone="+910000000098", name="Priya")
+    db_session.add(lead_user)
+    await db_session.commit()
+
+    result = await transfer_to_human(
+        db_session, reason="pricing question", user_id=lead_user.id, channel="whatsapp"
+    )
+
+    lead = (
+        await db_session.execute(select(Lead).where(Lead.id == uuid.UUID(result["lead_id"])))
+    ).scalar_one()
+    assert lead.claimed_by_account_user_id == owner.id
+    assert lead.claimed_at is not None
+
+
+async def test_transfer_to_human_no_notify_target_leaves_lead_unassigned(
+    db_session: AsyncSession, fake_redis: _FakeRedis
+) -> None:
+    """No teammate has a mobile on file -> nobody to auto-assign to; the
+    Lead is still written, just unclaimed."""
+    await _seed_org(db_session)
+    lead_user = User(org_id=ORG_ID, phone="+910000000097", name="Rohit")
+    db_session.add(lead_user)
+    await db_session.commit()
+
+    result = await transfer_to_human(db_session, reason="needs help", user_id=lead_user.id)
+
+    lead = (
+        await db_session.execute(select(Lead).where(Lead.id == uuid.UUID(result["lead_id"])))
+    ).scalar_one()
+    assert lead.claimed_by_account_user_id is None
+    assert lead.claimed_at is None
+
+
 async def test_transfer_to_human_falls_back_to_any_teammate_when_owner_has_no_mobile(
     db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:

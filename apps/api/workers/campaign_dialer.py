@@ -18,9 +18,9 @@ from uuid import UUID
 import httpx
 import structlog
 from sqlalchemy import func, select, update
-from sqlalchemy.orm import aliased
 
 from apps.api.channels.voice import failover as voice_failover
+from apps.api.channels.voice.org_numbers import get_numbers_by_org, next_rotating_number
 from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.config import settings
 from apps.api.core.agent import _is_kill_switch_active
@@ -28,10 +28,9 @@ from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
-from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
-from apps.api.redis_client import record_error
+from apps.api.redis_client import get_redis_pool, record_error
 from apps.api.workers.campaign_scheduling import (
     complete_finished_campaigns,
     promote_scheduled_campaigns,
@@ -117,12 +116,18 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
     Returns ``[(target_id, phone, attempt_count, plivo_from, twilio_from,
     preferred_provider, org_id), ...]`` as strings/int so the caller can place
     the calls outside this short-lived session. ``plivo_from``/``twilio_from``
-    are the owning org's *default* dedicated number on that provider (see
-    ``db/models/org_phone_number.py`` — an org can have several per
-    provider, joined here filtered to ``is_default`` for this hot path
-    instead of going through ``channels/voice/org_numbers.py::
-    get_default_numbers``), or ``None`` to fall back to that provider's
-    platform default. ``preferred_provider`` is the org's explicit
+    round-robin across every dedicated number the owning org has on that
+    provider (see ``db/models/org_phone_number.py`` — an org can have
+    several per provider), or ``None`` to fall back to that provider's
+    platform default. The claim query itself no longer joins those numbers
+    in-line (that used to fetch only the ``is_default`` row per provider,
+    which doesn't generalize to picking *one of several* per claimed target);
+    instead, once this batch's final claimed set is known, one bulk lookup
+    (``channels/voice/org_numbers.py::get_numbers_by_org``) fetches every
+    number for the (typically one or a handful of) distinct orgs in the
+    batch, and each target's from-number is resolved off that in memory —
+    still one extra query total, not one per org_numbers.py::
+    get_rotating_numbers call. ``preferred_provider`` is the org's explicit
     Plivo/Twilio override (``Org.preferred_voice_provider``), or ``None``
     for automatic ordering. Empty if there's nothing to
     dial right now or ``max_concurrent_calls`` voice calls are already in
@@ -154,30 +159,10 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
         # contending with unrelated admin operations on those tables. A
         # no-op with a single dialer instance — the lock only ever
         # contends against a second instance's own claim attempt.
-        plivo_default = aliased(OrgPhoneNumber)
-        twilio_default = aliased(OrgPhoneNumber)
         stmt = (
-            select(
-                CampaignTarget,
-                CallCampaign.org_id,
-                plivo_default.phone_number,
-                twilio_default.phone_number,
-                Org.preferred_voice_provider,
-            )
+            select(CampaignTarget, CallCampaign.org_id, Org.preferred_voice_provider)
             .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
             .join(Org, Org.id == CallCampaign.org_id)
-            .outerjoin(
-                plivo_default,
-                (plivo_default.org_id == Org.id)
-                & (plivo_default.provider == "plivo")
-                & plivo_default.is_default.is_(True),
-            )
-            .outerjoin(
-                twilio_default,
-                (twilio_default.org_id == Org.id)
-                & (twilio_default.provider == "twilio")
-                & twilio_default.is_default.is_(True),
-            )
             .where(
                 CampaignTarget.status == "pending",
                 CallCampaign.status == "running",
@@ -190,9 +175,9 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
         rows = (await db.execute(stmt)).all()
 
         org_over_limit: dict[UUID, bool] = {}
-        claimed = []
-        for target, org_id, org_plivo_number, org_twilio_number, preferred_provider in rows:
-            if len(claimed) >= capacity:
+        staged: list[tuple[CampaignTarget, UUID, str | None]] = []
+        for target, org_id, preferred_provider in rows:
+            if len(staged) >= capacity:
                 break
             if org_id not in org_over_limit:
                 usage = await get_credit_usage(db, org_id)
@@ -204,8 +189,20 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
             target.status = "calling"
             target.attempt_count += 1
             target.called_at = datetime.now(UTC)
-            plivo_from = f"+{org_plivo_number}" if org_plivo_number else None
-            twilio_from = f"+{org_twilio_number}" if org_twilio_number else None
+            staged.append((target, org_id, preferred_provider))
+
+        if not staged:
+            return []
+
+        redis = get_redis_pool()
+        numbers_by_org = await get_numbers_by_org(db, {org_id for _, org_id, _ in staged})
+        claimed = []
+        for target, org_id, preferred_provider in staged:
+            org_numbers = numbers_by_org.get(org_id, {})
+            plivo_from = await next_rotating_number(redis, org_id, "plivo", org_numbers.get("plivo", []))
+            twilio_from = await next_rotating_number(
+                redis, org_id, "twilio", org_numbers.get("twilio", [])
+            )
             claimed.append(
                 (
                     str(target.id),
@@ -217,8 +214,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
                     org_id,
                 )
             )
-        if claimed:
-            await db.commit()
+        await db.commit()
         return claimed
 
 

@@ -32,7 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.voice import failover as voice_failover
-from apps.api.channels.voice.org_numbers import get_default_numbers
+from apps.api.channels.voice.org_numbers import get_rotating_numbers
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.agent import _is_kill_switch_active
@@ -41,7 +41,7 @@ from apps.api.db.models import FollowUpRule, FollowUpTask, Lead
 from apps.api.db.models.org import Org
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
-from apps.api.redis_client import record_error
+from apps.api.redis_client import get_redis_pool, record_error
 
 logger = structlog.get_logger(__name__)
 
@@ -279,7 +279,9 @@ async def _place_follow_up_call(db: AsyncSession, task_id: UUID, lead: Lead, org
         return
 
     plivo_from, twilio_from = (
-        await get_default_numbers(db, org_record.id) if org_record else (None, None)
+        await get_rotating_numbers(db, get_redis_pool(), org_record.id)
+        if org_record
+        else (None, None)
     )
     answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer?org_id={lead.org_id}"
 

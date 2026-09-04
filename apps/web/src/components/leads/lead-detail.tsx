@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, BadgeCheck, CalendarClock, MessageSquare, Save, Tag, Users } from "lucide-react";
+import { ArrowLeft, BadgeCheck, CalendarClock, MessageSquare, Save, Tag, UserCircle, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -196,6 +196,25 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                   </dl>
                 </CardContent>
               </Card>
+
+              {lead.data.claimed_by_account_user_id && (
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center gap-2">
+                      <UserCircle size={15} aria-hidden className="text-slate-400" />
+                      <CardTitle>Assigned To</CardTitle>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      Auto-assigned when the AI transferred this to a team member — not editable.
+                    </p>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-slate-700 dark:text-slate-300">
+                      {lead.data.claimed_by_name ?? "—"}
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
 
               <Card>
                 <CardHeader>

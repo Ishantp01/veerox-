@@ -14,11 +14,22 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from apps.api.channels.voice.org_numbers import replace_org_phone_numbers
 from apps.api.db.models import CallCampaign, CampaignTarget, Org
+from apps.api.schemas.org_numbers import OrgPhoneNumberIn
 from apps.api.workers import campaign_dialer
 from apps.api.workers.campaign_dialer import handle_call_ended
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+class _FakeRedis:
+    def __init__(self) -> None:
+        self.kv: dict[str, int] = {}
+
+    async def incr(self, key: str) -> int:
+        self.kv[key] = self.kv.get(key, 0) + 1
+        return self.kv[key]
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -28,6 +39,13 @@ async def _redirect_dialer_sessions(test_engine, monkeypatch: pytest.MonkeyPatch
     in-memory SQLite the ``db_session`` fixture writes/reads through."""
     session_factory = async_sessionmaker(bind=test_engine, expire_on_commit=False)
     monkeypatch.setattr(campaign_dialer, "AsyncSessionLocal", session_factory)
+
+
+@pytest.fixture
+def fake_redis(monkeypatch: pytest.MonkeyPatch) -> _FakeRedis:
+    fake = _FakeRedis()
+    monkeypatch.setattr(campaign_dialer, "get_redis_pool", lambda: fake)
+    return fake
 
 
 async def _seed_org(db: AsyncSession, *, preferred_voice_provider: str | None = None) -> None:
@@ -176,6 +194,61 @@ async def test_claim_targets_carries_org_preferred_provider(db_session: AsyncSes
     assert len(claimed) == 1
     *_, preferred_provider, org_id = claimed[0]
     assert preferred_provider == "twilio"
+
+
+async def test_claim_targets_rotates_across_two_plivo_numbers_over_separate_ticks(
+    db_session: AsyncSession, fake_redis: _FakeRedis
+) -> None:
+    """Two dialer ticks, one pending target each, must alternate between the
+    org's two Plivo numbers rather than both dialing from the same one."""
+    await _seed_org(db_session)
+    await replace_org_phone_numbers(
+        db_session,
+        ORG_ID,
+        [
+            OrgPhoneNumberIn(provider="plivo", phone_number="+14155550001"),
+            OrgPhoneNumberIn(provider="plivo", phone_number="+14155550002"),
+        ],
+    )
+    await db_session.commit()
+
+    await _seed_target(db_session, status="pending", attempt_count=0, campaign_channel="voice")
+    first_claimed = await campaign_dialer._claim_targets()
+    assert len(first_claimed) == 1
+    first_plivo_from = first_claimed[0][3]
+
+    await _seed_target(db_session, status="pending", attempt_count=0, campaign_channel="voice")
+    second_claimed = await campaign_dialer._claim_targets()
+    assert len(second_claimed) == 1
+    second_plivo_from = second_claimed[0][3]
+
+    assert {first_plivo_from, second_plivo_from} == {"+14155550001", "+14155550002"}
+    assert first_plivo_from != second_plivo_from
+
+
+async def test_claim_targets_rotates_within_a_single_batch(
+    db_session: AsyncSession, fake_redis: _FakeRedis
+) -> None:
+    """Two pending targets claimed together in one poll tick must still get
+    distinct from-numbers, not both the first one in rotation order."""
+    await _seed_org(db_session)
+    await replace_org_phone_numbers(
+        db_session,
+        ORG_ID,
+        [
+            OrgPhoneNumberIn(provider="plivo", phone_number="+14155550001"),
+            OrgPhoneNumberIn(provider="plivo", phone_number="+14155550002"),
+        ],
+    )
+    await db_session.commit()
+    await _seed_target(db_session, status="pending", attempt_count=0, campaign_channel="voice")
+    await _seed_target(db_session, status="pending", attempt_count=0, campaign_channel="voice")
+
+    claimed = await campaign_dialer._claim_targets()
+
+    assert len(claimed) == 2
+    plivo_froms = [row[3] for row in claimed]
+    assert set(plivo_froms) == {"+14155550001", "+14155550002"}
 
 
 async def test_claim_targets_stops_at_concurrency_limit(

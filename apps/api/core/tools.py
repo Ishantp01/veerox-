@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.voice import failover as voice_failover
-from apps.api.channels.voice.org_numbers import get_default_numbers
+from apps.api.channels.voice.org_numbers import get_rotating_numbers
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.db.models.account_user import AccountUser
@@ -627,9 +627,9 @@ _AGENT_CONNECT_TEMPLATE_APPROVED = False
 _NO_REASON_GIVEN = "Not specified"
 
 
-async def _resolve_team_notify_phones(db: AsyncSession, org_id: UUID) -> list[str]:
-    """Every org teammate's WhatsApp-notify number for a human handoff, in a
-    stable order (earliest-added membership first).
+async def _resolve_team_notify_targets(db: AsyncSession, org_id: UUID) -> list[tuple[UUID, str]]:
+    """Every org teammate's ``(account_user_id, WhatsApp-notify number)`` for
+    a human handoff, in a stable order (earliest-added membership first).
 
     Includes everyone on the org with a mobile on file — of ANY role, not
     just admins, since a plain "member" invite (the dashboard's invite
@@ -643,7 +643,7 @@ async def _resolve_team_notify_phones(db: AsyncSession, org_id: UUID) -> list[st
     invite form).
     """
     result = await db.execute(
-        select(AccountUser.mobile)
+        select(AccountUser.id, AccountUser.mobile)
         .join(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
         .where(
             OrgMembership.org_id == org_id,
@@ -652,16 +652,16 @@ async def _resolve_team_notify_phones(db: AsyncSession, org_id: UUID) -> list[st
         .order_by(OrgMembership.created_at)
     )
     seen: set[str] = set()
-    phones: list[str] = []
-    for mobile in result.scalars().all():
+    targets: list[tuple[UUID, str]] = []
+    for account_user_id, mobile in result.all():
         # A teammate could theoretically hold more than one membership row
         # on the same org; de-dupe here in Python instead of SELECT DISTINCT
         # so the ORDER BY above (on a column not in the SELECT list) stays
         # valid under Postgres's DISTINCT rules.
         if mobile and mobile not in seen:
             seen.add(mobile)
-            phones.append(mobile)
-    return phones
+            targets.append((account_user_id, mobile))
+    return targets
 
 
 async def transfer_to_human(
@@ -676,10 +676,15 @@ async def transfer_to_human(
 ) -> dict[str, Any]:
     """Escalate to a human: enqueue in Redis, write an escalation ``Lead``,
     and best-effort WhatsApp-notify one team member on the org, picked by
-    round-robin over ``_resolve_team_notify_phones`` (see
+    round-robin over ``_resolve_team_notify_targets`` (see
     ``_TRANSFER_ROUND_ROBIN_PREFIX``). Round-robin instead of notifying
     everyone every time so leads land on whoever's turn it is rather than
-    piling every handoff on the whole team at once.
+    piling every handoff on the whole team at once. Whichever teammate is
+    picked is also written straight onto the Lead as
+    ``claimed_by_account_user_id`` (see below) so it shows up on their own
+    Leads dashboard immediately — no manual claim/assign step, and nobody
+    else on the org can reassign it (assignment is automatic-only; there is
+    no manual "assign lead" action anywhere in the product).
 
     Sends ``agent_connect_request`` (caller's number + reason) once that
     template is Meta-approved (``_AGENT_CONNECT_TEMPLATE_APPROVED``);
@@ -705,15 +710,16 @@ async def transfer_to_human(
             phone = user.phone
             name = user.name
 
-    notify_phones = await _resolve_team_notify_phones(db, org_id)
-    if notify_phones:
+    notify_targets = await _resolve_team_notify_targets(db, org_id)
+    notify_account_user_id: UUID | None = None
+    if notify_targets:
         # INCR is atomic across concurrent calls, so two escalations landing
         # at the same instant still get distinct, consecutive turns instead
         # of racing onto the same teammate. The counter only ever grows —
         # taking it modulo the *current* team size at read time is what
         # lets people be added/removed between calls with no reset needed.
         turn = await redis.incr(f"{_TRANSFER_ROUND_ROBIN_PREFIX}{org_id}")
-        notify_phone = notify_phones[(turn - 1) % len(notify_phones)]
+        notify_account_user_id, notify_phone = notify_targets[(turn - 1) % len(notify_targets)]
 
         if _AGENT_CONNECT_TEMPLATE_APPROVED:
             template_name = _AGENT_CONNECT_TEMPLATE_NAME
@@ -770,6 +776,8 @@ async def transfer_to_human(
             intent="escalation",
             channel=channel,
             metadata_={"reason": reason, "urgency": urgency},
+            claimed_by_account_user_id=notify_account_user_id,
+            claimed_at=datetime.now(UTC) if notify_account_user_id else None,
         )
         db.add(lead)
         await db.commit()
@@ -1146,7 +1154,9 @@ async def initiate_ai_call(
 
     normalized = _normalize_phone(target_phone)
     org = await db.get(Org, org_id)
-    plivo_from, twilio_from = await get_default_numbers(db, org_id) if org else (None, None)
+    plivo_from, twilio_from = (
+        await get_rotating_numbers(db, get_redis_pool(), org_id) if org else (None, None)
+    )
 
     answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer?org_id={org_id}"
     try:

@@ -67,10 +67,11 @@ class Org(Base):
     # each (see db/models/org_phone_number.py). Plivo/Twilio's answer webhook
     # passes the dialed number as `To`, letting channels/voice/webhook.py
     # resolve the org for an *inbound* call on any of them; outbound calls
-    # dial from whichever row per provider has is_default=True (see
-    # channels/voice/org_numbers.py::get_default_numbers).
+    # round-robin across every row per provider, in `position` order (see
+    # channels/voice/org_numbers.py::get_rotating_numbers) — ordered the same
+    # way here so the settings page lists numbers in the order they dial.
     phone_numbers: Mapped[list["OrgPhoneNumber"]] = relationship(
-        cascade="all, delete-orphan", passive_deletes=True
+        cascade="all, delete-orphan", passive_deletes=True, order_by="OrgPhoneNumber.position"
     )
     # Explicit override of failover.py's automatic Plivo-first/Twilio-
     # fallback ordering — "plivo", "twilio", or NULL (automatic, the

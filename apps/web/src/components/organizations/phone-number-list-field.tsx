@@ -20,10 +20,12 @@ export interface PhoneNumberListFieldProps {
 
 /**
  * One provider's list of dedicated numbers — add/remove entries, mark one
- * "Primary" (the number outbound calls dial from; see
- * apps/api/channels/voice/org_numbers.py::get_default_numbers). The first
- * number added becomes Primary automatically; removing the Primary entry
- * promotes whichever is left at the top of the list.
+ * "Primary" (display only; see apps/api/channels/voice/org_numbers.py::
+ * get_default_numbers). Outbound calls round-robin across every number in
+ * this list, in the order shown, regardless of which is Primary — see
+ * get_rotating_numbers. The first number added becomes Primary
+ * automatically; removing the Primary entry promotes whichever is left at
+ * the top of the list.
  */
 export function PhoneNumberListField({ id, label, value, onChange }: PhoneNumberListFieldProps) {
   const [draft, setDraft] = useState("");
@@ -60,6 +62,12 @@ export function PhoneNumberListField({ id, label, value, onChange }: PhoneNumber
   return (
     <div>
       <Label htmlFor={id}>{label}</Label>
+      {value.length > 1 && (
+        <p className="mb-1.5 text-xs text-slate-500 dark:text-slate-400">
+          Outbound calls round-robin across all {value.length} numbers below, in order — Primary is
+          just a display label.
+        </p>
+      )}
       {value.length > 0 && (
         <div className="mb-2 flex flex-col gap-1.5">
           {value.map((entry, i) => (

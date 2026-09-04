@@ -30,7 +30,7 @@ from sqlalchemy.orm import selectinload
 
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice import plivo_client as voice_plivo
-from apps.api.channels.voice.org_numbers import get_default_numbers, replace_org_phone_numbers
+from apps.api.channels.voice.org_numbers import get_rotating_numbers, replace_org_phone_numbers
 from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
@@ -52,12 +52,16 @@ from apps.api.db.models import (
     Org,
     User,
 )
+from apps.api.db.models.org_membership import OrgMembership
 from apps.api.deps import (
     AnalyticsScopeDep,
+    CurrentOrg,
+    CurrentOrgDep,
     CurrentUserDep,
     DbDep,
     RedisDep,
     RequestOrgDep,
+    SessionPayloadDep,
     enforce_plan_limit,
     verify_admin_or_session,
 )
@@ -616,10 +620,36 @@ def _lead_status_clause(status: str):
     return Lead.status == status
 
 
+def _member_lead_scope(
+    scope_org_id: UUID | None, org: CurrentOrg, payload: dict[str, str] | None
+) -> UUID | None:
+    """Which account_user a role=="member" caller is restricted to.
+
+    Returns None for an admin, a platform superuser, or the shared
+    X-Admin-Token (scope_org_id already None in that case) — those see every
+    lead in scope. Returns the caller's own account_user id for a
+    role=="member" caller, who should only see/act on leads assigned to them
+    via `Lead.claimed_by_account_user_id` (see the field's docstring on the
+    model — general assignment, not just the escalation-claim flow).
+
+    Reads the id straight off the session payload rather than depending on
+    `CurrentUserDep` — that dependency's X-Admin-Token branch requires a
+    seeded `DEFAULT_OWNER_ID` AccountUser row to exist, which isn't
+    guaranteed for every admin-token caller. Unnecessary here anyway: this
+    branch never runs for an X-Admin-Token caller since `scope_org_id` is
+    already None for them.
+    """
+    if scope_org_id is not None and org.role == "member" and payload is not None:
+        return UUID(payload["account_user_id"])
+    return None
+
+
 @router.get("/leads")
 async def list_leads(
     db: DbDep,
     scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
     intent: str | None = Query(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
@@ -633,6 +663,9 @@ async def list_leads(
     stmt = select(Lead).order_by(Lead.created_at.desc()).limit(limit).offset(offset)
     if scope_org_id is not None:
         stmt = stmt.where(Lead.org_id == scope_org_id)
+    member_scope = _member_lead_scope(scope_org_id, org, payload)
+    if member_scope is not None:
+        stmt = stmt.where(Lead.claimed_by_account_user_id == member_scope)
     if intent:
         stmt = stmt.where(Lead.intent.ilike(f"%{intent}%"))
     if channel:
@@ -722,6 +755,9 @@ async def sample_leads_xlsx(x_admin_token: str | None = Header(None)) -> Streami
 async def get_lead(
     lead_id: UUID,
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> LeadDetailOut:
     """Lead detail — the captured fields plus that lead's conversation
@@ -730,6 +766,11 @@ async def get_lead(
     """
     lead = (await db.execute(select(Lead).where(Lead.id == lead_id))).scalar_one_or_none()
     if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if scope_org_id is not None and lead.org_id != scope_org_id:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    member_scope = _member_lead_scope(scope_org_id, org, payload)
+    if member_scope is not None and lead.claimed_by_account_user_id != member_scope:
         raise HTTPException(status_code=404, detail="Lead not found")
 
     # Correlated per-row COUNT — see list_conversations above for why this
@@ -757,7 +798,9 @@ async def get_lead(
         for conv, count, phone, name in conv_rows
     ]
 
-    return LeadDetailOut(**LeadOut.model_validate(lead).model_dump(), conversations=conversations)
+    claimant_names = await _claimant_names(db, [lead])
+    lead_out = _lead_out_with_claimant(lead, claimant_names)
+    return LeadDetailOut(**lead_out.model_dump(), conversations=conversations)
 
 
 @router.patch("/leads/{lead_id}", response_model=LeadOut)
@@ -765,6 +808,9 @@ async def update_lead(
     lead_id: UUID,
     payload: LeadUpdateIn,
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    session_payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> LeadOut:
     """Update a lead's status and/or follow-up. Partial: only fields the
@@ -775,7 +821,17 @@ async def update_lead(
     lead = (await db.execute(select(Lead).where(Lead.id == lead_id))).scalar_one_or_none()
     if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
+    if scope_org_id is not None and lead.org_id != scope_org_id:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    member_scope = _member_lead_scope(scope_org_id, org, session_payload)
+    if member_scope is not None and lead.claimed_by_account_user_id != member_scope:
+        raise HTTPException(status_code=404, detail="Lead not found")
 
+    # Assignment is automatic-only — a Lead's claimed_by_account_user_id is
+    # set once, by core/tools.py::transfer_to_human's round-robin at
+    # creation time (or by the escalation self-claim endpoint below).
+    # LeadUpdateIn has no such field, so there is no way to reassign a lead
+    # through this endpoint.
     updates = payload.model_dump(exclude_unset=True)
     for field, value in updates.items():
         setattr(lead, field, value)
@@ -792,6 +848,7 @@ async def update_lead(
 
 def _leads_export_stmt(
     scope_org_id: UUID | None,
+    member_scope: UUID | None,
     intent: str | None,
     channel: str | None,
     status: str | None,
@@ -804,6 +861,8 @@ def _leads_export_stmt(
     stmt = select(Lead).order_by(Lead.created_at.desc()).limit(limit).offset(offset)
     if scope_org_id is not None:
         stmt = stmt.where(Lead.org_id == scope_org_id)
+    if member_scope is not None:
+        stmt = stmt.where(Lead.claimed_by_account_user_id == member_scope)
     if intent:
         stmt = stmt.where(Lead.intent.ilike(f"%{intent}%"))
     if channel:
@@ -852,6 +911,8 @@ def _lead_export_row(lead: Lead) -> list[str]:
 async def export_leads_csv(
     db: DbDep,
     scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
     intent: str | None = Query(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
@@ -863,10 +924,19 @@ async def export_leads_csv(
     offset: int = Query(0, ge=0),
 ) -> StreamingResponse:
     """Same data as GET /admin/leads but rendered as CSV for download —
-    including the same org scoping, so an export can't pull rows the list
-    view wouldn't show."""
+    including the same org and per-member scoping, so an export can't pull
+    rows the list view wouldn't show."""
     stmt = _leads_export_stmt(
-        scope_org_id, intent, channel, status, qualification_status, tag, search, limit, offset
+        scope_org_id,
+        _member_lead_scope(scope_org_id, org, payload),
+        intent,
+        channel,
+        status,
+        qualification_status,
+        tag,
+        search,
+        limit,
+        offset,
     )
     leads = (await db.execute(stmt)).scalars().all()
 
@@ -884,6 +954,8 @@ async def export_leads_csv(
 async def export_leads_xlsx(
     db: DbDep,
     scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
     intent: str | None = Query(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
@@ -898,7 +970,16 @@ async def export_leads_xlsx(
     e.g. `?qualification_status=qualified` for the Reports page's "Export
     qualified leads" button."""
     stmt = _leads_export_stmt(
-        scope_org_id, intent, channel, status, qualification_status, tag, search, limit, offset
+        scope_org_id,
+        _member_lead_scope(scope_org_id, org, payload),
+        intent,
+        channel,
+        status,
+        qualification_status,
+        tag,
+        search,
+        limit,
+        offset,
     )
     leads = (await db.execute(stmt)).scalars().all()
 
@@ -2229,6 +2310,7 @@ async def outbound_call(
     payload: OutboundCallIn,
     db: DbDep,
     org: RequestOrgDep,
+    redis: RedisDep,
     x_admin_token: str | None = Header(None),
 ) -> OutboundCallOut:
     """Place an outbound voice call via Plivo.
@@ -2254,11 +2336,12 @@ async def outbound_call(
         )
         return OutboundCallOut(call_sid=f"STUB-{uuid4()}", status="stub")
 
-    # Dial from this org's own default dedicated number per provider (an org
-    # can have several per provider — see db/models/org_phone_number.py),
-    # falling back to each provider's platform default when it has none.
+    # Dial from this org's own dedicated numbers per provider, round-robining
+    # across all of them when it has more than one (see
+    # channels/voice/org_numbers.py::get_rotating_numbers), falling back to
+    # each provider's platform default when it has none.
     org_record = await db.get(Org, org_id)
-    plivo_from, twilio_from = await get_default_numbers(db, org_id)
+    plivo_from, twilio_from = await get_rotating_numbers(db, redis, org_id)
 
     # org_id travels on the answer_url so the realtime bridge attributes this
     # call's usage to the org that actually placed it (see

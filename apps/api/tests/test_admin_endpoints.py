@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import contextmanager
 
 import pytest
 import pytest_asyncio
@@ -19,13 +20,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
+from apps.api.core.security import generate_login_token, hash_token
 from apps.api.db.models import (
+    AccountUser,
     CallCampaign,
     CampaignTarget,
     Conversation,
     Lead,
     Message,
     Org,
+    OrgMembership,
     OrgPhoneNumber,
     User,
 )
@@ -35,13 +39,71 @@ ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 ADMIN_HEADERS = {"X-Admin-Token": settings.admin_token}
 
 
+@contextmanager
+def _require_session_auth(value: bool) -> Iterator[None]:
+    original = settings.require_session_auth
+    settings.require_session_auth = value
+    try:
+        yield
+    finally:
+        settings.require_session_auth = original
+
+
+async def _login_as(
+    client: AsyncClient, db: AsyncSession, *, email: str, role: str
+) -> dict[str, str]:
+    """Create an org membership with the given role, log in, and return a
+    ready-to-use `X-Session-Token` header for that account."""
+    login_token = generate_login_token()
+    account = AccountUser(email=email, token_hash=hash_token(login_token))
+    db.add(account)
+    await db.flush()
+    db.add(OrgMembership(org_id=ORG_ID, account_user_id=account.id, role=role))
+    await db.commit()
+
+    login = await client.post("/auth/login", json={"token": login_token})
+    token = login.json()["token"]
+    return {"X-Session-Token": token}
+
+
+class _FakePipeline:
+    """Enough of redis-py's pipeline (as an async context manager) for
+    core/sessions.py's create_session — queues SET/SADD, replays on execute()."""
+
+    def __init__(self, redis: "_FakeRedis") -> None:
+        self._redis = redis
+        self._queue: list[tuple[str, tuple, dict]] = []
+
+    def __getattr__(self, name: str):
+        def _queue_call(*args, **kwargs):
+            self._queue.append((name, args, kwargs))
+            return self
+
+        return _queue_call
+
+    async def execute(self) -> list:
+        results = []
+        for name, args, kwargs in self._queue:
+            results.append(await getattr(self._redis, name)(*args, **kwargs))
+        self._queue.clear()
+        return results
+
+    async def __aenter__(self) -> "_FakePipeline":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+
 class _FakeRedis:
-    """Minimal Redis stand-in for /admin/stats' error counter and
-    /admin/escalations' human_handoff_queue LRANGE."""
+    """Minimal Redis stand-in for /admin/stats' error counter,
+    /admin/escalations' human_handoff_queue LRANGE, and session
+    login/logout (SET/SADD/SREM/DELETE via a pipeline)."""
 
     def __init__(self) -> None:
         self.kv: dict[str, str] = {}
         self.lists: dict[str, list[str]] = {}
+        self.sets: dict[str, set[str]] = {}
 
     async def get(self, key: str) -> str | None:
         return self.kv.get(key)
@@ -50,8 +112,26 @@ class _FakeRedis:
         self.kv[key] = value
         return True
 
+    async def delete(self, *keys: str) -> None:
+        for key in keys:
+            self.kv.pop(key, None)
+            self.lists.pop(key, None)
+            self.sets.pop(key, None)
+
+    async def sadd(self, key: str, *values: str) -> None:
+        self.sets.setdefault(key, set()).update(values)
+
+    async def srem(self, key: str, *values: str) -> None:
+        self.sets.get(key, set()).difference_update(values)
+
+    async def smembers(self, key: str) -> set[str]:
+        return set(self.sets.get(key, set()))
+
     async def lrange(self, key: str, start: int, end: int) -> list[str]:
         return self.lists.get(key, [])
+
+    def pipeline(self, transaction: bool = True) -> "_FakePipeline":
+        return _FakePipeline(self)
 
 
 @pytest_asyncio.fixture
@@ -61,11 +141,26 @@ async def fake_redis() -> _FakeRedis:
 
 @pytest_asyncio.fixture
 async def client(
-    db_session: AsyncSession, fake_redis: _FakeRedis
+    db_session: AsyncSession,
+    fake_redis: _FakeRedis,
+    test_engine,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncGenerator[AsyncClient, None]:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
     from apps.api.main import create_app
+    from apps.api.routers import auth as auth_router
 
     app = create_app()
+
+    # /auth/login's background _record_last_login opens its own
+    # AsyncSessionLocal() rather than reusing the request's `db` — see
+    # conftest.py's own `client` fixture for the same redirect and why it's
+    # needed (otherwise it hits the real configured database instead of this
+    # test's in-memory engine).
+    monkeypatch.setattr(
+        auth_router, "AsyncSessionLocal", async_sessionmaker(bind=test_engine, expire_on_commit=False)
+    )
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
@@ -398,6 +493,114 @@ async def test_update_lead_404_for_unknown_id(
         headers=ADMIN_HEADERS,
     )
     assert response.status_code == 404
+
+
+async def test_list_leads_member_only_sees_assigned_leads(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000020")
+    db_session.add(user)
+    await db_session.flush()
+
+    member_headers = await _login_as(
+        client, db_session, email="member@example.com", role="member"
+    )
+    member_id = (
+        await db_session.execute(select(AccountUser).where(AccountUser.email == "member@example.com"))
+    ).scalar_one().id
+
+    assigned = Lead(org_id=ORG_ID, user_id=user.id, intent="assigned", claimed_by_account_user_id=member_id)
+    unassigned = Lead(org_id=ORG_ID, user_id=user.id, intent="unassigned")
+    db_session.add_all([assigned, unassigned])
+    await db_session.commit()
+
+    with _require_session_auth(True):
+        response = await client.get("/admin/leads", headers=member_headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert [lead["id"] for lead in body] == [str(assigned.id)]
+
+
+async def test_list_leads_admin_sees_all_org_leads(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000021")
+    db_session.add(user)
+    await db_session.flush()
+
+    admin_headers = await _login_as(client, db_session, email="admin@example.com", role="admin")
+
+    db_session.add_all(
+        [
+            Lead(org_id=ORG_ID, user_id=user.id, intent="a"),
+            Lead(org_id=ORG_ID, user_id=user.id, intent="b"),
+        ]
+    )
+    await db_session.commit()
+
+    with _require_session_auth(True):
+        response = await client.get("/admin/leads", headers=admin_headers)
+    assert response.status_code == 200
+    assert len(response.json()) == 2
+
+
+async def test_get_lead_404_for_member_lead_not_assigned_to_them(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000022")
+    db_session.add(user)
+    await db_session.flush()
+
+    member_headers = await _login_as(
+        client, db_session, email="member2@example.com", role="member"
+    )
+    lead = Lead(org_id=ORG_ID, user_id=user.id, intent="unassigned")
+    db_session.add(lead)
+    await db_session.commit()
+
+    with _require_session_auth(True):
+        response = await client.get(f"/admin/leads/{lead.id}", headers=member_headers)
+    assert response.status_code == 404
+
+
+async def test_update_lead_cannot_manually_reassign(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Assignment is automatic-only (see core/tools.py::transfer_to_human's
+    round robin) — PATCH /admin/leads/{id} has no claimed_by_account_user_id
+    field, so an admin sending one is silently ignored rather than acting on
+    it, and the lead stays unassigned."""
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000024")
+    db_session.add(user)
+    await db_session.flush()
+
+    admin_headers = await _login_as(client, db_session, email="admin2@example.com", role="admin")
+    member_headers = await _login_as(
+        client, db_session, email="member4@example.com", role="member"
+    )
+    member_id = (
+        await db_session.execute(select(AccountUser).where(AccountUser.email == "member4@example.com"))
+    ).scalar_one().id
+    _ = member_headers  # only needed to create the membership row above
+
+    lead = Lead(org_id=ORG_ID, user_id=user.id, intent="new")
+    db_session.add(lead)
+    await db_session.commit()
+
+    with _require_session_auth(True):
+        response = await client.patch(
+            f"/admin/leads/{lead.id}",
+            json={"claimed_by_account_user_id": str(member_id)},
+            headers=admin_headers,
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["claimed_by_account_user_id"] is None
+    assert body["claimed_at"] is None
 
 
 async def test_leads_csv_includes_channel_column(

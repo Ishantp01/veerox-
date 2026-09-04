@@ -62,10 +62,13 @@ class Lead(Base):
         nullable=False,
         index=True,
     )
-    # Ownership for the escalation-claim flow (transfer_to_human writes
-    # intent="escalation" leads; a team member claims one via
-    # PATCH /admin/escalations/{id}/claim so two people don't both work the
-    # same handoff). Unused by non-escalation leads.
+    # General lead ownership within an org. Two write paths: an escalation
+    # lead is self-claimed via PATCH /admin/escalations/{id}/claim (first
+    # claim wins, transfer_to_human writes intent="escalation" leads); any
+    # lead can otherwise be assigned by an admin via PATCH /admin/leads/{id}.
+    # A role=="member" account_user only sees/acts on leads assigned to them
+    # here (see admin._member_lead_scope) — role=="admin" still sees the
+    # whole org's leads regardless of this field.
     claimed_by_account_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("account_users.id", ondelete="SET NULL"), nullable=True
     )
