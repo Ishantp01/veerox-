@@ -53,6 +53,11 @@ class CampaignOut(BaseModel):
     template_language: str | None = None
     template_params: list[str] | None = None
     custom_message: str | None = None
+    # Voice-only overrides — NULL means "use the org default script" /
+    # "auto-rotate across the org's numbers" (see channels/voice/
+    # realtime_bridge.py and workers/campaign_dialer.py).
+    script_id: UUID | None = None
+    phone_number_id: UUID | None = None
     created_at: datetime
     counts: CampaignCounts
 

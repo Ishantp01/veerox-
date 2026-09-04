@@ -24,7 +24,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
-from sqlalchemy import String, case, cast, func, or_, select
+from sqlalchemy import String, case, cast, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -50,9 +50,11 @@ from apps.api.db.models import (
     Lead,
     Message,
     Org,
+    Script,
     User,
 )
 from apps.api.db.models.org_membership import OrgMembership
+from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.deps import (
     AnalyticsScopeDep,
     CurrentOrg,
@@ -84,6 +86,8 @@ from apps.api.schemas.admin import (
     WhatsAppSettingsOut,
 )
 from apps.api.schemas.org_numbers import OrgPhoneNumberOut
+from apps.api.schemas.script import ScriptCreateIn, ScriptUpdateIn
+from apps.api.schemas.script import ScriptOut as ScriptLibraryOut
 from apps.api.schemas.campaign import (
     CampaignCounts,
     CampaignCreateResult,
@@ -1366,6 +1370,8 @@ def _campaign_out(campaign: CallCampaign, counts: CampaignCounts) -> CampaignOut
         template_language=campaign.template_language,
         template_params=campaign.template_params,
         custom_message=campaign.custom_message,
+        script_id=campaign.script_id,
+        phone_number_id=campaign.phone_number_id,
         created_at=campaign.created_at,
         counts=counts,
     )
@@ -1385,6 +1391,8 @@ async def _create_campaign_from_rows(
     template_language: str | None = None,
     template_params: list[str] | None = None,
     custom_message: str | None = None,
+    script_id: UUID | None = None,
+    phone_number_id: UUID | None = None,
 ) -> CampaignCreateResult:
     """Shared core for every campaign-creation entry point (CSV/xlsx upload,
     JSON bulk import). Creates exactly ONE ``CallCampaign`` regardless of how
@@ -1428,6 +1436,8 @@ async def _create_campaign_from_rows(
         template_language=template_language,
         template_params=template_params,
         custom_message=custom_message,
+        script_id=script_id,
+        phone_number_id=phone_number_id,
         created_at=datetime.now(UTC),
     )
     db.add(campaign)
@@ -1538,6 +1548,8 @@ async def _create_campaigns_from_rows(
     template_language: str | None = None,
     template_params: list[str] | None = None,
     custom_message: str | None = None,
+    script_id: UUID | None = None,
+    phone_number_id: UUID | None = None,
 ) -> CampaignCreateResult:
     """Multi-channel orchestrator on top of ``_create_campaign_from_rows``.
     Always creates exactly ONE campaign, regardless of how many distinct
@@ -1598,6 +1610,8 @@ async def _create_campaigns_from_rows(
         template_language=template_language,
         template_params=template_params,
         custom_message=custom_message,
+        script_id=script_id,
+        phone_number_id=phone_number_id,
     )
     result.errors = row_errors + result.errors
     result.skipped += len(row_errors)
@@ -1618,6 +1632,8 @@ async def create_campaign(
     template_language: str | None = Form(None),
     template_params: str | None = Form(None),
     custom_message: str | None = Form(None),
+    script_id: UUID | None = Form(None),
+    phone_number_id: UUID | None = Form(None),
     x_admin_token: str | None = Header(None),
 ) -> CampaignCreateResult:
     """Create a campaign from an uploaded CSV/Excel contact list.
@@ -1632,6 +1648,10 @@ async def create_campaign(
     ``start_mode`` controls whether the resulting campaign(s) begin outreach
     immediately, sit as a draft until manually started (the default), or
     begin at a future ``scheduled_start_at``.
+
+    ``script_id``/``phone_number_id`` are voice-only, optional overrides —
+    left unset, calls use the org's default script and auto-rotate across
+    its numbers, same as before either field existed.
     """
     if start_mode == "scheduled" and (
         scheduled_start_at is None or scheduled_start_at <= datetime.now(UTC)
@@ -1651,6 +1671,16 @@ async def create_campaign(
     org_id = org
     usage = await get_credit_usage(db, org_id)
     await enforce_plan_limit(db, org_id, "max_campaigns", usage.campaigns)
+
+    if script_id is not None:
+        script = await db.get(Script, script_id)
+        if script is None or script.org_id != org_id:
+            raise HTTPException(status_code=400, detail="script_id does not belong to this org")
+    if phone_number_id is not None:
+        number = await db.get(OrgPhoneNumber, phone_number_id)
+        if number is None or number.org_id != org_id:
+            raise HTTPException(status_code=400, detail="phone_number_id does not belong to this org")
+
     resolved_status = {"draft": "draft", "now": "running", "scheduled": "scheduled"}[start_mode]
     return await _create_campaigns_from_rows(
         db,
@@ -1665,6 +1695,8 @@ async def create_campaign(
         template_language=template_language,
         template_params=parsed_template_params,
         custom_message=custom_message,
+        script_id=script_id,
+        phone_number_id=phone_number_id,
     )
 
 
@@ -1984,6 +2016,112 @@ async def update_script(
     if record.script:
         return ScriptOut(script=record.script, is_default=False)
     return ScriptOut(script=OUTBOUND_CALL_PROMPT.strip(), is_default=True)
+
+
+@router.get("/scripts", response_model=list[ScriptLibraryOut])
+async def list_scripts(
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> list[ScriptLibraryOut]:
+    """This org's voice-calling script library — see db/models/script.py.
+    Pick one per campaign (POST /admin/campaigns' script_id) or leave the
+    org's is_default one as the fallback every campaign without its own
+    pick uses."""
+    result = await db.execute(
+        select(Script).where(Script.org_id == org).order_by(Script.created_at)
+    )
+    return [ScriptLibraryOut.model_validate(s) for s in result.scalars().all()]
+
+
+@router.post("/scripts", response_model=ScriptLibraryOut, status_code=201)
+async def create_script(
+    body: ScriptCreateIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> ScriptLibraryOut:
+    """Add a script to this org's library. An org's very first script always
+    becomes its default regardless of `is_default` — an org is never left
+    with zero default scripts once it has at least one. Otherwise, marking
+    this one default unsets whichever script previously held it."""
+    has_any = (
+        await db.execute(select(Script.id).where(Script.org_id == org).limit(1))
+    ).first() is not None
+    make_default = body.is_default or not has_any
+    if make_default:
+        await db.execute(
+            update(Script).where(Script.org_id == org, Script.is_default.is_(True)).values(is_default=False)
+        )
+    script = Script(org_id=org, name=body.name.strip(), content=body.content, is_default=make_default)
+    db.add(script)
+    await db.commit()
+    await db.refresh(script)
+    return ScriptLibraryOut.model_validate(script)
+
+
+@router.patch("/scripts/{script_id}", response_model=ScriptLibraryOut)
+async def update_script_library_item(
+    script_id: UUID,
+    body: ScriptUpdateIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> ScriptLibraryOut:
+    """Rename and/or edit a script's content. Use POST
+    /admin/scripts/{id}/set-default to change which script is the default."""
+    script = await db.get(Script, script_id)
+    if script is None or script.org_id != org:
+        raise HTTPException(status_code=404, detail="Script not found")
+    fields = body.model_dump(exclude_unset=True)
+    if "name" in fields:
+        script.name = fields["name"].strip()
+    if "content" in fields:
+        script.content = fields["content"]
+    await db.commit()
+    await db.refresh(script)
+    return ScriptLibraryOut.model_validate(script)
+
+
+@router.post("/scripts/{script_id}/set-default", response_model=ScriptLibraryOut)
+async def set_default_script(
+    script_id: UUID,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> ScriptLibraryOut:
+    """Make this the org's default script, atomically unsetting whichever
+    one previously held that flag."""
+    script = await db.get(Script, script_id)
+    if script is None or script.org_id != org:
+        raise HTTPException(status_code=404, detail="Script not found")
+    await db.execute(
+        update(Script).where(Script.org_id == org, Script.is_default.is_(True)).values(is_default=False)
+    )
+    script.is_default = True
+    await db.commit()
+    await db.refresh(script)
+    return ScriptLibraryOut.model_validate(script)
+
+
+@router.delete("/scripts/{script_id}")
+async def delete_script(
+    script_id: UUID,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> dict[str, bool]:
+    """Remove a script from the library. Deleting the current default
+    doesn't promote another one — campaigns/calls just fall back further
+    (to the platform default) until a new default is set. Any campaign that
+    referenced this script keeps working: its script_id is cleared (ON
+    DELETE SET NULL), falling back to the org default at call time."""
+    script = await db.get(Script, script_id)
+    if script is None or script.org_id != org:
+        raise HTTPException(status_code=404, detail="Script not found")
+    await db.delete(script)
+    await db.commit()
+    return {"ok": True}
 
 
 @router.get("/org-numbers", response_model=OrgNumbersOut)

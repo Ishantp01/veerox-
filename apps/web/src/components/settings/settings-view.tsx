@@ -17,12 +17,16 @@ import {
   useToast,
 } from "@/components/ui";
 import { useCallingSettings, useScript, useUpdateCallingSettings, useUpdateScript } from "@/lib/hooks";
+import { ScriptLibrary } from "./script-library";
 
 interface CollapsibleSectionProps {
   title: string;
   icon: ReactNode;
   defaultOpen?: boolean;
   children: ReactNode;
+  /** Card's max-width utility class — wider sections (e.g. the calling
+   * script library's table) override the max-w-3xl default. */
+  maxWidthClassName?: string;
 }
 
 function CollapsibleSection({
@@ -30,11 +34,12 @@ function CollapsibleSection({
   icon,
   defaultOpen = false,
   children,
+  maxWidthClassName = "max-w-3xl",
 }: CollapsibleSectionProps) {
   const [open, setOpen] = useState(defaultOpen);
   const contentId = `section-${title.replace(/\s+/g, "-").toLowerCase()}`;
   return (
-    <Card className="max-w-3xl">
+    <Card className={maxWidthClassName}>
       <CardHeader className="p-0">
         <button
           type="button"
@@ -216,11 +221,12 @@ export interface SettingsViewProps {
 
 /**
  * Editable script + number view for the per-channel /whatsapp/settings and
- * /calling/settings pages. The script is shared by both channels (see
- * core/agent.py::_system_prompt_for and
- * channels/voice/realtime_bridge.py::_system_instructions); the number is
- * channel-specific and determines which org an inbound message/call on it
- * resolves to (channels/whatsapp/adapter.py, channels/voice/webhook.py).
+ * /calling/settings pages. WhatsApp still shares the single ScriptEditor
+ * override (see core/agent.py::_system_prompt_for); calling instead manages
+ * a full script library (see ./script-library.tsx and
+ * channels/voice/realtime_bridge.py::_system_instructions). The number is
+ * channel-specific either way and determines which org an inbound message/
+ * call on it resolves to (channels/whatsapp/adapter.py, channels/voice/webhook.py).
  */
 export function SettingsView({ title, description, channel }: SettingsViewProps) {
   return (
@@ -232,8 +238,9 @@ export function SettingsView({ title, description, channel }: SettingsViewProps)
           title="Script"
           icon={<Bot size={15} aria-hidden className="text-slate-400" />}
           defaultOpen
+          maxWidthClassName={channel === "calling" ? "max-w-5xl" : "max-w-3xl"}
         >
-          <ScriptEditor />
+          {channel === "calling" ? <ScriptLibrary /> : <ScriptEditor />}
         </CollapsibleSection>
 
         {channel === "calling" && (

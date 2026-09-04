@@ -31,6 +31,7 @@ from uuid import UUID
 import structlog
 import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
 
 from apps.api.channels.voice import adapter as voice_adapter
 from apps.api.channels.voice import plivo_client as voice_plivo
@@ -45,7 +46,7 @@ from apps.api.core.prompts import (
 from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
-from apps.api.db.models.org import Org
+from apps.api.db.models.script import Script
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
@@ -173,32 +174,44 @@ async def _resolve_org_id(campaign_target_id: UUID | None, raw_org_id: str | Non
 
 
 async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | None) -> str:
-    """The calling org's own script override, else the fixed appointment-
-    booking script used by the single-number Dial page — as the base
-    either way. A campaign-driven call layers its qualification criteria on
-    top of that same base as an addendum (see
-    ``campaign_qualification_append``), rather than replacing it — an org's
-    custom script must still be followed on a campaign call, not silently
-    swapped out for a generic one just because the call came from a
-    campaign.
-    """
-    base = OUTBOUND_CALL_PROMPT
-    if org_id is not None:
-        async with AsyncSessionLocal() as db:
-            org = await db.get(Org, org_id)
-        if org is not None and org.script:
-            base = org.script
+    """Base script, in order: the campaign's own pinned script (Script via
+    CallCampaign.script_id), else the org's default script (Script with
+    is_default=True), else the fixed appointment-booking script used by the
+    single-number Dial page. Voice-only — WhatsApp still reads Org.script
+    (see core/agent.py::_system_prompt_for), unrelated to this table (see
+    db/models/script.py).
 
-    if campaign_target_id is not None:
-        async with AsyncSessionLocal() as db:
+    A campaign-driven call layers its qualification criteria on top of that
+    base as an addendum (see ``campaign_qualification_append``), rather than
+    replacing it — the resolved script must still be followed on a campaign
+    call, not silently swapped out for a generic one just because the call
+    came from a campaign.
+    """
+    async with AsyncSessionLocal() as db:
+        campaign = None
+        if campaign_target_id is not None:
             target = await db.get(CampaignTarget, campaign_target_id)
             campaign = await db.get(CallCampaign, target.campaign_id) if target else None
-        if campaign is not None:
-            return (
-                f"{base.strip()}\n\n"
-                f"{campaign_qualification_append(campaign.criteria).strip()}\n\n"
-                f"{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
+
+        base = OUTBOUND_CALL_PROMPT
+        if campaign is not None and campaign.script_id is not None:
+            script = await db.get(Script, campaign.script_id)
+            if script is not None:
+                base = script.content
+        elif org_id is not None:
+            result = await db.execute(
+                select(Script).where(Script.org_id == org_id, Script.is_default.is_(True)).limit(1)
             )
+            default_script = result.scalar_one_or_none()
+            if default_script is not None:
+                base = default_script.content
+
+    if campaign is not None:
+        return (
+            f"{base.strip()}\n\n"
+            f"{campaign_qualification_append(campaign.criteria).strip()}\n\n"
+            f"{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
+        )
 
     return f"{base.strip()}\n\n{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
 

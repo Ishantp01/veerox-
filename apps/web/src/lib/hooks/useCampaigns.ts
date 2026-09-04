@@ -51,6 +51,10 @@ export interface CreateCampaignInput {
   /** Ordered per-{{1}}/{{2}}/... values — see template-param-mapper.tsx. */
   templateParams?: string[];
   customMessage?: string;
+  /** Voice-only, optional — unset falls back to the org's default script /
+   * auto-rotation across its numbers, same as before either field existed. */
+  scriptId?: string;
+  phoneNumberId?: string;
 }
 
 /**
@@ -79,6 +83,8 @@ async function createCampaign(input: CreateCampaignInput): Promise<CampaignCreat
     form.append("template_params", JSON.stringify(input.templateParams));
   }
   if (input.customMessage) form.append("custom_message", input.customMessage);
+  if (input.scriptId) form.append("script_id", input.scriptId);
+  if (input.phoneNumberId) form.append("phone_number_id", input.phoneNumberId);
 
   const res = await fetch(`${base}/admin/campaigns`, {
     method: "POST",

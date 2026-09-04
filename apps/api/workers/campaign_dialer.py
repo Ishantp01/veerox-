@@ -28,6 +28,7 @@ from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
+from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import get_redis_pool, record_error
@@ -129,7 +130,12 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
     still one extra query total, not one per org_numbers.py::
     get_rotating_numbers call. ``preferred_provider`` is the org's explicit
     Plivo/Twilio override (``Org.preferred_voice_provider``), or ``None``
-    for automatic ordering. Empty if there's nothing to
+    for automatic ordering — unless the target's campaign has pinned a
+    specific ``CallCampaign.phone_number_id``, in which case that number's
+    own provider overrides it for this call only, and rotation (including
+    the shared per-(org, provider) Redis counter) is bypassed entirely for
+    that target, so a pinned campaign never perturbs rotation for the rest
+    of the org's pool. Empty if there's nothing to
     dial right now or ``max_concurrent_calls`` voice calls are already in
     flight.
 
@@ -160,7 +166,12 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
         # no-op with a single dialer instance — the lock only ever
         # contends against a second instance's own claim attempt.
         stmt = (
-            select(CampaignTarget, CallCampaign.org_id, Org.preferred_voice_provider)
+            select(
+                CampaignTarget,
+                CallCampaign.org_id,
+                Org.preferred_voice_provider,
+                CallCampaign.phone_number_id,
+            )
             .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
             .join(Org, Org.id == CallCampaign.org_id)
             .where(
@@ -175,8 +186,8 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
         rows = (await db.execute(stmt)).all()
 
         org_over_limit: dict[UUID, bool] = {}
-        staged: list[tuple[CampaignTarget, UUID, str | None]] = []
-        for target, org_id, preferred_provider in rows:
+        staged: list[tuple[CampaignTarget, UUID, str | None, UUID | None]] = []
+        for target, org_id, preferred_provider, phone_number_id in rows:
             if len(staged) >= capacity:
                 break
             if org_id not in org_over_limit:
@@ -189,20 +200,41 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
             target.status = "calling"
             target.attempt_count += 1
             target.called_at = datetime.now(UTC)
-            staged.append((target, org_id, preferred_provider))
+            staged.append((target, org_id, preferred_provider, phone_number_id))
 
         if not staged:
             return []
 
         redis = get_redis_pool()
-        numbers_by_org = await get_numbers_by_org(db, {org_id for _, org_id, _ in staged})
+        numbers_by_org = await get_numbers_by_org(db, {org_id for _, org_id, _, _ in staged})
+
+        pinned_ids = {phone_number_id for _, _, _, phone_number_id in staged if phone_number_id is not None}
+        pinned_numbers: dict[UUID, tuple[str, str]] = {}
+        if pinned_ids:
+            pinned_rows = (
+                await db.execute(
+                    select(OrgPhoneNumber.id, OrgPhoneNumber.provider, OrgPhoneNumber.phone_number).where(
+                        OrgPhoneNumber.id.in_(pinned_ids)
+                    )
+                )
+            ).all()
+            pinned_numbers = {pn_id: (provider, number) for pn_id, provider, number in pinned_rows}
+
         claimed = []
-        for target, org_id, preferred_provider in staged:
-            org_numbers = numbers_by_org.get(org_id, {})
-            plivo_from = await next_rotating_number(redis, org_id, "plivo", org_numbers.get("plivo", []))
-            twilio_from = await next_rotating_number(
-                redis, org_id, "twilio", org_numbers.get("twilio", [])
-            )
+        for target, org_id, preferred_provider, phone_number_id in staged:
+            pinned = pinned_numbers.get(phone_number_id) if phone_number_id is not None else None
+            if pinned is not None:
+                provider, number = pinned
+                plivo_from = f"+{number}" if provider == "plivo" else None
+                twilio_from = f"+{number}" if provider == "twilio" else None
+                effective_provider = provider
+            else:
+                org_numbers = numbers_by_org.get(org_id, {})
+                plivo_from = await next_rotating_number(redis, org_id, "plivo", org_numbers.get("plivo", []))
+                twilio_from = await next_rotating_number(
+                    redis, org_id, "twilio", org_numbers.get("twilio", [])
+                )
+                effective_provider = preferred_provider
             claimed.append(
                 (
                     str(target.id),
@@ -210,7 +242,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
                     target.attempt_count,
                     plivo_from,
                     twilio_from,
-                    preferred_provider,
+                    effective_provider,
                     org_id,
                 )
             )

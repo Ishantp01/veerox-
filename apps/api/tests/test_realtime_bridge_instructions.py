@@ -10,6 +10,11 @@ concurrency. Fixed so the org's script (or the platform default, same
 precedence as any other call) is always the base, with the campaign's
 qualification criteria layered on top as an addendum instead of a
 replacement (see `campaign_qualification_append`).
+
+Voice calling now resolves its base script from the `scripts` table (see
+db/models/script.py) rather than the legacy `Org.script` column, which is
+WhatsApp-only these days — a campaign's own pinned `script_id` wins, else
+the org's `is_default=True` script, else the platform default.
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.voice import realtime_bridge as bridge_module
 from apps.api.core.prompts import OUTBOUND_CALL_PROMPT
-from apps.api.db.models import CallCampaign, CampaignTarget, Org
+from apps.api.db.models import CallCampaign, CampaignTarget, Org, Script
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -43,19 +48,23 @@ def reuse_db(db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> Async
     return db_session
 
 
-async def test_campaign_call_uses_org_script_as_base_plus_criteria(
+async def test_campaign_call_uses_org_default_script_as_base_plus_criteria(
     reuse_db: AsyncSession,
 ) -> None:
-    """The exact bug report, now fixed: an org has a custom script
+    """The exact bug report, now fixed: an org has a default script
     configured — a campaign call for that same org must use it as the base,
     with the campaign's own `criteria` layered on top as an addendum, not
     swapped out for a generic unrelated template."""
-    org = Org(
-        id=ORG_ID,
-        name="Test Org",
-        script="MY CUSTOM SCRIPT: always mention our 20% launch discount.",
-    )
+    org = Org(id=ORG_ID, name="Test Org")
     reuse_db.add(org)
+    reuse_db.add(
+        Script(
+            org_id=ORG_ID,
+            name="Default",
+            content="MY CUSTOM SCRIPT: always mention our 20% launch discount.",
+            is_default=True,
+        )
+    )
     campaign = CallCampaign(
         org_id=ORG_ID, name="Spring campaign", criteria="Wants a demo this quarter"
     )
@@ -73,6 +82,33 @@ async def test_campaign_call_uses_org_script_as_base_plus_criteria(
     # The base script's own text must come before the qualification
     # addendum — it's the persona/flow the addendum layers on top of.
     assert instructions.index("MY CUSTOM SCRIPT") < instructions.index("Wants a demo this quarter")
+
+
+async def test_campaign_call_uses_its_own_pinned_script_over_org_default(
+    reuse_db: AsyncSession,
+) -> None:
+    """A campaign's own script_id wins over the org's default script — a
+    campaign author who explicitly picked a script must see it followed,
+    not silently overridden by whatever the org's default happens to be."""
+    org = Org(id=ORG_ID, name="Test Org")
+    reuse_db.add(org)
+    reuse_db.add(Script(org_id=ORG_ID, name="Default", content="ORG DEFAULT SCRIPT", is_default=True))
+    pinned = Script(org_id=ORG_ID, name="Spring promo", content="PINNED CAMPAIGN SCRIPT")
+    reuse_db.add(pinned)
+    await reuse_db.flush()
+    campaign = CallCampaign(
+        org_id=ORG_ID, name="Spring campaign", criteria="Wants a demo this quarter", script_id=pinned.id
+    )
+    reuse_db.add(campaign)
+    await reuse_db.flush()
+    target = CampaignTarget(campaign_id=campaign.id, org_id=ORG_ID, phone="+14155551111")
+    reuse_db.add(target)
+    await reuse_db.commit()
+
+    instructions = await bridge_module._system_instructions(target.id, ORG_ID)
+
+    assert "PINNED CAMPAIGN SCRIPT" in instructions
+    assert "ORG DEFAULT SCRIPT" not in instructions
 
 
 async def test_campaign_call_falls_back_to_platform_default_with_no_org_script(
@@ -99,12 +135,16 @@ async def test_campaign_call_falls_back_to_platform_default_with_no_org_script(
     assert "Wants a demo this quarter" in instructions
 
 
-async def test_non_campaign_call_uses_org_script_when_set(reuse_db: AsyncSession) -> None:
-    """Confirms the org script DOES work correctly on the non-campaign path
-    (single admin call / AI callback / follow-up call) — isolates the gap to
-    campaign calls specifically, not the script-reading code in general."""
-    org = Org(id=ORG_ID, name="Test Org", script="MY CUSTOM SCRIPT: always be polite.")
+async def test_non_campaign_call_uses_org_default_script_when_set(reuse_db: AsyncSession) -> None:
+    """Confirms the org's default script DOES work correctly on the
+    non-campaign path (single admin call / AI callback / follow-up call) —
+    isolates the gap to campaign calls specifically, not the script-reading
+    code in general."""
+    org = Org(id=ORG_ID, name="Test Org")
     reuse_db.add(org)
+    reuse_db.add(
+        Script(org_id=ORG_ID, name="Default", content="MY CUSTOM SCRIPT: always be polite.", is_default=True)
+    )
     await reuse_db.commit()
 
     instructions = await bridge_module._system_instructions(None, ORG_ID)

@@ -49,6 +49,18 @@ class CallCampaign(Base):
     # Optional free-text follow-up sent right after the template (or after
     # the default opening message, if no template is set).
     custom_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Voice-only overrides, both optional — NULL falls back to the org's
+    # default behavior (see channels/voice/realtime_bridge.py::
+    # _system_instructions for script, workers/campaign_dialer.py::
+    # _claim_targets for phone_number). SET NULL on delete so removing a
+    # script/number an old campaign referenced never blocks the delete or
+    # loses the campaign — it just falls back.
+    script_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("scripts.id", ondelete="SET NULL"), nullable=True
+    )
+    phone_number_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("org_phone_numbers.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from apps.api.db.base import Base
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
+from apps.api.db.models.script import Script
 
 
 class Org(Base):
@@ -53,7 +54,11 @@ class Org(Base):
     )
     # Org-authored replacement for the built-in OUTBOUND_CALL_PROMPT (see
     # core/prompts.py) — NULL means "use the platform default script".
-    # Shared by both WhatsApp and voice, same as the prompt it replaces.
+    # WhatsApp-only these days (core/agent.py::_system_prompt_for) — voice
+    # calling now picks from the `scripts` relationship below instead (see
+    # channels/voice/realtime_bridge.py::_system_instructions), one org-wide
+    # default plus per-campaign overrides (db/models/call_campaign.py's
+    # script_id). Kept here, unmigrated, purely for WhatsApp.
     script: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Meta's `metadata.phone_number_id` for this org's WhatsApp Business
     # number — every inbound webhook payload carries it, so it's how
@@ -73,6 +78,10 @@ class Org(Base):
     phone_numbers: Mapped[list["OrgPhoneNumber"]] = relationship(
         cascade="all, delete-orphan", passive_deletes=True, order_by="OrgPhoneNumber.position"
     )
+    # This org's AI-calling script library (see db/models/script.py) — voice
+    # only. Exactly one row is expected to carry is_default=True; that's the
+    # base a campaign call falls back to when it has no script_id of its own.
+    scripts: Mapped[list["Script"]] = relationship(cascade="all, delete-orphan", passive_deletes=True)
     # Explicit override of failover.py's automatic Plivo-first/Twilio-
     # fallback ordering — "plivo", "twilio", or NULL (automatic, the
     # default: prefer whichever provider this org has a dedicated number

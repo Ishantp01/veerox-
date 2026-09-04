@@ -76,7 +76,11 @@ async def create_contact(
         created_by_account_user_id=account_user_id,
     )
     db.add(contact)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="You already have a contact with that phone number")
     await db.refresh(contact)
     return contact
 
@@ -127,13 +131,13 @@ async def import_contacts_file(
     """Bulk-import contacts from an uploaded CSV or Excel (.xlsx) file. Only
     'phone' is required (name/email/company are optional columns). A row
     whose phone matches a contact the importer already owns updates that
-    contact's other fields instead of erroring on the (org_id, phone) unique
-    constraint — reimporting the same list is a safe way to refresh your own
-    contacts. A phone already used by a contact someone ELSE in the org
-    created is reported as an error row instead — the org-wide phone
-    uniqueness constraint means it can't become a second, separately-owned
-    contact, and it isn't the importer's to silently overwrite (see
-    db/models/contact.py's creator-siloing docstring).
+    contact's other fields instead of erroring on the (org_id, phone,
+    created_by_account_user_id) unique constraint — reimporting the same
+    list is a safe way to refresh your own contacts. A phone already used by
+    a contact someone ELSE in the org created is unaffected by that row —
+    each team member's contact list is independent (see db/models/
+    contact.py's docstring), so it's simply added as your own new contact,
+    same as a phone nobody has yet.
     Registered ahead of GET /contacts/{contact_id} so its literal path isn't
     swallowed by that route's UUID path param.
     """
@@ -146,14 +150,12 @@ async def import_contacts_file(
     else:
         raise HTTPException(status_code=400, detail="Only .csv or .xlsx files are supported")
 
-    org_result = await db.execute(select(Contact.phone).where(Contact.org_id == org_id))
     own_result = await db.execute(
         select(Contact).where(
             Contact.org_id == org_id, Contact.created_by_account_user_id == account_user_id
         )
     )
     existing_by_phone = {c.phone: c for c in own_result.scalars().all()}
-    other_owned_phones = set(org_result.scalars().all()) - set(existing_by_phone.keys())
 
     imported = 0
     updated = 0
@@ -172,14 +174,6 @@ async def import_contacts_file(
                         f"phone '{phone}' must include a country code in E.164 format, "
                         "e.g. +919876543210"
                     ),
-                )
-            )
-            continue
-        if normalized in other_owned_phones:
-            errors.append(
-                ContactImportError(
-                    row=row_num,
-                    reason=f"phone '{phone}' already belongs to another team member's contact",
                 )
             )
             continue
@@ -263,9 +257,7 @@ async def update_contact(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(
-            status_code=409, detail="Another contact in this org already has that phone number"
-        )
+        raise HTTPException(status_code=409, detail="You already have a contact with that phone number")
     await db.refresh(contact)
     return contact
 

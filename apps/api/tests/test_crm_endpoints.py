@@ -66,6 +66,37 @@ async def test_create_contact_records_creator(client: AsyncClient, db_session: A
     assert body["created_by_account_user_id"] is not None
 
 
+async def test_create_contact_rejects_duplicate_within_own_list(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    headers = await _login_as(client, db_session, email="rep1@example.com", role="member")
+
+    with _require_session_auth(True):
+        first = await client.post("/crm/contacts", json={"phone": "+919876543299"}, headers=headers)
+        assert first.status_code == 201
+        second = await client.post("/crm/contacts", json={"phone": "+919876543299"}, headers=headers)
+    assert second.status_code == 409
+
+
+async def test_create_contact_allows_same_phone_for_different_members(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    rep1_headers = await _login_as(client, db_session, email="rep1@example.com", role="member")
+    rep2_headers = await _login_as(client, db_session, email="rep2@example.com", role="member")
+
+    with _require_session_auth(True):
+        first = await client.post(
+            "/crm/contacts", json={"phone": "+919876543298"}, headers=rep1_headers
+        )
+        second = await client.post(
+            "/crm/contacts", json={"phone": "+919876543298"}, headers=rep2_headers
+        )
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+
 async def test_list_contacts_only_shows_own(client: AsyncClient, db_session: AsyncSession) -> None:
     await _seed_org(db_session)
     rep1_headers = await _login_as(client, db_session, email="rep1@example.com", role="member")
@@ -178,9 +209,12 @@ async def test_import_updates_only_importers_own_contact(
     assert body["errors"] == []
 
 
-async def test_import_skips_phone_owned_by_another_member(
+async def test_import_adds_own_copy_of_a_phone_another_member_already_has(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
+    """Each team member's contact list is independent — a phone number
+    someone else in the org already has doesn't block adding your own
+    contact for it; it's treated exactly like a phone nobody has yet."""
     await _seed_org(db_session)
     rep1_headers = await _login_as(client, db_session, email="rep1@example.com", role="member")
     rep2_headers = await _login_as(client, db_session, email="rep2@example.com", role="member")
@@ -189,7 +223,7 @@ async def test_import_skips_phone_owned_by_another_member(
         await client.post(
             "/crm/contacts", json={"phone": "+919876543218", "name": "Rep1's"}, headers=rep1_headers
         )
-        csv_content = b"name,phone,email,company\r\nTakeover Attempt,+919876543218,,\r\n"
+        csv_content = b"name,phone,email,company\r\nRep2's own copy,+919876543218,,\r\n"
         response = await client.post(
             "/crm/contacts/import",
             files={"file": ("contacts.csv", csv_content, "text/csv")},
@@ -198,12 +232,46 @@ async def test_import_skips_phone_owned_by_another_member(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["imported"] == 0
+    assert body["imported"] == 1
     assert body["updated"] == 0
-    assert body["skipped"] == 1
-    assert "another team member" in body["errors"][0]["reason"]
+    assert body["skipped"] == 0
+    assert body["errors"] == []
 
-    # Rep1's own contact must be untouched.
+    # Both reps now have their own independent contact for the same number.
     with _require_session_auth(True):
         rep1_list = await client.get("/crm/contacts", headers=rep1_headers)
+        rep2_list = await client.get("/crm/contacts", headers=rep2_headers)
     assert rep1_list.json()[0]["name"] == "Rep1's"
+    assert rep2_list.json()[0]["name"] == "Rep2's own copy"
+
+
+async def test_import_updates_only_when_reimporting_own_phone_not_someone_elses(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The "only skipped if it's already in the importer's OWN list" rule:
+    re-importing a phone you already have updates your row; the same phone
+    imported by someone else creates a separate, independent row for them
+    (asserted above) rather than being skipped or stolen."""
+    await _seed_org(db_session)
+    rep1_headers = await _login_as(client, db_session, email="rep1@example.com", role="member")
+
+    with _require_session_auth(True):
+        await client.post(
+            "/crm/contacts", json={"phone": "+919876543219", "name": "Old Name"}, headers=rep1_headers
+        )
+        csv_content = b"name,phone,email,company\r\nNew Name,+919876543219,,\r\n"
+        response = await client.post(
+            "/crm/contacts/import",
+            files={"file": ("contacts.csv", csv_content, "text/csv")},
+            headers=rep1_headers,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["imported"] == 0
+    assert body["updated"] == 1
+
+    with _require_session_auth(True):
+        rep1_list = await client.get("/crm/contacts", headers=rep1_headers)
+    assert len(rep1_list.json()) == 1
+    assert rep1_list.json()[0]["name"] == "New Name"

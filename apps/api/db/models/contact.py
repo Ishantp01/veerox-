@@ -24,10 +24,23 @@ class Contact(Base):
     existed (or by very old import paths) have no recorded creator, and are
     therefore nobody's — visible to no one via the API without a direct DB
     fix, same as any orphaned row.
+
+    Phone uniqueness is scoped per (org_id, phone, created_by_account_user_id)
+    — not just (org_id, phone) — since two team members' contact lists are
+    independent: rep A and rep B can each have their own contact for the
+    same phone number (e.g. both talked to the same person), and importing/
+    adding a number someone else in the org already has should add it to
+    *your* list, not be blocked by their row. NULLs (orphaned, creator-less
+    rows) each count as distinct under Postgres's NULL-handling in unique
+    indexes, so they never collide with each other either.
     """
 
     __tablename__ = "contacts"
-    __table_args__ = (UniqueConstraint("org_id", "phone", name="uq_contacts_org_phone"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "org_id", "phone", "created_by_account_user_id", name="uq_contacts_org_phone_creator"
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     org_id: Mapped[UUID] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False)

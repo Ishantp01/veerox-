@@ -17,6 +17,7 @@ import tiktoken
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.config import settings
 from apps.api.db.models.message import Message
 
 logger = structlog.get_logger(__name__)
@@ -29,14 +30,14 @@ DEFAULT_TOKEN_BUDGET = 4000
 
 @lru_cache(maxsize=1)
 def _encoding() -> Any:
-    """Lazily resolve and cache the gpt-4o encoding.
+    """Lazily resolve and cache the encoding for ``settings.openai_chat_model``.
 
     Falls back to ``cl100k_base`` if tiktoken does not yet ship a mapping for
-    the configured model — gpt-4o uses the o200k encoding which old tiktoken
-    builds may not recognise.
+    the configured model (e.g. a newer o200k-family model on an old tiktoken
+    build), so a model bump can't silently mis-tokenize.
     """
     try:
-        return tiktoken.encoding_for_model("gpt-4o")
+        return tiktoken.encoding_for_model(settings.openai_chat_model)
     except KeyError:
         return tiktoken.get_encoding("cl100k_base")
 

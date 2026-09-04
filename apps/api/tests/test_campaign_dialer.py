@@ -12,10 +12,12 @@ import uuid
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.api.channels.voice.org_numbers import replace_org_phone_numbers
 from apps.api.db.models import CallCampaign, CampaignTarget, Org
+from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn
 from apps.api.workers import campaign_dialer
 from apps.api.workers.campaign_dialer import handle_call_ended
@@ -60,11 +62,13 @@ async def _seed_target(
     attempt_count: int = 1,
     campaign_channel: str = "voice",
     campaign_status: str = "running",
+    campaign_phone_number_id: uuid.UUID | None = None,
     **kwargs,
 ) -> CampaignTarget:
     campaign = CallCampaign(
         org_id=ORG_ID, name="Test Campaign", criteria="n/a",
         channel=campaign_channel, status=campaign_status,
+        phone_number_id=campaign_phone_number_id,
     )
     db.add(campaign)
     await db.flush()
@@ -194,6 +198,43 @@ async def test_claim_targets_carries_org_preferred_provider(db_session: AsyncSes
     assert len(claimed) == 1
     *_, preferred_provider, org_id = claimed[0]
     assert preferred_provider == "twilio"
+
+
+async def test_claim_targets_uses_pinned_phone_number_and_overrides_provider(
+    db_session: AsyncSession,
+) -> None:
+    """A campaign with phone_number_id set must dial from exactly that
+    number, on its own provider — even when the org's preferred_voice_provider
+    says otherwise — bypassing rotation entirely."""
+    await _seed_org(db_session, preferred_voice_provider="twilio")
+    await replace_org_phone_numbers(
+        db_session,
+        ORG_ID,
+        [
+            OrgPhoneNumberIn(provider="plivo", phone_number="+14155550001"),
+            OrgPhoneNumberIn(provider="twilio", phone_number="+14155559999"),
+        ],
+    )
+    await db_session.commit()
+    pinned = (
+        await db_session.execute(select(OrgPhoneNumber).where(OrgPhoneNumber.provider == "plivo"))
+    ).scalar_one()
+
+    await _seed_target(
+        db_session,
+        status="pending",
+        attempt_count=0,
+        campaign_channel="voice",
+        campaign_phone_number_id=pinned.id,
+    )
+
+    claimed = await campaign_dialer._claim_targets()
+
+    assert len(claimed) == 1
+    _, _, _, plivo_from, twilio_from, preferred_provider, _ = claimed[0]
+    assert plivo_from == "+14155550001"
+    assert twilio_from is None
+    assert preferred_provider == "plivo"
 
 
 async def test_claim_targets_rotates_across_two_plivo_numbers_over_separate_ticks(

@@ -219,10 +219,24 @@ export interface Prompts {
 }
 
 // GET/PUT /admin/script — the org's editable script (or the platform
-// default when the org hasn't overridden it).
+// default when the org hasn't overridden it). WhatsApp-only these days —
+// see ScriptLibraryItem for the voice-calling script library.
 export interface Script {
   script: string;
   is_default: boolean;
+}
+
+// GET/POST/PATCH/DELETE /admin/scripts — one entry in the org's voice-only
+// AI-calling script library (see apps/api/db/models/script.py). Pick one
+// per campaign, or leave is_default as the fallback every campaign without
+// its own pick uses.
+export interface ScriptLibraryItem {
+  id: string;
+  name: string;
+  content: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 // One of an org's dedicated Plivo/Twilio numbers — an org can have several
@@ -381,6 +395,10 @@ export interface Campaign {
   template_language: string | null;
   template_params: string[] | null;
   custom_message: string | null;
+  // Voice-only overrides — null means "use the org default script" /
+  // "auto-rotate across the org's numbers".
+  script_id: string | null;
+  phone_number_id: string | null;
   created_at: string;
   counts: CampaignCounts;
 }

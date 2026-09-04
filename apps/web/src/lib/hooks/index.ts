@@ -30,6 +30,15 @@ export { useEscalations, useClaimEscalation, type EscalationFilters } from "./us
 export { useKillSwitch, useSetKillSwitch } from "./useKillSwitch";
 export { useWhatsAppSettings, useCallingSettings, useUpdateCallingSettings } from "./useConfig";
 export { useScript, useUpdateScript } from "./useScript";
+export {
+  useScripts,
+  useCreateScript,
+  useUpdateScriptLibraryItem,
+  useSetDefaultScript,
+  useDeleteScript,
+  type ScriptCreateInput,
+  type ScriptLibraryUpdateInput,
+} from "./useScripts";
 export { useOrgNumbers, useUpdateOrgNumbers } from "./useOrgNumbers";
 export {
   useOutboundCall,

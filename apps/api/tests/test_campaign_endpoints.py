@@ -16,10 +16,22 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.channels.voice.org_numbers import replace_org_phone_numbers
 from apps.api.config import settings
 from apps.api.core.security import generate_login_token, hash_token
-from apps.api.db.models import AccountUser, CallCampaign, CampaignTarget, Lead, Org, OrgMembership, Plan
+from apps.api.db.models import (
+    AccountUser,
+    CallCampaign,
+    CampaignTarget,
+    Lead,
+    Org,
+    OrgMembership,
+    Plan,
+    Script,
+)
+from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.deps import get_db, get_redis_dep
+from apps.api.schemas.org_numbers import OrgPhoneNumberIn
 from apps.api.tests.conftest import FakeRedis
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -95,6 +107,65 @@ async def test_create_campaign_stages_targets_not_leads(
     assert all(t.status == "pending" for t in targets)
     leads = (await db_session.execute(select(Lead))).scalars().all()
     assert leads == []
+
+
+async def test_create_campaign_with_script_and_phone_number_ids(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    script = Script(org_id=ORG_ID, name="Custom", content="Say hi.", is_default=True)
+    db_session.add(script)
+    await replace_org_phone_numbers(
+        db_session, ORG_ID, [OrgPhoneNumberIn(provider="plivo", phone_number="+14155550001")]
+    )
+    await db_session.commit()
+    number = (await db_session.execute(select(OrgPhoneNumber))).scalar_one()
+    csv_body = "name,phone\nAsha,+910000000050\n"
+
+    response = await client.post(
+        "/admin/campaigns",
+        data={
+            "name": "Pinned campaign",
+            "criteria": "n/a",
+            "channel": "voice",
+            "script_id": str(script.id),
+            "phone_number_id": str(number.id),
+        },
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()["campaign"]
+    assert body["script_id"] == str(script.id)
+    assert body["phone_number_id"] == str(number.id)
+
+
+async def test_create_campaign_rejects_script_from_another_org(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    other_org_id = uuid.uuid4()
+    db_session.add(Org(id=other_org_id, name="Other Org"))
+    other_script = Script(org_id=other_org_id, name="Not mine", content="x", is_default=True)
+    db_session.add(other_script)
+    await db_session.commit()
+    csv_body = "name,phone\nAsha,+910000000050\n"
+
+    response = await client.post(
+        "/admin/campaigns",
+        data={
+            "name": "Should fail",
+            "criteria": "n/a",
+            "channel": "voice",
+            "script_id": str(other_script.id),
+        },
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "script_id" in response.json()["detail"]
 
 
 async def test_create_campaign_rejects_phone_without_country_code(

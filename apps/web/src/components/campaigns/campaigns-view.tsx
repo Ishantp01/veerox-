@@ -37,9 +37,11 @@ import { formatDateTime } from "@/lib/format";
 import {
   useCampaigns,
   useCreateCampaign,
+  useOrgNumbers,
   usePauseCampaign,
   useResumeCampaign,
   useScheduleCampaign,
+  useScripts,
   useTemplates,
   type CampaignStartMode,
 } from "@/lib/hooks";
@@ -107,11 +109,18 @@ export function CampaignsView() {
   const [paramSources, setParamSources] = useState<TemplateParamSource[]>([]);
   const [paramCustomValues, setParamCustomValues] = useState<string[]>([]);
   const [customMessage, setCustomMessage] = useState("");
+  const [scriptId, setScriptId] = useState("");
+  const [phoneNumberId, setPhoneNumberId] = useState("");
   const [fieldErrors, setFieldErrors] = useState<CampaignFieldErrors>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [reschedulingId, setReschedulingId] = useState<string | null>(null);
   const [rescheduleValue, setRescheduleValue] = useState("");
+
+  const { data: scriptsData } = useScripts();
+  const scripts = scriptsData ?? [];
+  const { data: orgNumbersData } = useOrgNumbers();
+  const phoneNumbers = orgNumbersData?.phone_numbers ?? [];
 
   const { data: templatesData } = useTemplates({ active: true });
   // Every Meta-approved template — including ones with {{1}}/{{2}} params,
@@ -183,6 +192,8 @@ export function CampaignsView() {
         templateLanguage: selectedTemplate?.language,
         templateParams,
         customMessage: customMessage.trim() || undefined,
+        scriptId: scriptId || undefined,
+        phoneNumberId: phoneNumberId || undefined,
       },
       {
         onSuccess: (result) => {
@@ -209,6 +220,8 @@ export function CampaignsView() {
           setParamSources([]);
           setParamCustomValues([]);
           setCustomMessage("");
+          setScriptId("");
+          setPhoneNumberId("");
           setFieldErrors({});
           if (fileInputRef.current) fileInputRef.current.value = "";
         },
@@ -394,6 +407,43 @@ export function CampaignsView() {
                 The AI agent asks questions to judge each prospect against this bar, then records its
                 verdict — only prospects it marks interested become CRM leads.
               </p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="campaign-phone-number">Call from (optional)</Label>
+                <Select
+                  id="campaign-phone-number"
+                  value={phoneNumberId}
+                  onChange={setPhoneNumberId}
+                  className="w-full"
+                >
+                  <option value="">Automatic — rotate across all numbers</option>
+                  {phoneNumbers.map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.phone_number} ({n.provider}
+                      {n.is_default ? ", primary" : ""})
+                    </option>
+                  ))}
+                </Select>
+                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                  Voice calls only — ignored for WhatsApp contacts in this upload.
+                </p>
+              </div>
+              <div>
+                <Label htmlFor="campaign-script">Script (optional)</Label>
+                <Select id="campaign-script" value={scriptId} onChange={setScriptId} className="w-full">
+                  <option value="">Use org default script</option>
+                  {scripts.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                      {s.is_default ? " (default)" : ""}
+                    </option>
+                  ))}
+                </Select>
+                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                  Voice calls only — ignored for WhatsApp contacts in this upload.
+                </p>
+              </div>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
