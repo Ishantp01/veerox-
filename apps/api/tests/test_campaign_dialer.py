@@ -63,12 +63,14 @@ async def _seed_target(
     campaign_channel: str = "voice",
     campaign_status: str = "running",
     campaign_phone_number_id: uuid.UUID | None = None,
+    campaign_max_attempts: int = 3,
     **kwargs,
 ) -> CampaignTarget:
     campaign = CallCampaign(
         org_id=ORG_ID, name="Test Campaign", criteria="n/a",
         channel=campaign_channel, status=campaign_status,
         phone_number_id=campaign_phone_number_id,
+        max_attempts=campaign_max_attempts,
     )
     db.add(campaign)
     await db.flush()
@@ -107,6 +109,35 @@ async def test_handle_call_ended_fails_permanently_after_max_attempts(
 
     await db_session.refresh(target)
     assert target.status == "failed"
+
+
+async def test_handle_call_ended_respects_campaign_max_attempts_of_one(
+    db_session: AsyncSession,
+) -> None:
+    """A campaign set to max_attempts=1 gives up after the very first
+    unanswered call — no retry even though the old default would allow two
+    more."""
+    await _seed_org(db_session)
+    target = await _seed_target(db_session, attempt_count=1, campaign_max_attempts=1)
+
+    await handle_call_ended(str(target.id))
+
+    await db_session.refresh(target)
+    assert target.status == "failed"
+
+
+async def test_handle_call_ended_respects_campaign_max_attempts_of_five(
+    db_session: AsyncSession,
+) -> None:
+    """A campaign set to max_attempts=5 keeps retrying at attempt 3, where
+    the old hard-coded cap of 3 would have failed it."""
+    await _seed_org(db_session)
+    target = await _seed_target(db_session, attempt_count=3, campaign_max_attempts=5)
+
+    await handle_call_ended(str(target.id))
+
+    await db_session.refresh(target)
+    assert target.status == "pending"
 
 
 async def test_handle_call_ended_never_retries_a_connected_call(
@@ -176,7 +207,16 @@ async def test_claim_targets_claims_pending_voice_campaign(
     claimed = await campaign_dialer._claim_targets()
 
     assert len(claimed) == 1
-    target_id, phone, attempt_count, plivo_from, twilio_from, preferred_provider, org_id = claimed[0]
+    (
+        target_id,
+        phone,
+        attempt_count,
+        plivo_from,
+        twilio_from,
+        preferred_provider,
+        org_id,
+        max_attempts,
+    ) = claimed[0]
     assert target_id == str(target.id)
     assert phone == target.phone
     assert attempt_count == 1
@@ -184,6 +224,7 @@ async def test_claim_targets_claims_pending_voice_campaign(
     assert twilio_from is None
     assert preferred_provider is None
     assert org_id == target.org_id
+    assert max_attempts == 3
 
 
 async def test_claim_targets_carries_org_preferred_provider(db_session: AsyncSession) -> None:
@@ -196,7 +237,7 @@ async def test_claim_targets_carries_org_preferred_provider(db_session: AsyncSes
     claimed = await campaign_dialer._claim_targets()
 
     assert len(claimed) == 1
-    *_, preferred_provider, org_id = claimed[0]
+    *_, preferred_provider, org_id, max_attempts = claimed[0]
     assert preferred_provider == "twilio"
 
 
@@ -231,7 +272,7 @@ async def test_claim_targets_uses_pinned_phone_number_and_overrides_provider(
     claimed = await campaign_dialer._claim_targets()
 
     assert len(claimed) == 1
-    _, _, _, plivo_from, twilio_from, preferred_provider, _ = claimed[0]
+    _, _, _, plivo_from, twilio_from, preferred_provider, _, _ = claimed[0]
     assert plivo_from == "+14155550001"
     assert twilio_from is None
     assert preferred_provider == "plivo"

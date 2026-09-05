@@ -7,6 +7,8 @@ import { KillSwitchBanner } from "@/components/dashboard/kill-switch-banner";
 import { StatsGrid } from "@/components/dashboard/stats-grid";
 import { useToast } from "@/components/ui";
 import { useKillSwitch, useSetKillSwitch } from "@/lib/hooks";
+import { TourTrigger } from "@/components/onboarding/tour-trigger";
+import { ONBORDA_IDS } from "@/lib/onboarding/tours";
 
 const SECTIONS = [
   {
@@ -76,7 +78,7 @@ export default function LandingPage() {
   return (
     <div className="mx-auto max-w-7xl">
       <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
+        <div id={ONBORDA_IDS.dashboardWelcome}>
           <h1 className="flex items-center gap-2 text-xl font-bold text-slate-900 dark:text-white">
             {greeting}! <span className="text-2xl">👋</span>
           </h1>
@@ -84,24 +86,31 @@ export default function LandingPage() {
             Real-time overview across both agent channels — the kill switch below pauses both at once.
           </p>
         </div>
-        <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-          <span>{today}</span>
-          <CalendarDays size={14} aria-hidden />
+        <div className="flex items-center gap-3">
+          <TourTrigger />
+          <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+            <span>{today}</span>
+            <CalendarDays size={14} aria-hidden />
+          </div>
         </div>
       </div>
 
       {/* Kill-switch control reflects server state once loaded. It's global
           by design: there's a single agent pause flag, not one per channel. */}
-      {!killSwitch.isLoading && !killSwitch.isError && (
-        <KillSwitchBanner
-          enabled={enabled}
-          loading={setKillSwitch.isPending}
-          onToggle={handleToggle}
-        />
-      )}
+      <div id={ONBORDA_IDS.killSwitch}>
+        {!killSwitch.isLoading && !killSwitch.isError && (
+          <KillSwitchBanner
+            enabled={enabled}
+            loading={setKillSwitch.isPending}
+            onToggle={handleToggle}
+          />
+        )}
+      </div>
 
       <div className="flex flex-col gap-8">
-        <StatsGrid variant="all" />
+        <div id={ONBORDA_IDS.stats}>
+          <StatsGrid variant="all" />
+        </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {SECTIONS.map(({ href, label, description, Icon, chip }) => (

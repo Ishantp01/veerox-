@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
-import { Building2, ChevronRight, Menu, Moon, Sun } from "lucide-react";
+import { Building2, ChevronRight, Compass, Menu, Moon, Sun } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useWhatsAppSettings } from "@/lib/hooks";
+import { useStartTour } from "@/components/onboarding/onboarding-tour";
 
 // Social links icon row (SocialLinksRow, useSocialLinks, SOCIAL_META) was
 // removed from this topbar — see removefeature.md to re-add.
@@ -60,6 +61,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
   const whatsapp = useWhatsAppSettings();
   const connected = whatsapp.data?.configured ?? false;
   const { user } = useAuth();
+  const startTour = useStartTour();
 
   return (
     <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-slate-200/80 bg-white/80 px-4 backdrop-blur-md sm:px-6 lg:px-8 dark:border-slate-700/80 dark:bg-slate-950/70">
@@ -121,6 +123,16 @@ export function Topbar({ onMenuClick }: TopbarProps) {
             </span>
           </div>
         )}
+        <button
+          type="button"
+          onClick={startTour}
+          aria-label="Take the product tour"
+          title="Take the product tour"
+          className="flex h-7 items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100 px-3 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+        >
+          <Compass size={12} aria-hidden />
+          <span className="hidden sm:inline">Tour</span>
+        </button>
         <button
           type="button"
           role="switch"

@@ -399,6 +399,9 @@ export interface Campaign {
   // "auto-rotate across the org's numbers".
   script_id: string | null;
   phone_number_id: string | null;
+  // Voice-only: how many times the dialer re-calls a target that never
+  // connects before marking it failed (any integer >= 1, default 3).
+  max_attempts: number;
   created_at: string;
   counts: CampaignCounts;
 }

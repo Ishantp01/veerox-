@@ -58,6 +58,9 @@ class CampaignOut(BaseModel):
     # realtime_bridge.py and workers/campaign_dialer.py).
     script_id: UUID | None = None
     phone_number_id: UUID | None = None
+    # Voice-only: dial-attempt cap for targets that never connect (any
+    # integer >= 1, default 3). See workers/campaign_dialer.py.
+    max_attempts: int = 3
     created_at: datetime
     counts: CampaignCounts
 

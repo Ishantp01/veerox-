@@ -2,7 +2,12 @@ import type { Config } from "tailwindcss";
 
 const config: Config = {
   darkMode: "class",
-  content: ["./src/**/*.{ts,tsx}"],
+  content: [
+    "./src/**/*.{ts,tsx}",
+    // Onborda ships its own utility classes in the compiled bundle — Tailwind
+    // must scan it or the tour overlay/card render unstyled.
+    "./node_modules/onborda/dist/**/*.{js,mjs}",
+  ],
   theme: {
     extend: {
       colors: {

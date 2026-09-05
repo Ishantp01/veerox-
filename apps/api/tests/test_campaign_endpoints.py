@@ -141,6 +141,80 @@ async def test_create_campaign_with_script_and_phone_number_ids(
     assert body["phone_number_id"] == str(number.id)
 
 
+async def test_create_campaign_persists_max_attempts(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    await db_session.commit()
+    csv_body = "name,phone\nAsha,+910000000051\n"
+
+    response = await client.post(
+        "/admin/campaigns",
+        data={"name": "Two tries", "criteria": "n/a", "channel": "voice", "max_attempts": "2"},
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["campaign"]["max_attempts"] == 2
+
+
+async def test_create_campaign_defaults_max_attempts_to_three(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    await db_session.commit()
+    csv_body = "name,phone\nAsha,+910000000052\n"
+
+    response = await client.post(
+        "/admin/campaigns",
+        data={"name": "Default tries", "criteria": "n/a", "channel": "voice"},
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["campaign"]["max_attempts"] == 3
+
+
+async def test_create_campaign_allows_large_max_attempts(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """No upper bound — an org that wants to keep retrying can set any
+    positive integer."""
+    await _seed_org(db_session)
+    await db_session.commit()
+    csv_body = "name,phone\nAsha,+910000000053\n"
+
+    response = await client.post(
+        "/admin/campaigns",
+        data={"name": "Persistent", "criteria": "n/a", "channel": "voice", "max_attempts": "25"},
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["campaign"]["max_attempts"] == 25
+
+
+async def test_create_campaign_rejects_zero_max_attempts(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    await db_session.commit()
+    csv_body = "name,phone\nAsha,+910000000054\n"
+
+    response = await client.post(
+        "/admin/campaigns",
+        data={"name": "Never call", "criteria": "n/a", "channel": "voice", "max_attempts": "0"},
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "max_attempts" in response.json()["detail"]
+
+
 async def test_create_campaign_rejects_script_from_another_org(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

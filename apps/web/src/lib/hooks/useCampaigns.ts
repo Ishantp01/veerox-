@@ -55,6 +55,10 @@ export interface CreateCampaignInput {
    * auto-rotation across its numbers, same as before either field existed. */
   scriptId?: string;
   phoneNumberId?: string;
+  /** Voice-only, any integer >= 1 — how many times the dialer re-calls a
+   * contact who never picks up before marking them failed. Omitted → backend
+   * default 3. */
+  maxAttempts?: number;
 }
 
 /**
@@ -85,6 +89,7 @@ async function createCampaign(input: CreateCampaignInput): Promise<CampaignCreat
   if (input.customMessage) form.append("custom_message", input.customMessage);
   if (input.scriptId) form.append("script_id", input.scriptId);
   if (input.phoneNumberId) form.append("phone_number_id", input.phoneNumberId);
+  if (input.maxAttempts) form.append("max_attempts", String(input.maxAttempts));
 
   const res = await fetch(`${base}/admin/campaigns`, {
     method: "POST",

@@ -1372,6 +1372,7 @@ def _campaign_out(campaign: CallCampaign, counts: CampaignCounts) -> CampaignOut
         custom_message=campaign.custom_message,
         script_id=campaign.script_id,
         phone_number_id=campaign.phone_number_id,
+        max_attempts=campaign.max_attempts,
         created_at=campaign.created_at,
         counts=counts,
     )
@@ -1393,6 +1394,7 @@ async def _create_campaign_from_rows(
     custom_message: str | None = None,
     script_id: UUID | None = None,
     phone_number_id: UUID | None = None,
+    max_attempts: int = 3,
 ) -> CampaignCreateResult:
     """Shared core for every campaign-creation entry point (CSV/xlsx upload,
     JSON bulk import). Creates exactly ONE ``CallCampaign`` regardless of how
@@ -1438,6 +1440,7 @@ async def _create_campaign_from_rows(
         custom_message=custom_message,
         script_id=script_id,
         phone_number_id=phone_number_id,
+        max_attempts=max_attempts,
         created_at=datetime.now(UTC),
     )
     db.add(campaign)
@@ -1550,6 +1553,7 @@ async def _create_campaigns_from_rows(
     custom_message: str | None = None,
     script_id: UUID | None = None,
     phone_number_id: UUID | None = None,
+    max_attempts: int = 3,
 ) -> CampaignCreateResult:
     """Multi-channel orchestrator on top of ``_create_campaign_from_rows``.
     Always creates exactly ONE campaign, regardless of how many distinct
@@ -1612,6 +1616,7 @@ async def _create_campaigns_from_rows(
         custom_message=custom_message,
         script_id=script_id,
         phone_number_id=phone_number_id,
+        max_attempts=max_attempts,
     )
     result.errors = row_errors + result.errors
     result.skipped += len(row_errors)
@@ -1634,6 +1639,7 @@ async def create_campaign(
     custom_message: str | None = Form(None),
     script_id: UUID | None = Form(None),
     phone_number_id: UUID | None = Form(None),
+    max_attempts: int = Form(3),
     x_admin_token: str | None = Header(None),
 ) -> CampaignCreateResult:
     """Create a campaign from an uploaded CSV/Excel contact list.
@@ -1652,11 +1658,17 @@ async def create_campaign(
     ``script_id``/``phone_number_id`` are voice-only, optional overrides —
     left unset, calls use the org's default script and auto-rotate across
     its numbers, same as before either field existed.
+
+    ``max_attempts`` (voice-only, any integer >= 1, default 3) caps how many
+    times the dialer re-calls a target that never connects before marking it
+    failed.
     """
     if start_mode == "scheduled" and (
         scheduled_start_at is None or scheduled_start_at <= datetime.now(UTC)
     ):
         raise HTTPException(status_code=400, detail="scheduled_start_at must be in the future")
+    if max_attempts < 1:
+        raise HTTPException(status_code=400, detail="max_attempts must be at least 1")
     parsed_template_params = _parse_template_params_form(template_params)
 
     filename = (file.filename or "").lower()
@@ -1697,6 +1709,7 @@ async def create_campaign(
         custom_message=custom_message,
         script_id=script_id,
         phone_number_id=phone_number_id,
+        max_attempts=max_attempts,
     )
 
 

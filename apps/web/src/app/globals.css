@@ -81,6 +81,23 @@ button {
   user-select: none;
 }
 
+/* Onborda product tour ---------------------------------------------------
+   Two overrides on the library's own markup:
+   1. Its card wrapper is `max-w-[100%]`, where 100% resolves to the width of
+      the highlighted element — a narrow sidebar link would squash the card
+      and clip its text. Force a readable fixed width instead.
+   2. Its pointer arrow SVG carries no width/height attributes; if Tailwind
+      hasn't scanned the onborda bundle the `w-6 h-6` classes are missing and
+      the SVG balloons to its 300x150 intrinsic size. Pin it. */
+[data-name="onborda-card"] {
+  max-width: min(340px, calc(100vw - 2rem)) !important;
+  width: max-content !important;
+}
+[data-name="onborda-arrow"] {
+  width: 1.5rem !important;
+  height: 1.5rem !important;
+}
+
 /* Animated shimmer sweep for Skeleton — reads as "actively loading" rather
    than a static pulsing block, closer to a premium product's loading state. */
 @keyframes shimmer {

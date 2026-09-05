@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useBillingStatus } from "@/lib/hooks/useBilling";
+import { ONBORDA_NAV_IDS } from "@/lib/onboarding/tours";
 
 interface NavItem {
   href: string;
@@ -241,6 +242,7 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
                     <li key={href}>
                       <Link
                         href={href}
+                        id={ONBORDA_NAV_IDS[href]}
                         className={`relative flex items-center gap-3 rounded-lg border-l-[3px] px-3 py-2 text-sm font-medium transition-all duration-150 ${
                           active
                             ? "border-primary-500 bg-primary-50 text-slate-900 dark:border-primary-500 dark:bg-primary-600/10 dark:text-primary-400"

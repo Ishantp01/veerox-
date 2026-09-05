@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from apps.api.db.base import Base
@@ -61,6 +61,12 @@ class CallCampaign(Base):
     phone_number_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("org_phone_numbers.id", ondelete="SET NULL"), nullable=True
     )
+    # Voice-only: how many times the dialer (workers/campaign_dialer.py) will
+    # place a call to a target that never connects before giving up and
+    # marking it "failed". Selectable per campaign at creation (any integer
+    # >= 1); defaults to 3, the old hard-coded value. A target that actually
+    # answered is never retried regardless of this (see handle_call_ended).
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="3")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

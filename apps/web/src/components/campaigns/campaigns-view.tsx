@@ -63,7 +63,7 @@ const campaignSchema = z.object({
 });
 
 type CampaignFieldErrors = Partial<
-  Record<"name" | "criteria" | "file" | "scheduledAt" | "templateParams", string>
+  Record<"name" | "criteria" | "file" | "scheduledAt" | "templateParams" | "maxAttempts", string>
 >;
 
 function validateContactFile(file: File | null): string | null {
@@ -111,6 +111,7 @@ export function CampaignsView() {
   const [customMessage, setCustomMessage] = useState("");
   const [scriptId, setScriptId] = useState("");
   const [phoneNumberId, setPhoneNumberId] = useState("");
+  const [maxAttempts, setMaxAttempts] = useState("3");
   const [fieldErrors, setFieldErrors] = useState<CampaignFieldErrors>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -169,6 +170,10 @@ export function CampaignsView() {
     if (hasEmptyCustomParam) {
       errors.templateParams = "Fill in every custom placeholder value, or pick a different source";
     }
+    const attempts = Number(maxAttempts);
+    if (!Number.isInteger(attempts) || attempts < 1) {
+      errors.maxAttempts = "Enter a whole number of 1 or more";
+    }
 
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
@@ -194,6 +199,7 @@ export function CampaignsView() {
         customMessage: customMessage.trim() || undefined,
         scriptId: scriptId || undefined,
         phoneNumberId: phoneNumberId || undefined,
+        maxAttempts: Number(maxAttempts),
       },
       {
         onSuccess: (result) => {
@@ -222,6 +228,7 @@ export function CampaignsView() {
           setCustomMessage("");
           setScriptId("");
           setPhoneNumberId("");
+          setMaxAttempts("3");
           setFieldErrors({});
           if (fileInputRef.current) fileInputRef.current.value = "";
         },
@@ -442,6 +449,32 @@ export function CampaignsView() {
                 </Select>
                 <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
                   Voice calls only — ignored for WhatsApp contacts in this upload.
+                </p>
+              </div>
+              <div>
+                <Label htmlFor="campaign-max-attempts">Call attempts</Label>
+                <Input
+                  id="campaign-max-attempts"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={maxAttempts}
+                  onChange={(e) => setMaxAttempts(e.target.value)}
+                  className="w-full"
+                  aria-invalid={fieldErrors.maxAttempts ? true : undefined}
+                  aria-describedby={
+                    fieldErrors.maxAttempts ? "campaign-max-attempts-error" : undefined
+                  }
+                />
+                {fieldErrors.maxAttempts && (
+                  <p id="campaign-max-attempts-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.maxAttempts}
+                  </p>
+                )}
+                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                  Voice calls only — how many times a contact who never picks up is re-dialed
+                  before being marked failed (default 3, no upper limit). Answered calls are
+                  never re-dialed.
                 </p>
               </div>
             </div>

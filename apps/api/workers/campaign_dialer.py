@@ -40,6 +40,10 @@ from apps.api.workers.campaign_scheduling import (
 logger = structlog.get_logger(__name__)
 
 _POLL_INTERVAL_SECS = 5
+# Fallback dial-attempt cap, used only when a target somehow has no owning
+# campaign row to read ``CallCampaign.max_attempts`` off (shouldn't happen —
+# a FK enforces it). Each campaign carries its own 1-5 value, chosen at
+# creation time; this is just the historical default.
 _MAX_ATTEMPTS = 3
 # Backstop only — Plivo's hangup_url callback (handle_call_ended, below) is
 # what normally releases a finished call within seconds. This timeout only
@@ -76,17 +80,21 @@ async def _reclaim_stale_calls(db) -> None:
     voice targets; see ``_requeue_stuck_targets`` for why.
     """
     cutoff = datetime.now(UTC) - timedelta(seconds=_STALE_CALL_TIMEOUT_SECS)
-    stmt = select(CampaignTarget).where(
-        CampaignTarget.status == "calling",
-        CampaignTarget.called_at < cutoff,
-        CampaignTarget.channel == "voice",
+    stmt = (
+        select(CampaignTarget, CallCampaign.max_attempts)
+        .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
+        .where(
+            CampaignTarget.status == "calling",
+            CampaignTarget.called_at < cutoff,
+            CampaignTarget.channel == "voice",
+        )
     )
-    stale = (await db.execute(stmt)).scalars().all()
-    for target in stale:
+    stale = (await db.execute(stmt)).all()
+    for target, max_attempts in stale:
         if target.conversation_id is not None:
             target.status = "failed"
         else:
-            target.status = "pending" if target.attempt_count < _MAX_ATTEMPTS else "failed"
+            target.status = "pending" if target.attempt_count < max_attempts else "failed"
         logger.warning(
             "campaign_dialer_reclaimed_stale_call",
             target_id=str(target.id),
@@ -110,13 +118,16 @@ async def _count_calls_in_flight(db) -> int:
     return (await db.execute(stmt)).scalar_one()
 
 
-async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, str | None, UUID]]:
+async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, str | None, UUID, int]]:
     """Atomically claim up to the remaining concurrency budget's worth of the
     oldest pending targets of running campaigns.
 
     Returns ``[(target_id, phone, attempt_count, plivo_from, twilio_from,
-    preferred_provider, org_id), ...]`` as strings/int so the caller can place
-    the calls outside this short-lived session. ``plivo_from``/``twilio_from``
+    preferred_provider, org_id, max_attempts), ...]`` as strings/int so the
+    caller can place the calls outside this short-lived session.
+    ``max_attempts`` is the owning ``CallCampaign.max_attempts`` (1-5), so
+    ``_dial_one`` can decide retry-vs-fail without another query.
+    ``plivo_from``/``twilio_from``
     round-robin across every dedicated number the owning org has on that
     provider (see ``db/models/org_phone_number.py`` — an org can have
     several per provider), or ``None`` to fall back to that provider's
@@ -171,6 +182,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
                 CallCampaign.org_id,
                 Org.preferred_voice_provider,
                 CallCampaign.phone_number_id,
+                CallCampaign.max_attempts,
             )
             .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
             .join(Org, Org.id == CallCampaign.org_id)
@@ -186,8 +198,8 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
         rows = (await db.execute(stmt)).all()
 
         org_over_limit: dict[UUID, bool] = {}
-        staged: list[tuple[CampaignTarget, UUID, str | None, UUID | None]] = []
-        for target, org_id, preferred_provider, phone_number_id in rows:
+        staged: list[tuple[CampaignTarget, UUID, str | None, UUID | None, int]] = []
+        for target, org_id, preferred_provider, phone_number_id, max_attempts in rows:
             if len(staged) >= capacity:
                 break
             if org_id not in org_over_limit:
@@ -200,15 +212,17 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
             target.status = "calling"
             target.attempt_count += 1
             target.called_at = datetime.now(UTC)
-            staged.append((target, org_id, preferred_provider, phone_number_id))
+            staged.append((target, org_id, preferred_provider, phone_number_id, max_attempts))
 
         if not staged:
             return []
 
         redis = get_redis_pool()
-        numbers_by_org = await get_numbers_by_org(db, {org_id for _, org_id, _, _ in staged})
+        numbers_by_org = await get_numbers_by_org(db, {org_id for _, org_id, _, _, _ in staged})
 
-        pinned_ids = {phone_number_id for _, _, _, phone_number_id in staged if phone_number_id is not None}
+        pinned_ids = {
+            phone_number_id for _, _, _, phone_number_id, _ in staged if phone_number_id is not None
+        }
         pinned_numbers: dict[UUID, tuple[str, str]] = {}
         if pinned_ids:
             pinned_rows = (
@@ -221,7 +235,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
             pinned_numbers = {pn_id: (provider, number) for pn_id, provider, number in pinned_rows}
 
         claimed = []
-        for target, org_id, preferred_provider, phone_number_id in staged:
+        for target, org_id, preferred_provider, phone_number_id, max_attempts in staged:
             pinned = pinned_numbers.get(phone_number_id) if phone_number_id is not None else None
             if pinned is not None:
                 provider, number = pinned
@@ -244,6 +258,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
                     twilio_from,
                     effective_provider,
                     org_id,
+                    max_attempts,
                 )
             )
         await db.commit()
@@ -282,7 +297,9 @@ async def handle_call_ended(target_id: str) -> None:
         if target.conversation_id is not None:
             target.status = "failed"
         else:
-            target.status = "pending" if target.attempt_count < _MAX_ATTEMPTS else "failed"
+            campaign = await db.get(CallCampaign, target.campaign_id)
+            max_attempts = campaign.max_attempts if campaign is not None else _MAX_ATTEMPTS
+            target.status = "pending" if target.attempt_count < max_attempts else "failed"
         await db.commit()
         logger.info("campaign_dialer_call_ended", target_id=target_id, new_status=target.status)
 
@@ -295,6 +312,7 @@ async def _dial_one(
     twilio_from: str | None,
     preferred_provider: str | None,
     org_id: UUID,
+    max_attempts: int,
 ) -> None:
     answer_url = (
         f"{settings.public_base_url.rstrip('/')}/voice/answer?campaign_target_id={target_id}"
@@ -335,7 +353,7 @@ async def _dial_one(
             start_precall_connect(request_uuid, UUID(target_id), org_id)
     except httpx.HTTPError:
         logger.warning("campaign_dialer_initiate_call_failed", target_id=target_id)
-        await _mark_target(target_id, "pending" if attempt_count < _MAX_ATTEMPTS else "failed")
+        await _mark_target(target_id, "pending" if attempt_count < max_attempts else "failed")
 
 
 async def _dial_batch() -> None:
@@ -345,9 +363,25 @@ async def _dial_batch() -> None:
     await asyncio.gather(
         *(
             _dial_one(
-                target_id, phone, attempt_count, plivo_from, twilio_from, preferred_provider, org_id
+                target_id,
+                phone,
+                attempt_count,
+                plivo_from,
+                twilio_from,
+                preferred_provider,
+                org_id,
+                max_attempts,
             )
-            for target_id, phone, attempt_count, plivo_from, twilio_from, preferred_provider, org_id in claimed
+            for (
+                target_id,
+                phone,
+                attempt_count,
+                plivo_from,
+                twilio_from,
+                preferred_provider,
+                org_id,
+                max_attempts,
+            ) in claimed
         )
     )
 

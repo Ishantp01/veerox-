@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { DashboardShell } from "@/components/layout/dashboard-shell";
+import { OnboardingTour } from "@/components/onboarding/onboarding-tour";
 import { Spinner } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
 import { useBillingStatus } from "@/lib/hooks/useBilling";
@@ -113,9 +114,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   if (onGatedFeatureRoute) return null;
 
   return (
-    <DashboardShell>
-      {children}
-      {/* Help Desk chatbot widget removed from here — see removefeature.md to re-add. */}
-    </DashboardShell>
+    <OnboardingTour>
+      <DashboardShell>
+        {children}
+        {/* Help Desk chatbot widget removed from here — see removefeature.md to re-add. */}
+      </DashboardShell>
+    </OnboardingTour>
   );
 }
