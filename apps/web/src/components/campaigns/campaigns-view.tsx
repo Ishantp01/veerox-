@@ -45,6 +45,7 @@ import {
   useScheduleCampaign,
   useScripts,
   useTemplates,
+  useUpdateCampaign,
   type CampaignStartMode,
 } from "@/lib/hooks";
 import { CampaignStatusBadge } from "./campaign-status-badge";
@@ -149,6 +150,18 @@ export function CampaignsView() {
   const pauseCampaign = usePauseCampaign();
   const resumeCampaign = useResumeCampaign();
   const scheduleCampaign = useScheduleCampaign();
+  const updateCampaign = useUpdateCampaign();
+
+  function handleScriptChange(campaignId: string, newScriptId: string) {
+    updateCampaign.mutate(
+      { id: campaignId, scriptId: newScriptId || null },
+      {
+        onSuccess: () =>
+          toast({ title: "Script updated", description: "New calls on this campaign will use it.", variant: "success" }),
+        onError: (err) => toast({ title: "Couldn't update script", description: err.message, variant: "error" }),
+      }
+    );
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -577,6 +590,7 @@ export function CampaignsView() {
               <TableRow isHeader>
                 <TableHeader>Name</TableHeader>
                 <TableHeader>Channel</TableHeader>
+                <TableHeader>Script</TableHeader>
                 <TableHeader>Status</TableHeader>
                 <TableHeader>Progress</TableHeader>
                 <TableHeader>Qualified</TableHeader>
@@ -608,6 +622,26 @@ export function CampaignsView() {
                     </TableCell>
                     <TableCell>
                       <CampaignChannelBadge channel={c.channel} />
+                    </TableCell>
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      {c.channel === "whatsapp" ? (
+                        <span className="text-xs text-slate-400">—</span>
+                      ) : (
+                        <Select
+                          id={`campaign-script-${c.id}`}
+                          value={c.script_id ?? ""}
+                          onChange={(value) => handleScriptChange(c.id, value)}
+                          disabled={updateCampaign.isPending}
+                          className="w-40 text-xs"
+                        >
+                          <option value="">Org default</option>
+                          {scripts.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </Select>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-col gap-0.5">

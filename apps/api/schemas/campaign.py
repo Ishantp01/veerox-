@@ -84,3 +84,14 @@ class CampaignStatusUpdateOut(BaseModel):
 
 class CampaignScheduleIn(BaseModel):
     scheduled_start_at: datetime
+
+
+class CampaignUpdateIn(BaseModel):
+    """Partial update for a campaign's voice overrides after creation —
+    unlike name/criteria/contact list, these are meant to be changeable
+    later (e.g. pointing at a script edited in the library after this
+    campaign was created — see routers/admin.py's update_campaign)."""
+
+    script_id: UUID | None = None
+    phone_number_id: UUID | None = None
+    max_attempts: int | None = None

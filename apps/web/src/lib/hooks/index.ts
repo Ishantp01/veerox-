@@ -53,6 +53,7 @@ export {
   usePauseCampaign,
   useResumeCampaign,
   useScheduleCampaign,
+  useUpdateCampaign,
   type CreateCampaignInput,
   type CampaignStartMode,
 } from "./useCampaigns";

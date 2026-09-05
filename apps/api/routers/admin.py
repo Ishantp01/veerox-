@@ -96,6 +96,7 @@ from apps.api.schemas.campaign import (
     CampaignScheduleIn,
     CampaignStatusUpdateOut,
     CampaignTargetOut,
+    CampaignUpdateIn,
 )
 from apps.api.schemas.conversation import ConversationOut, ConversationSummaryOut, MessageOut
 from apps.api.schemas.lead import (
@@ -1853,6 +1854,53 @@ async def get_campaign(
         **base.model_dump(),
         targets=[CampaignTargetOut.model_validate(t) for t in targets],
     )
+
+
+@router.patch("/campaigns/{campaign_id}", response_model=CampaignOut)
+async def update_campaign(
+    campaign_id: UUID,
+    body: CampaignUpdateIn,
+    db: DbDep,
+    x_admin_token: str | None = Header(None),
+) -> CampaignOut:
+    """Change a campaign's voice overrides after creation.
+
+    ``script_id``/``phone_number_id``/``max_attempts`` are otherwise fixed
+    forever once a campaign is created — editing (or replacing) a script in
+    the library does NOT retroactively reach a campaign that already pinned
+    a specific ``script_id`` at creation time (see channels/voice/
+    realtime_bridge.py's ``_system_instructions``, which resolves the
+    campaign's own pinned script ahead of the org default). This is how you
+    point an already-running/paused campaign at a different or newly edited
+    script without recreating it. Pass a field as ``null`` to clear it back
+    to the org-default fallback.
+    """
+    campaign = await db.get(CallCampaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    fields = body.model_dump(exclude_unset=True)
+    if "script_id" in fields:
+        if fields["script_id"] is not None:
+            script = await db.get(Script, fields["script_id"])
+            if script is None or script.org_id != campaign.org_id:
+                raise HTTPException(status_code=400, detail="script_id does not belong to this org")
+        campaign.script_id = fields["script_id"]
+    if "phone_number_id" in fields:
+        if fields["phone_number_id"] is not None:
+            number = await db.get(OrgPhoneNumber, fields["phone_number_id"])
+            if number is None or number.org_id != campaign.org_id:
+                raise HTTPException(status_code=400, detail="phone_number_id does not belong to this org")
+        campaign.phone_number_id = fields["phone_number_id"]
+    if "max_attempts" in fields:
+        if fields["max_attempts"] is None or fields["max_attempts"] < 1:
+            raise HTTPException(status_code=400, detail="max_attempts must be at least 1")
+        campaign.max_attempts = fields["max_attempts"]
+
+    await db.commit()
+    await db.refresh(campaign)
+    counts = await _campaign_counts(db, campaign.id)
+    return _campaign_out(campaign, counts)
 
 
 @router.post("/campaigns/{campaign_id}/pause", response_model=CampaignStatusUpdateOut)

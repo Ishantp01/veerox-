@@ -421,3 +421,112 @@ async def test_pause_and_resume_campaign(
     )
     assert resume_resp.status_code == 200
     assert resume_resp.json()["status"] == "running"
+
+
+async def test_update_campaign_repoints_pinned_script(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A campaign's script_id is otherwise fixed forever at creation — this
+    is the escape hatch for pointing an existing campaign at a newly
+    edited/added script in the library instead (the "old script keeps
+    playing" bug: editing the library alone never reaches a campaign that
+    already pinned a specific script_id)."""
+    await _seed_org(db_session)
+    old_script = Script(org_id=ORG_ID, name="Old", content="old content", is_default=False)
+    new_script = Script(org_id=ORG_ID, name="New", content="new content", is_default=True)
+    db_session.add_all([old_script, new_script])
+    await db_session.commit()
+    csv_body = "name,phone\nA,+910000000060\n"
+    create_resp = await client.post(
+        "/admin/campaigns",
+        data={
+            "name": "Repin me",
+            "criteria": "n/a",
+            "channel": "voice",
+            "script_id": str(old_script.id),
+        },
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+    campaign_id = create_resp.json()["campaign"]["id"]
+    assert create_resp.json()["campaign"]["script_id"] == str(old_script.id)
+
+    update_resp = await client.patch(
+        f"/admin/campaigns/{campaign_id}",
+        json={"script_id": str(new_script.id)},
+        headers=ADMIN_HEADERS,
+    )
+    assert update_resp.status_code == 200
+    assert update_resp.json()["script_id"] == str(new_script.id)
+
+    campaign = await db_session.get(CallCampaign, uuid.UUID(campaign_id))
+    await db_session.refresh(campaign)
+    assert campaign.script_id == new_script.id
+
+
+async def test_update_campaign_clears_script_to_org_default(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    script = Script(org_id=ORG_ID, name="Pinned", content="x", is_default=True)
+    db_session.add(script)
+    await db_session.commit()
+    csv_body = "name,phone\nA,+910000000061\n"
+    create_resp = await client.post(
+        "/admin/campaigns",
+        data={
+            "name": "Clear me",
+            "criteria": "n/a",
+            "channel": "voice",
+            "script_id": str(script.id),
+        },
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+    campaign_id = create_resp.json()["campaign"]["id"]
+
+    update_resp = await client.patch(
+        f"/admin/campaigns/{campaign_id}",
+        json={"script_id": None},
+        headers=ADMIN_HEADERS,
+    )
+    assert update_resp.status_code == 200
+    assert update_resp.json()["script_id"] is None
+
+
+async def test_update_campaign_rejects_script_from_another_org(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    other_org_id = uuid.uuid4()
+    db_session.add(Org(id=other_org_id, name="Other Org"))
+    other_script = Script(org_id=other_org_id, name="Not mine", content="x", is_default=True)
+    db_session.add(other_script)
+    csv_body = "name,phone\nA,+910000000062\n"
+    create_resp = await client.post(
+        "/admin/campaigns",
+        data={"name": "Guarded", "criteria": "n/a", "channel": "voice"},
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+    campaign_id = create_resp.json()["campaign"]["id"]
+
+    update_resp = await client.patch(
+        f"/admin/campaigns/{campaign_id}",
+        json={"script_id": str(other_script.id)},
+        headers=ADMIN_HEADERS,
+    )
+    assert update_resp.status_code == 400
+    assert "script_id" in update_resp.json()["detail"]
+
+
+async def test_update_campaign_404_for_unknown_id(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    response = await client.patch(
+        f"/admin/campaigns/{uuid.uuid4()}",
+        json={"max_attempts": 5},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 404

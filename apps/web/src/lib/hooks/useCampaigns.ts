@@ -143,6 +143,39 @@ export function useResumeCampaign() {
   return useCampaignStatusMutation("resume");
 }
 
+/**
+ * Change a campaign's voice overrides after creation — most usefully its
+ * ``script_id``, which is otherwise pinned forever at creation time and
+ * does NOT follow edits made later in the script library (see
+ * routers/admin.py's update_campaign). Pass `null` for a field to clear it
+ * back to the org-default fallback.
+ *
+ * PATCH /admin/campaigns/{id} → Campaign
+ */
+export function useUpdateCampaign() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    Campaign,
+    Error,
+    { id: string; scriptId?: string | null; phoneNumberId?: string | null; maxAttempts?: number }
+  >({
+    mutationFn: ({ id, ...body }) =>
+      apiFetch<Campaign>(`/admin/campaigns/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          script_id: body.scriptId,
+          phone_number_id: body.phoneNumberId,
+          max_attempts: body.maxAttempts,
+        }),
+      }),
+    onSuccess: (_, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.campaign(id) });
+    },
+  });
+}
+
 /** POST /admin/campaigns/{id}/schedule → { id, status } */
 export function useScheduleCampaign() {
   const queryClient = useQueryClient();
