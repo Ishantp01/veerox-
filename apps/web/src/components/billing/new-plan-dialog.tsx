@@ -68,6 +68,12 @@ export function NewPlanDialog() {
   const createPlan = useCreatePlan();
   const { toast } = useToast();
 
+  const showAllLimits = form.resourceType === "";
+  const showSeats = showAllLimits || form.resourceType === "max_team_members";
+  const showCampaigns = showAllLimits || form.resourceType === "max_campaigns";
+  const showCallMinutes = showAllLimits || form.resourceType === "max_call_minutes";
+  const showWhatsapp = showAllLimits || form.resourceType === "max_whatsapp_messages";
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const parsed = planSchema.safeParse(form);
@@ -218,99 +224,113 @@ export function NewPlanDialog() {
                 {formError}
               </p>
             )}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="plan-seats">Team members</Label>
-                <Input
-                  id="plan-seats"
-                  type="number"
-                  min={0}
-                  value={form.maxSeats}
-                  onChange={(e) => setForm((f) => ({ ...f, maxSeats: e.target.value }))}
-                  placeholder="Not included"
-                  aria-invalid={fieldErrors.maxSeats ? true : undefined}
-                  aria-describedby={fieldErrors.maxSeats ? "plan-seats-error" : undefined}
-                />
-                {fieldErrors.maxSeats && (
-                  <p id="plan-seats-error" className="mt-1.5 text-xs text-red-600">
-                    {fieldErrors.maxSeats}
-                  </p>
+            {(showSeats || showCampaigns) && (
+              <div className="grid grid-cols-2 gap-4">
+                {showSeats && (
+                  <div className={showCampaigns ? undefined : "col-span-2"}>
+                    <Label htmlFor="plan-seats">Team members</Label>
+                    <Input
+                      id="plan-seats"
+                      type="number"
+                      min={0}
+                      value={form.maxSeats}
+                      onChange={(e) => setForm((f) => ({ ...f, maxSeats: e.target.value }))}
+                      placeholder="Not included"
+                      aria-invalid={fieldErrors.maxSeats ? true : undefined}
+                      aria-describedby={fieldErrors.maxSeats ? "plan-seats-error" : undefined}
+                    />
+                    {fieldErrors.maxSeats && (
+                      <p id="plan-seats-error" className="mt-1.5 text-xs text-red-600">
+                        {fieldErrors.maxSeats}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {showCampaigns && (
+                  <div className={showSeats ? undefined : "col-span-2"}>
+                    <Label htmlFor="plan-campaigns">Max campaigns</Label>
+                    <Input
+                      id="plan-campaigns"
+                      type="number"
+                      min={0}
+                      value={form.maxCampaigns}
+                      onChange={(e) => setForm((f) => ({ ...f, maxCampaigns: e.target.value }))}
+                      placeholder="Not included"
+                      aria-invalid={fieldErrors.maxCampaigns ? true : undefined}
+                      aria-describedby={fieldErrors.maxCampaigns ? "plan-campaigns-error" : undefined}
+                    />
+                    {fieldErrors.maxCampaigns && (
+                      <p id="plan-campaigns-error" className="mt-1.5 text-xs text-red-600">
+                        {fieldErrors.maxCampaigns}
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
-              <div>
-                <Label htmlFor="plan-campaigns">Max campaigns</Label>
-                <Input
-                  id="plan-campaigns"
-                  type="number"
-                  min={0}
-                  value={form.maxCampaigns}
-                  onChange={(e) => setForm((f) => ({ ...f, maxCampaigns: e.target.value }))}
-                  placeholder="Not included"
-                  aria-invalid={fieldErrors.maxCampaigns ? true : undefined}
-                  aria-describedby={fieldErrors.maxCampaigns ? "plan-campaigns-error" : undefined}
-                />
-                {fieldErrors.maxCampaigns && (
-                  <p id="plan-campaigns-error" className="mt-1.5 text-xs text-red-600">
-                    {fieldErrors.maxCampaigns}
-                  </p>
+            )}
+            {(showCallMinutes || showWhatsapp) && (
+              <div className="grid grid-cols-2 gap-4">
+                {showCallMinutes && (
+                  <div className={showWhatsapp ? undefined : "col-span-2"}>
+                    <Label htmlFor="plan-call-minutes">Call min / renewal</Label>
+                    <Input
+                      id="plan-call-minutes"
+                      type="number"
+                      min={0}
+                      value={form.maxCallMinutes}
+                      onChange={(e) => setForm((f) => ({ ...f, maxCallMinutes: e.target.value }))}
+                      placeholder="Not included"
+                      aria-invalid={fieldErrors.maxCallMinutes ? true : undefined}
+                      aria-describedby={fieldErrors.maxCallMinutes ? "plan-call-minutes-error" : undefined}
+                    />
+                    {fieldErrors.maxCallMinutes && (
+                      <p id="plan-call-minutes-error" className="mt-1.5 text-xs text-red-600">
+                        {fieldErrors.maxCallMinutes}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {showWhatsapp && (
+                  <div className={showCallMinutes ? undefined : "col-span-2"}>
+                    <Label htmlFor="plan-whatsapp">WhatsApp msgs / renewal</Label>
+                    <Input
+                      id="plan-whatsapp"
+                      type="number"
+                      min={0}
+                      value={form.maxWhatsappMessages}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, maxWhatsappMessages: e.target.value }))
+                      }
+                      placeholder="Not included"
+                      aria-invalid={fieldErrors.maxWhatsappMessages ? true : undefined}
+                      aria-describedby={
+                        fieldErrors.maxWhatsappMessages ? "plan-whatsapp-error" : undefined
+                      }
+                    />
+                    {fieldErrors.maxWhatsappMessages && (
+                      <p id="plan-whatsapp-error" className="mt-1.5 text-xs text-red-600">
+                        {fieldErrors.maxWhatsappMessages}
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="plan-call-minutes">Call min / renewal</Label>
-                <Input
-                  id="plan-call-minutes"
-                  type="number"
-                  min={0}
-                  value={form.maxCallMinutes}
-                  onChange={(e) => setForm((f) => ({ ...f, maxCallMinutes: e.target.value }))}
-                  placeholder="Not included"
-                  aria-invalid={fieldErrors.maxCallMinutes ? true : undefined}
-                  aria-describedby={fieldErrors.maxCallMinutes ? "plan-call-minutes-error" : undefined}
+            )}
+            {showAllLimits && (
+              <label
+                htmlFor="plan-automated-followups"
+                className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-sm font-medium text-slate-700 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-300"
+              >
+                <input
+                  id="plan-automated-followups"
+                  type="checkbox"
+                  checked={form.automatedFollowups}
+                  onChange={(e) => setForm((f) => ({ ...f, automatedFollowups: e.target.checked }))}
+                  className="h-4 w-4 rounded border-slate-300 text-primary-500 dark:border-slate-700"
                 />
-                {fieldErrors.maxCallMinutes && (
-                  <p id="plan-call-minutes-error" className="mt-1.5 text-xs text-red-600">
-                    {fieldErrors.maxCallMinutes}
-                  </p>
-                )}
-              </div>
-              <div>
-                <Label htmlFor="plan-whatsapp">WhatsApp msgs / renewal</Label>
-                <Input
-                  id="plan-whatsapp"
-                  type="number"
-                  min={0}
-                  value={form.maxWhatsappMessages}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, maxWhatsappMessages: e.target.value }))
-                  }
-                  placeholder="Not included"
-                  aria-invalid={fieldErrors.maxWhatsappMessages ? true : undefined}
-                  aria-describedby={
-                    fieldErrors.maxWhatsappMessages ? "plan-whatsapp-error" : undefined
-                  }
-                />
-                {fieldErrors.maxWhatsappMessages && (
-                  <p id="plan-whatsapp-error" className="mt-1.5 text-xs text-red-600">
-                    {fieldErrors.maxWhatsappMessages}
-                  </p>
-                )}
-              </div>
-            </div>
-            <label
-              htmlFor="plan-automated-followups"
-              className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-sm font-medium text-slate-700 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-300"
-            >
-              <input
-                id="plan-automated-followups"
-                type="checkbox"
-                checked={form.automatedFollowups}
-                onChange={(e) => setForm((f) => ({ ...f, automatedFollowups: e.target.checked }))}
-                className="h-4 w-4 rounded border-slate-300 text-primary-500 dark:border-slate-700"
-              />
-              Includes automated follow-ups
-            </label>
+                Includes automated follow-ups
+              </label>
+            )}
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
