@@ -59,17 +59,39 @@ async def _requeue_stuck_targets() -> None:
     Scoped to voice targets only — ``CampaignTarget.status`` values are
     shared with the WhatsApp dispatcher (apps/api/workers/
     whatsapp_dispatcher.py), which has its own requeue-on-startup pass.
+
+    ``attempt_count`` was already incremented when the interrupted call was
+    staged, so a target that has now hit its campaign's ``max_attempts`` is
+    marked ``failed`` rather than requeued — the total number of calls placed
+    to any one lead never exceeds the campaign's chosen "Call attempts".
     """
     async with AsyncSessionLocal() as db:
-        stmt = (
+        max_attempts_sq = (
+            select(CallCampaign.max_attempts)
+            .where(CallCampaign.id == CampaignTarget.campaign_id)
+            .scalar_subquery()
+        )
+        base = (
+            CampaignTarget.status == "calling",
+            CampaignTarget.channel == "voice",
+        )
+        requeued = await db.execute(
             update(CampaignTarget)
-            .where(CampaignTarget.status == "calling", CampaignTarget.channel == "voice")
+            .where(*base, CampaignTarget.attempt_count < max_attempts_sq)
             .values(status="pending")
         )
-        result = await db.execute(stmt)
+        exhausted = await db.execute(
+            update(CampaignTarget)
+            .where(*base, CampaignTarget.attempt_count >= max_attempts_sq)
+            .values(status="failed")
+        )
         await db.commit()
-        if result.rowcount:
-            logger.info("campaign_dialer_requeued_stuck_targets", count=result.rowcount)
+        if requeued.rowcount or exhausted.rowcount:
+            logger.info(
+                "campaign_dialer_requeued_stuck_targets",
+                count=requeued.rowcount,
+                failed_at_cap=exhausted.rowcount,
+            )
 
 
 async def _reclaim_stale_calls(db) -> None:
@@ -102,6 +124,35 @@ async def _reclaim_stale_calls(db) -> None:
         )
     if stale:
         await db.commit()
+
+
+async def _fail_capped_targets(db) -> None:
+    """Flip any ``pending`` voice target that has already used all of its
+    campaign's ``max_attempts`` to ``failed``.
+
+    The dialer's claim query skips these, so without this they'd sit
+    ``pending`` forever and keep a finished campaign from ever completing.
+    Normally an outcome handler already marks the last attempt ``failed`` —
+    this only catches targets a crash or edge case left ``pending`` at the
+    cap.
+    """
+    max_attempts_sq = (
+        select(CallCampaign.max_attempts)
+        .where(CallCampaign.id == CampaignTarget.campaign_id)
+        .scalar_subquery()
+    )
+    result = await db.execute(
+        update(CampaignTarget)
+        .where(
+            CampaignTarget.status == "pending",
+            CampaignTarget.channel == "voice",
+            CampaignTarget.attempt_count >= max_attempts_sq,
+        )
+        .values(status="failed")
+    )
+    if result.rowcount:
+        await db.commit()
+        logger.info("campaign_dialer_failed_capped_targets", count=result.rowcount)
 
 
 async def _count_calls_in_flight(db) -> int:
@@ -158,8 +209,9 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
     """
     async with AsyncSessionLocal() as db:
         await promote_scheduled_campaigns(db)
-        await complete_finished_campaigns(db)
         await _reclaim_stale_calls(db)
+        await _fail_capped_targets(db)
+        await complete_finished_campaigns(db)
         capacity = settings.max_concurrent_calls - await _count_calls_in_flight(db)
         if capacity <= 0:
             return []
@@ -190,6 +242,13 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
                 CampaignTarget.status == "pending",
                 CallCampaign.status == "running",
                 CampaignTarget.channel == "voice",
+                # Hard ceiling: never place more than the campaign's chosen
+                # "Call attempts" calls to one lead, no matter how a prior
+                # attempt was left `pending` (outcome-handler edge case,
+                # worker restart, ...). Outcome handlers still flip a target
+                # to `failed` when its last allowed attempt doesn't connect;
+                # this is the backstop that makes the cap absolute.
+                CampaignTarget.attempt_count < CallCampaign.max_attempts,
             )
             .order_by(CampaignTarget.created_at)
             .limit(max(capacity * 4, 50))

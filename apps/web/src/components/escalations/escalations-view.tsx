@@ -6,8 +6,8 @@ import { CheckCircle2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { EscalationTable } from "@/components/escalations/escalation-table";
-import { EmptyState, Select, SkeletonRows, Table } from "@/components/ui";
-import { useEscalations } from "@/lib/hooks";
+import { EmptyState, Pagination, Select, SkeletonRows, Table } from "@/components/ui";
+import { useClientPagination, useEscalations } from "@/lib/hooks";
 import type { Escalation, HandoffQueueEntry, Lead } from "@/lib/types";
 
 /**
@@ -79,6 +79,7 @@ export function EscalationsView({
     ...(data?.queue ?? []).map(queueEntryToEscalation),
     ...(data?.recent_leads ?? []).map(leadToEscalation),
   ];
+  const pager = useClientPagination(escalations, 20, effectiveChannel);
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -123,7 +124,15 @@ export function EscalationsView({
           />
         }
       >
-        <EscalationTable escalations={escalations} conversationBasePath={conversationBasePath} />
+        <EscalationTable escalations={pager.pageRows} conversationBasePath={conversationBasePath} />
+        <Pagination
+          page={pager.page}
+          pageSize={pager.pageSize}
+          rowCount={pager.rowCount}
+          hasNextPage={pager.hasNextPage}
+          onPrev={pager.onPrev}
+          onNext={pager.onNext}
+        />
       </QueryBoundary>
     </div>
   );

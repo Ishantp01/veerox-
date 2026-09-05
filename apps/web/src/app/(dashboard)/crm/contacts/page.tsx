@@ -6,10 +6,10 @@ import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { ContactTable } from "@/components/crm/contact-table";
 import { NewContactDialog } from "@/components/crm/new-contact-dialog";
-import { Button, EmptyState, Input, SkeletonRows, Table, useToast } from "@/components/ui";
+import { Button, EmptyState, Input, Pagination, SkeletonRows, Table, useToast } from "@/components/ui";
 import { SESSION_TOKEN_KEY } from "@/lib/api";
 import { downloadCsv } from "@/lib/download-csv";
-import { useContacts } from "@/lib/hooks";
+import { useClientPagination, useContacts } from "@/lib/hooks";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -66,6 +66,7 @@ export default function ContactsPage() {
 
   const { data, isLoading, isError, error, refetch } = useContacts(q || undefined);
   const contacts = data ?? [];
+  const pager = useClientPagination(contacts, 20, q);
 
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -179,7 +180,15 @@ export default function ContactsPage() {
           />
         }
       >
-        <ContactTable contacts={contacts} detailBasePath="/crm/contacts" />
+        <ContactTable contacts={pager.pageRows} detailBasePath="/crm/contacts" />
+        <Pagination
+          page={pager.page}
+          pageSize={pager.pageSize}
+          rowCount={pager.rowCount}
+          hasNextPage={pager.hasNextPage}
+          onPrev={pager.onPrev}
+          onNext={pager.onNext}
+        />
       </QueryBoundary>
     </div>
   );

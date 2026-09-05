@@ -108,7 +108,10 @@ export default function OrganizationsPage() {
           <EmptyState icon={Building2} title="No organizations yet" description="Orgs appear here as they sign up." />
         }
       >
-        <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
+        <div
+          data-tour="page-table"
+          className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900"
+        >
           <Table>
             <thead>
               <TableRow isHeader>

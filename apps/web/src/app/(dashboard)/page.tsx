@@ -9,6 +9,7 @@ import { useToast } from "@/components/ui";
 import { useKillSwitch, useSetKillSwitch } from "@/lib/hooks";
 import { TourTrigger } from "@/components/onboarding/tour-trigger";
 import { ONBORDA_IDS } from "@/lib/onboarding/tours";
+import { useAuth } from "@/lib/auth-context";
 
 const SECTIONS = [
   {
@@ -38,7 +39,9 @@ function useGreeting(): string {
   const [greeting, setGreeting] = useState("Welcome back");
   useEffect(() => {
     const hour = new Date().getHours();
-    setGreeting(hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening");
+    setGreeting(
+      hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : hour < 21 ? "Good evening" : "Good night"
+    );
   }, []);
   return greeting;
 }
@@ -47,6 +50,7 @@ export default function LandingPage() {
   const killSwitch = useKillSwitch();
   const setKillSwitch = useSetKillSwitch();
   const { toast } = useToast();
+  const { user } = useAuth();
   const greeting = useGreeting();
   const today = new Date().toLocaleDateString(undefined, {
     day: "numeric",
@@ -80,7 +84,7 @@ export default function LandingPage() {
       <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div id={ONBORDA_IDS.dashboardWelcome}>
           <h1 className="flex items-center gap-2 text-xl font-bold text-slate-900 dark:text-white">
-            {greeting}! <span className="text-2xl">👋</span>
+            {greeting}{user?.org_name ? `, ${user.org_name}` : ""}! <span className="text-2xl">👋</span>
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             Real-time overview across both agent channels — the kill switch below pauses both at once.
@@ -112,7 +116,10 @@ export default function LandingPage() {
           <StatsGrid variant="all" />
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div
+          data-tour="dashboard-shortcuts"
+          className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+        >
           {SECTIONS.map(({ href, label, description, Icon, chip }) => (
             <Link
               key={href}

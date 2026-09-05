@@ -10,6 +10,7 @@ import {
   Card,
   CardContent,
   EmptyState,
+  Pagination,
   SkeletonRows,
   Table,
   TableCell,
@@ -18,7 +19,13 @@ import {
   useToast,
 } from "@/components/ui";
 import { NewTemplateDialog } from "@/components/whatsapp/new-template-dialog";
-import { useDeleteTemplate, useSyncTemplates, useTemplates, useUpdateTemplate } from "@/lib/hooks";
+import {
+  useClientPagination,
+  useDeleteTemplate,
+  useSyncTemplates,
+  useTemplates,
+  useUpdateTemplate,
+} from "@/lib/hooks";
 
 const STATUS_VARIANT: Record<string, BadgeVariant> = {
   APPROVED: "success",
@@ -43,6 +50,7 @@ function StatusBadge({ status }: { status: string | null }) {
 
 export default function TemplatesPage() {
   const templates = useTemplates();
+  const pager = useClientPagination(templates.data ?? [], 20);
   const updateTemplate = useUpdateTemplate();
   const deleteTemplate = useDeleteTemplate();
   const syncTemplates = useSyncTemplates();
@@ -123,7 +131,7 @@ export default function TemplatesPage() {
               />
             }
           >
-            <div className="overflow-x-auto">
+            <div data-tour="page-table" className="overflow-x-auto">
               <Table>
                 <thead>
                   <TableRow isHeader>
@@ -137,7 +145,7 @@ export default function TemplatesPage() {
                   </TableRow>
                 </thead>
                 <tbody>
-                  {(templates.data ?? []).map((template) => (
+                  {pager.pageRows.map((template) => (
                     <TableRow key={template.id}>
                       <TableCell className="font-mono text-xs font-semibold text-slate-800 dark:text-slate-100">
                         {template.name}
@@ -182,6 +190,14 @@ export default function TemplatesPage() {
                 </tbody>
               </Table>
             </div>
+            <Pagination
+              page={pager.page}
+              pageSize={pager.pageSize}
+              rowCount={pager.rowCount}
+              hasNextPage={pager.hasNextPage}
+              onPrev={pager.onPrev}
+              onNext={pager.onNext}
+            />
           </QueryBoundary>
         </CardContent>
       </Card>

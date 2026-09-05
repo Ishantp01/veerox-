@@ -227,6 +227,63 @@ async def test_claim_targets_claims_pending_voice_campaign(
     assert max_attempts == 3
 
 
+async def test_claim_targets_skips_target_at_attempt_cap(db_session: AsyncSession) -> None:
+    """A pending target that has already used every one of its campaign's
+    attempts is never dialed again — and is flipped to failed so the campaign
+    can complete instead of hanging on it."""
+    await _seed_org(db_session)
+    target = await _seed_target(
+        db_session,
+        status="pending",
+        attempt_count=1,
+        campaign_max_attempts=1,
+        campaign_channel="voice",
+    )
+
+    claimed = await campaign_dialer._claim_targets()
+
+    assert claimed == []
+    await db_session.refresh(target)
+    assert target.status == "failed"
+
+
+async def test_claim_targets_claims_target_below_attempt_cap(db_session: AsyncSession) -> None:
+    """attempt_count 1 of max 3 is still under the cap — dial it."""
+    await _seed_org(db_session)
+    target = await _seed_target(
+        db_session,
+        status="pending",
+        attempt_count=1,
+        campaign_max_attempts=3,
+        campaign_channel="voice",
+    )
+
+    claimed = await campaign_dialer._claim_targets()
+
+    assert len(claimed) == 1
+    assert claimed[0][0] == str(target.id)
+
+
+async def test_requeue_stuck_targets_respects_attempt_cap(db_session: AsyncSession) -> None:
+    """On restart: a stuck 'calling' target still under its cap is requeued,
+    one already at the cap is failed — so the total calls placed to a lead
+    never exceed the campaign's chosen 'Call attempts'."""
+    await _seed_org(db_session)
+    under = await _seed_target(
+        db_session, status="calling", attempt_count=1, campaign_max_attempts=3
+    )
+    at_cap = await _seed_target(
+        db_session, status="calling", attempt_count=1, campaign_max_attempts=1
+    )
+
+    await campaign_dialer._requeue_stuck_targets()
+
+    await db_session.refresh(under)
+    await db_session.refresh(at_cap)
+    assert under.status == "pending"
+    assert at_cap.status == "failed"
+
+
 async def test_claim_targets_carries_org_preferred_provider(db_session: AsyncSession) -> None:
     """The org's explicit Plivo/Twilio override must ride along with each
     claimed target so _dial_one can pass it to initiate_call — otherwise a

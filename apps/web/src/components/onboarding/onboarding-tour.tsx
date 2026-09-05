@@ -1,38 +1,54 @@
 "use client";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { Onborda, OnbordaProvider, useOnborda } from "onborda";
 import type { OnbordaProps } from "onborda";
 import { useAuth } from "@/lib/auth-context";
-import { ALL_STEPS, buildTour, TOUR_NEW_ACCOUNT } from "@/lib/onboarding/tours";
+import {
+  ALL_STEPS,
+  buildPageGuideTour,
+  buildTour,
+  TOUR_NEW_ACCOUNT,
+  TOUR_PAGE_GUIDE,
+} from "@/lib/onboarding/tours";
 import { hasSeenTour } from "@/lib/onboarding/tour-state";
 import { TourCard } from "./tour-card";
 
-/** Starts the walkthrough for the current account. Available anywhere inside
- *  the dashboard route group via `useStartTour()`. */
-const StartTourContext = createContext<() => void>(() => {});
-
-export function useStartTour(): () => void {
-  return useContext(StartTourContext);
+interface TourApi {
+  /** Full one-step-per-module walkthrough. */
+  startTour: () => void;
+  /** "How to use this page" tour for the route passed in (defaults to current). */
+  startPageGuide: (pathname?: string) => void;
+  /** Whether the current route has a page guide available. */
+  hasPageGuide: boolean;
 }
 
-const FALLBACK_STEPS: OnbordaProps["steps"] = [{ tour: TOUR_NEW_ACCOUNT, steps: ALL_STEPS }];
+const TourContext = createContext<TourApi>({
+  startTour: () => {},
+  startPageGuide: () => {},
+  hasPageGuide: false,
+});
+
+export function useTour(): TourApi {
+  return useContext(TourContext);
+}
+
+/** Back-compat: existing call sites import `useStartTour`. */
+export function useStartTour(): () => void {
+  return useContext(TourContext).startTour;
+}
+
+const EMPTY_PAGE_GUIDE: OnbordaProps["steps"][number] = { tour: TOUR_PAGE_GUIDE, steps: [] };
+const INITIAL_STEPS: OnbordaProps["steps"] = [
+  { tour: TOUR_NEW_ACCOUNT, steps: ALL_STEPS },
+  EMPTY_PAGE_GUIDE,
+];
 
 /**
- * Overrides on Onborda's own markup, shipped inline so they can't be missed by
- * a stale CSS build:
- *  - its card wrapper is `max-w-[100%]`, where 100% resolves to the width of
- *    the highlighted element — a narrow sidebar link squashes the card and
- *    clips its buttons ("Next" disappears off the right edge);
- *  - its pointer-arrow SVG has no intrinsic size and balloons to 300×150 when
- *    Tailwind hasn't scanned the onborda bundle.
+ * Inline overrides on Onborda's own markup so a stale CSS build can't break the
+ * card: its wrapper is `max-w-[100%]` of the highlighted element (squashes the
+ * card, clips "Next"), and its arrow SVG has no intrinsic size.
  */
 const ONBORDA_CSS = `
 [data-name="onborda-card"]{max-width:min(340px,calc(100vw - 2rem))!important;width:max-content!important;}
@@ -40,47 +56,35 @@ const ONBORDA_CSS = `
 `;
 
 /**
- * Onborda always runs a *smooth* `scrollIntoView` on each step's target, then
- * measures its position synchronously — before the scroll settles. When the
- * target sits in a scrollable container (the sidebar overflows once the tour
- * walks through every module) the highlight lands a row or two off, or the
- * card renders off-screen.
- *
- * Onborda re-measures — without re-scrolling — on `window` resize. Nudging it
- * with synthetic resize events after the scroll has had time to finish snaps
- * the highlight (and card) onto the real target.
+ * Onborda runs a smooth `scrollIntoView` on each step's target, then measures
+ * it synchronously — before the scroll settles — so the highlight can land off
+ * target. It re-measures (without re-scrolling) on `window` resize; nudging it
+ * with synthetic resize events after the scroll finishes fixes the position.
  */
 function PointerResync() {
   const { currentStep, isOnbordaVisible } = useOnborda();
-
   useEffect(() => {
     if (!isOnbordaVisible) return;
-    const timers = [80, 250, 500, 900].map((delay) =>
-      window.setTimeout(() => window.dispatchEvent(new Event("resize")), delay),
+    const timers = [80, 250, 500, 900].map((d) =>
+      window.setTimeout(() => window.dispatchEvent(new Event("resize")), d),
     );
     return () => timers.forEach((id) => window.clearTimeout(id));
   }, [currentStep, isOnbordaVisible]);
-
   return null;
 }
 
 /**
- * Safety net for a step whose anchor isn't in the DOM at runtime — e.g. a
- * sidebar link this account doesn't get, or a stale bundle that hasn't picked
- * up the anchor ids yet. Without this Onborda leaves the highlight stuck on the
- * previous step's element while showing the new step's copy. Here we just skip
- * forward to the next resolvable step (or close if there are none left).
+ * Skips a step whose anchor isn't in the DOM (a link this account doesn't get,
+ * a page without that toolbar, a stale bundle). Without it Onborda leaves the
+ * highlight stuck on the previous step.
  */
 function SkipMissingSteps({ steps }: { steps: OnbordaProps["steps"] }) {
   const { currentStep, currentTour, isOnbordaVisible, setCurrentStep, closeOnborda } = useOnborda();
-
   useEffect(() => {
     if (!isOnbordaVisible || !currentTour) return;
     const tourSteps = steps.find((t) => t.tour === currentTour)?.steps ?? [];
     const selector = tourSteps[currentStep]?.selector;
     if (!selector) return;
-
-    // Give the DOM a beat to settle (route change, sidebar render) first.
     const id = window.setTimeout(() => {
       if (typeof document === "undefined" || document.querySelector(selector)) return;
       if (currentStep < tourSteps.length - 1) setCurrentStep(currentStep + 1);
@@ -88,68 +92,121 @@ function SkipMissingSteps({ steps }: { steps: OnbordaProps["steps"] }) {
     }, 450);
     return () => window.clearTimeout(id);
   }, [currentStep, currentTour, isOnbordaVisible, steps, setCurrentStep, closeOnborda]);
-
   return null;
 }
 
-/**
- * Fires the walkthrough once, the first time a real customer account reaches
- * the dashboard. Platform/staff accounts are skipped (they're not onboarding),
- * and so is anything below the `lg` breakpoint — most tour anchors live in the
- * desktop sidebar, which is off-canvas on mobile.
- */
-function AutoStartTour({ start }: { start: () => void }) {
+/** First-time triggers: the full tour once per new account, then each page's
+ *  guide once per route. Both skip platform/staff accounts and small screens. */
+function AutoStart({ startTour, startPageGuide }: TourApi) {
   const { status, user } = useAuth();
-  const started = useRef(false);
+  const pathname = usePathname();
+  const ranFullTour = useRef(false);
 
+  const eligible =
+    status === "authenticated" &&
+    !!user &&
+    !user.is_superuser &&
+    !user.is_platform_org &&
+    typeof window !== "undefined" &&
+    window.innerWidth >= 1024;
+
+  // Full walkthrough — once, on first authenticated load.
   useEffect(() => {
-    if (started.current) return;
-    if (status !== "authenticated" || !user) return;
-    if (user.is_superuser || user.is_platform_org) return;
-    if (typeof window === "undefined" || window.innerWidth < 1024) return;
+    if (ranFullTour.current || !eligible || !user) return;
     if (hasSeenTour(user.account_user_id)) return;
-
-    started.current = true;
-    // Let the shell + sidebar finish rendering (nav links are gated by plan
-    // and role) so `buildTour()` sees the real module list.
-    const t = window.setTimeout(start, 900);
+    ranFullTour.current = true;
+    const t = window.setTimeout(startTour, 900);
     return () => window.clearTimeout(t);
-  }, [status, user, start]);
+  }, [eligible, user, startTour]);
+
+  // Page guide — once per route (only while the new-account tour is still
+  // pending, so established users aren't interrupted on every page).
+  useEffect(() => {
+    if (!eligible || !user) return;
+    // The dashboard is covered by the full walkthrough — don't double up.
+    if (pathname === "/") return;
+    if (hasSeenTour(user.account_user_id)) return;
+    const key = `veerox_pageguide_seen_${pathname}`;
+    try {
+      if (localStorage.getItem(key)) return;
+      localStorage.setItem(key, "1");
+    } catch {
+      return;
+    }
+    const t = window.setTimeout(() => startPageGuide(pathname), 1100);
+    return () => window.clearTimeout(t);
+  }, [pathname, eligible, user, startPageGuide]);
 
   return null;
 }
 
 function OnbordaInner({ children }: { children: React.ReactNode }) {
   const { startOnborda } = useOnborda();
-  const [steps, setSteps] = useState<OnbordaProps["steps"]>(FALLBACK_STEPS);
+  const pathname = usePathname();
+  const [steps, setSteps] = useState<OnbordaProps["steps"]>(INITIAL_STEPS);
 
-  const start = useCallback(
-    (attempt = 0) => {
-      const built = buildTour();
-      if (built[0].steps.length >= 2) {
-        setSteps(built);
-        // React batches this with `setSteps`, so Onborda re-renders once with
-        // the fresh `steps` prop already in place before it reads the tour.
-        startOnborda(TOUR_NEW_ACCOUNT);
+  const hasPageGuide = buildPageGuideTour(pathname).steps.length > 0;
+
+  const runStartTour = useCallback(
+    (attempt: number) => {
+      const full = buildTour();
+      if (full.steps.length < 2 && attempt < 6) {
+        window.setTimeout(() => runStartTour(attempt + 1), 250);
         return;
       }
-      // Anchors not mounted yet (first paint, or a just-hot-reloaded bundle) —
-      // retry briefly before giving up to the unfiltered list. `SkipMissingSteps`
-      // then quietly drops any step whose anchor still isn't there.
-      if (attempt < 6) {
-        window.setTimeout(() => start(attempt + 1), 250);
-        return;
-      }
-      setSteps(FALLBACK_STEPS);
+      const mainTour = full.steps.length >= 2 ? full : { tour: TOUR_NEW_ACCOUNT, steps: ALL_STEPS };
+      setSteps([mainTour, buildPageGuideTour(pathname)]);
       startOnborda(TOUR_NEW_ACCOUNT);
+    },
+    [startOnborda, pathname],
+  );
+
+  const runStartPageGuide = useCallback(
+    (path: string, attempt: number) => {
+      const guide = buildPageGuideTour(path);
+      if (guide.steps.length === 0) return;
+      const resolvable =
+        typeof document === "undefined"
+          ? guide.steps
+          : guide.steps.filter((s) => document.querySelector(s.selector));
+
+      if (resolvable.length === 0) {
+        if (attempt < 6) {
+          window.setTimeout(() => runStartPageGuide(path, attempt + 1), 250);
+          return;
+        }
+        // Page-specific anchors never showed up (e.g. a stale bundle after a
+        // hot reload) — still run the guide, pinned to the always-present page
+        // container so the user isn't left with a dead button.
+        const rooted = guide.steps.map((s) => ({
+          ...s,
+          selector: '[data-tour="page-root"]',
+          side: undefined,
+        }));
+        setSteps([buildTour(), { tour: TOUR_PAGE_GUIDE, steps: rooted }]);
+        startOnborda(TOUR_PAGE_GUIDE);
+        return;
+      }
+
+      setSteps([buildTour(), { tour: TOUR_PAGE_GUIDE, steps: resolvable }]);
+      startOnborda(TOUR_PAGE_GUIDE);
     },
     [startOnborda],
   );
 
-  const startTour = useCallback(() => start(0), [start]);
+  const startTour = useCallback(() => runStartTour(0), [runStartTour]);
+  const startPageGuide = useCallback(
+    (path?: string) => runStartPageGuide(path ?? pathname, 0),
+    [runStartPageGuide, pathname],
+  );
+
+  const api = useMemo<TourApi>(
+    () => ({ startTour, startPageGuide, hasPageGuide }),
+    [startTour, startPageGuide, hasPageGuide],
+  );
 
   return (
-    <StartTourContext.Provider value={startTour}>
+    <TourContext.Provider value={api}>
       <style dangerouslySetInnerHTML={{ __html: ONBORDA_CSS }} />
       <Onborda
         steps={steps}
@@ -158,12 +215,12 @@ function OnbordaInner({ children }: { children: React.ReactNode }) {
         shadowOpacity="0.6"
         cardTransition={{ type: "spring", damping: 26, stiffness: 260 }}
       >
-        <AutoStartTour start={startTour} />
+        <AutoStart {...api} />
         <PointerResync />
         <SkipMissingSteps steps={steps} />
         {children}
       </Onborda>
-    </StartTourContext.Provider>
+    </TourContext.Provider>
   );
 }
 

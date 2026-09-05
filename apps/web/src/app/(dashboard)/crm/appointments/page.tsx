@@ -9,8 +9,8 @@ import {
   APPOINTMENT_STATUS_OPTIONS,
 } from "@/components/crm/appointment-status-badge";
 import { NewAppointmentDialog } from "@/components/crm/new-appointment-dialog";
-import { EmptyState, Select, SkeletonRows, Table, TableCell, TableHeader, TableRow } from "@/components/ui";
-import { useAppointments, useUpdateAppointment, type AppointmentSort } from "@/lib/hooks";
+import { EmptyState, Pagination, Select, SkeletonRows, Table, TableCell, TableHeader, TableRow } from "@/components/ui";
+import { useAppointments, useClientPagination, useUpdateAppointment, type AppointmentSort } from "@/lib/hooks";
 import { formatDateTime } from "@/lib/format";
 import type { AppointmentStatus } from "@/lib/types";
 
@@ -27,6 +27,7 @@ export default function AppointmentsPage() {
   });
   const updateAppointment = useUpdateAppointment();
   const appointments = data ?? [];
+  const pager = useClientPagination(appointments, 20, `${filter}|${sort}`);
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -83,7 +84,10 @@ export default function AppointmentsPage() {
           />
         }
       >
-        <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
+        <div
+          data-tour="page-table"
+          className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900"
+        >
           <Table>
             <thead>
               <TableRow isHeader>
@@ -96,7 +100,7 @@ export default function AppointmentsPage() {
               </TableRow>
             </thead>
             <tbody>
-              {appointments.map((appt) => (
+              {pager.pageRows.map((appt) => (
                 <TableRow key={appt.id}>
                   <TableCell className="font-semibold text-slate-800 dark:text-slate-100">
                     {appt.name ?? "—"}
@@ -133,6 +137,14 @@ export default function AppointmentsPage() {
             </tbody>
           </Table>
         </div>
+        <Pagination
+          page={pager.page}
+          pageSize={pager.pageSize}
+          rowCount={pager.rowCount}
+          hasNextPage={pager.hasNextPage}
+          onPrev={pager.onPrev}
+          onNext={pager.onNext}
+        />
       </QueryBoundary>
     </div>
   );

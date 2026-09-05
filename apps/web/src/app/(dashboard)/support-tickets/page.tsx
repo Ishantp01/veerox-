@@ -102,7 +102,10 @@ export default function SupportTicketsPage() {
           <EmptyState icon={LifeBuoy} title="No tickets" description="Tickets raised by any org will show up here." />
         }
       >
-        <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
+        <div
+          data-tour="page-table"
+          className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900"
+        >
           <Table>
             <thead>
               <TableRow isHeader>

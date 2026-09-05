@@ -22,7 +22,9 @@ export function DashboardShell({ children }: { children: ReactNode }) {
       <div className="flex flex-1 flex-col overflow-hidden">
         <Topbar onMenuClick={() => setMobileNavOpen(true)} />
         <UsageWarningBanner />
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">{children}</main>
+        <main data-tour="page-root" className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+          {children}
+        </main>
       </div>
       {/* Out-of-credit / billing-lapsed recharge prompt. Mounted here (not
           per page) so it reaches every dashboard route, and outside <main>

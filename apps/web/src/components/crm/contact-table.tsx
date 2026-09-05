@@ -15,7 +15,10 @@ export function ContactTable({ contacts, detailBasePath }: ContactTableProps) {
   const router = useRouter();
 
   return (
-    <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
+    <div
+      data-tour="page-table"
+      className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900"
+    >
       <Table>
         <thead>
           <TableRow isHeader>

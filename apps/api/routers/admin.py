@@ -1449,6 +1449,12 @@ async def _create_campaign_from_rows(
     imported = 0
     errors: list[dict[str, str | int]] = []
     seen_channels: set[str] = set()
+    # De-dupe within a single upload: the same number appearing twice in the
+    # file would otherwise become two CampaignTargets, each with its own
+    # `max_attempts` call budget — so one person could be dialed 2x (or more)
+    # the chosen number of times. Keyed by (phone, channel) so a contact can
+    # still be both a voice and a WhatsApp target.
+    seen_targets: set[tuple[str, str]] = set()
     for row_num, row, channel in rows:
         phone = row.get("phone", "")
         if not phone:
@@ -1466,6 +1472,16 @@ async def _create_campaign_from_rows(
                 }
             )
             continue
+        target_key = (normalized, channel)
+        if target_key in seen_targets:
+            errors.append(
+                {
+                    "row": row_num,
+                    "reason": f"duplicate — {normalized} is already in this upload for {channel}",
+                }
+            )
+            continue
+        seen_targets.add(target_key)
         row_name = row.get("name") or None
         # "status" is only present at all for file-based rows (import_leads_file
         # requires the column via _iter_csv_rows/_iter_xlsx_rows's
@@ -1659,9 +1675,12 @@ async def create_campaign(
     left unset, calls use the org's default script and auto-rotate across
     its numbers, same as before either field existed.
 
-    ``max_attempts`` (voice-only, any integer >= 1, default 3) caps how many
-    times the dialer re-calls a target that never connects before marking it
-    failed.
+    ``max_attempts`` (voice-only, any integer >= 1, default 3) is the absolute
+    cap on how many calls the dialer will ever place to one target — enforced
+    in the claim query, not just the retry branches (see
+    workers/campaign_dialer.py). A target that never connects is re-tried up
+    to this many times; a target that connects is marked done after that one
+    call.
     """
     if start_mode == "scheduled" and (
         scheduled_start_at is None or scheduled_start_at <= datetime.now(UTC)

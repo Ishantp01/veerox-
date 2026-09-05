@@ -1,4 +1,5 @@
 import type { OnbordaProps } from "onborda";
+import { guideForPath, type GuideAnchor } from "./page-guides";
 import {
   LayoutDashboard,
   Power,
@@ -26,8 +27,9 @@ import {
 type Tour = OnbordaProps["steps"][number];
 type Step = Tour["steps"][number];
 
-/** Tour name passed to `startOnborda()`. */
+/** Tour names passed to `startOnborda()`. */
 export const TOUR_NEW_ACCOUNT = "veerox-intro";
+export const TOUR_PAGE_GUIDE = "veerox-page-guide";
 
 /**
  * Anchor element ids for steps that point at the dashboard landing page
@@ -79,8 +81,10 @@ function body(what: string, how: string): React.ReactNode {
   return (
     <>
       <p>{what}</p>
-      <p className="mt-2 font-medium text-slate-700 dark:text-slate-200">How to use it</p>
-      <p className="mt-0.5 text-slate-500 dark:text-slate-400">{how}</p>
+      <p className="mt-2">
+        <span className="font-medium text-slate-600 dark:text-slate-300">How to use it: </span>
+        {how}
+      </p>
     </>
   );
 }
@@ -143,7 +147,7 @@ export const ALL_STEPS: Step[] = [
       "These refresh on their own — no need to reload. Open a channel or Reports for the full breakdown behind each number.",
     ),
     selector: `#${ONBORDA_IDS.stats}`,
-    side: "top",
+    side: "bottom",
     pointerPadding: 10,
     pointerRadius: 12,
     showControls: true,
@@ -163,14 +167,14 @@ export const ALL_STEPS: Step[] = [
     Phone,
     "AI Calling",
     "Your outbound voice agent — it places calls, talks to people and logs the outcome.",
-    "Open it, then use Dial to place a call, Conversations to hear recordings and read transcripts, and Calling → Settings to edit the agent's script, voice and phone number.",
+    "Open it, then use Dial to place a call, Conversations to hear recordings and read transcripts, and Calling → Settings to edit the agent's script and preferred voice provider.",
   ),
   navStep(
     "onborda-nav-whatsapp",
     MessageSquare,
     "AI WhatsApp",
     "The WhatsApp agent's inbox — it replies to chats automatically.",
-    "Open any chat to read it or take over and type yourself. Use Send for a one-off message, and WhatsApp → Settings to set the agent's instructions and working hours.",
+    "Open any chat to read it or take over and type yourself. Use Send for a one-off message, and WhatsApp → Settings to edit the agent's script.",
   ),
   navStep(
     "onborda-nav-templates",
@@ -200,7 +204,7 @@ export const ALL_STEPS: Step[] = [
     CalendarClock,
     "Appointments",
     "Every meeting or callback the agents have booked.",
-    "Switch between day and list views; click an appointment to see details, reschedule or cancel. They sync to the calendar you connect in Settings.",
+    "Switch between day and list views; click an appointment to see details, reschedule or cancel. Bookings the agents make land here automatically.",
   ),
   navStep(
     "onborda-nav-conversations",
@@ -260,9 +264,9 @@ export const ALL_STEPS: Step[] = [
   navStep(
     "onborda-nav-settings",
     Settings,
-    "Settings — start here",
-    "Where you connect your channels. Nothing runs until this is done.",
-    "Add your WhatsApp Business number and your calling provider's credentials, connect your calendar, then send yourself a test call and message. Do this before anything else.",
+    "Settings",
+    "Where you tune what your AI agents say — plus your account details.",
+    "Open the AI Calling or AI WhatsApp tab and edit the Script: the wording the agent follows on every conversation. Calling also keeps a library of scripts and a preferred voice provider. Your Veerox team sets up the phone numbers for you.",
   ),
   navStep(
     "onborda-nav-billing",
@@ -302,10 +306,43 @@ export const ALL_STEPS: Step[] = [
  * actually in the DOM. Call this immediately before `startOnborda()` so the
  * sidebar (which gates links by plan + role) has already rendered.
  */
-export function buildTour(): Tour[] {
+export function buildTour(): Tour {
   const steps =
     typeof document === "undefined"
       ? ALL_STEPS
       : ALL_STEPS.filter((step) => document.querySelector(step.selector) !== null);
-  return [{ tour: TOUR_NEW_ACCOUNT, steps }];
+  return { tour: TOUR_NEW_ACCOUNT, steps };
+}
+
+/** Shared anchors that `PageHeader` / `SectionTabs` render on almost every page. */
+const PAGE_ANCHOR: Record<GuideAnchor, { selector: string; side: Step["side"] }> = {
+  header: { selector: '[data-tour="page-header"]', side: "bottom" },
+  action: { selector: '[data-tour="page-action"]', side: "bottom" },
+  tabs: { selector: '[data-tour="section-tabs"]', side: "bottom" },
+  table: { selector: '[data-tour="page-table"]', side: "top" },
+};
+
+/**
+ * Build the "how to use this page" tour for the current route. Returns a tour
+ * with an empty `steps` array when there's no guide for the path — the caller
+ * should then not start it.
+ */
+export function buildPageGuideTour(pathname: string): Tour {
+  const guide = guideForPath(pathname) ?? [];
+  const steps: Step[] = guide.map((s) => {
+    const resolved = s.anchor
+      ? PAGE_ANCHOR[s.anchor]
+      : { selector: s.selector ?? "", side: s.side ?? "bottom" };
+    return {
+      icon: null,
+      title: s.title,
+      content: s.content,
+      selector: resolved.selector,
+      side: resolved.side,
+      pointerPadding: 8,
+      pointerRadius: 10,
+      showControls: true,
+    };
+  });
+  return { tour: TOUR_PAGE_GUIDE, steps };
 }

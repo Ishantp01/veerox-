@@ -16,6 +16,7 @@ import {
   EmptyState,
   Input,
   Label,
+  Pagination,
   Select,
   SkeletonRows,
   Table,
@@ -35,6 +36,7 @@ import {
 import { downloadCsv } from "@/lib/download-csv";
 import { formatDateTime } from "@/lib/format";
 import {
+  useClientPagination,
   useCampaigns,
   useCreateCampaign,
   useOrgNumbers,
@@ -99,6 +101,7 @@ export function CampaignsView() {
   const [channelFilter, setChannelFilter] = useState<"voice" | "whatsapp" | "">("");
   const { data, isLoading, isError, error, refetch } = useCampaigns(channelFilter || undefined);
   const campaigns = data ?? [];
+  const pager = useClientPagination(campaigns, 20, channelFilter);
 
   const [name, setName] = useState("");
   const [criteria, setCriteria] = useState("");
@@ -284,7 +287,7 @@ export function CampaignsView() {
         }
       />
 
-      <Card className="mb-8">
+      <Card className="mb-8" data-tour="campaign-form">
         <CardHeader>
           <CardTitle>New campaign</CardTitle>
         </CardHeader>
@@ -472,9 +475,10 @@ export function CampaignsView() {
                   </p>
                 )}
                 <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                  Voice calls only — how many times a contact who never picks up is re-dialed
-                  before being marked failed (default 3, no upper limit). Answered calls are
-                  never re-dialed.
+                  Voice calls only — the most times one contact will ever be called in this
+                  campaign (default 3, minimum 1). A contact who doesn&apos;t pick up is
+                  re-tried until this cap; once a call connects, that contact isn&apos;t
+                  called again.
                 </p>
               </div>
             </div>
@@ -531,7 +535,7 @@ export function CampaignsView() {
                 )}
               </div>
             )}
-            <div>
+            <div data-tour="campaign-submit">
               <Button type="submit" variant="primary" loading={createCampaign.isPending}>
                 {!createCampaign.isPending && <Upload size={15} aria-hidden />}
                 {START_MODE_BUTTON_LABEL[startMode]}
@@ -564,7 +568,10 @@ export function CampaignsView() {
           />
         }
       >
-        <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
+        <div
+          data-tour="page-table"
+          className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900"
+        >
           <Table>
             <thead>
               <TableRow isHeader>
@@ -578,7 +585,7 @@ export function CampaignsView() {
               </TableRow>
             </thead>
             <tbody>
-              {campaigns.map((c) => {
+              {pager.pageRows.map((c) => {
                 const total = c.counts.pending + c.counts.calling + c.counts.completed + c.counts.failed;
                 const done = c.counts.completed + c.counts.failed;
                 const isInert = c.status === "draft" || c.status === "scheduled";
@@ -698,6 +705,14 @@ export function CampaignsView() {
             </tbody>
           </Table>
         </div>
+        <Pagination
+          page={pager.page}
+          pageSize={pager.pageSize}
+          rowCount={pager.rowCount}
+          hasNextPage={pager.hasNextPage}
+          onPrev={pager.onPrev}
+          onNext={pager.onNext}
+        />
       </QueryBoundary>
     </div>
   );

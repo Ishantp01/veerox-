@@ -127,3 +127,4 @@ export {
 } from "./useAdminSettings";
 export { useSocialLinks } from "./useSocialLinks";
 export { useHelpDeskChat, type HelpDeskChatInput, type HelpDeskChatResult } from "./useHelpDesk";
+export { useClientPagination, type ClientPagination } from "./useClientPagination";

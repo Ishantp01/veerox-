@@ -29,6 +29,7 @@ export function SectionTabs({ items, sectionRoot }: { items: SectionTabItem[]; s
   return (
     <nav
       aria-label="Section navigation"
+      data-tour="section-tabs"
       className="-mx-4 mb-6 flex gap-1 overflow-x-auto border-b border-slate-200 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 dark:border-slate-800"
     >
       {items.map(({ href, label, Icon }) => {

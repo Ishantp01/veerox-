@@ -55,7 +55,10 @@ export default function SettingsPage() {
         </div>
       )}
 
-      <div className="mb-6 inline-flex gap-1 rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-900">
+      <div
+        data-tour="settings-channel-tabs"
+        className="mb-6 inline-flex gap-1 rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-900"
+      >
         {TABS.map(({ key, label, icon: Icon }) => (
           <button
             key={key}

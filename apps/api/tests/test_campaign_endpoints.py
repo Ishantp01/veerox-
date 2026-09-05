@@ -268,6 +268,36 @@ async def test_create_campaign_rejects_phone_without_country_code(
     assert targets[0].phone == "+919179609988"
 
 
+async def test_create_campaign_dedupes_repeated_phone_in_upload(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The same number listed twice must not become two targets — otherwise
+    that contact would be dialed 2x the campaign's `max_attempts`."""
+    await _seed_org(db_session)
+    csv_body = (
+        "name,phone\n"
+        "Asha,+910000000060\n"
+        "Asha again,+910000000060\n"
+        "Ravi,+910000000061\n"
+    )
+
+    response = await client.post(
+        "/admin/campaigns",
+        data={"name": "Dup list", "criteria": "n/a", "channel": "voice", "start_mode": "now"},
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["imported"] == 2
+    assert body["skipped"] == 1
+    assert "duplicate" in body["errors"][0]["reason"]
+
+    targets = (await db_session.execute(select(CampaignTarget))).scalars().all()
+    assert sorted(t.phone for t in targets) == ["+910000000060", "+910000000061"]
+
+
 async def test_create_campaign_reports_missing_phone_rows(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

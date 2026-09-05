@@ -8,6 +8,7 @@ import {
   Badge,
   Button,
   EmptyState,
+  Pagination,
   Select,
   SkeletonRows,
   Table,
@@ -20,6 +21,7 @@ import {
 import { useAuth } from "@/lib/auth-context";
 import { downloadCsv } from "@/lib/download-csv";
 import { useBillingStatus } from "@/lib/hooks/useBilling";
+import { useClientPagination } from "@/lib/hooks";
 import { useRemoveMember, useTeamMembers, useUpdateMember, type TeamMember } from "@/lib/hooks/useTeam";
 import { InviteMemberDialog } from "@/components/team/invite-member-dialog";
 import { EditMemberDialog } from "@/components/team/edit-member-dialog";
@@ -53,6 +55,7 @@ export default function TeamPage() {
   // — hidden from this list entirely (and, per apps/api/routers/team.py's
   // invite_member, exempt from the plan's max_seats count).
   const members = (data ?? []).filter((m) => !m.is_owner);
+  const pager = useClientPagination(members, 20);
   const isAdmin = user?.role === "admin";
   const [exporting, setExporting] = useState(false);
 
@@ -151,7 +154,10 @@ export default function TeamPage() {
           <EmptyState icon={Users} title="No team members yet" description="Invite your first teammate." />
         }
       >
-        <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
+        <div
+          data-tour="page-table"
+          className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900"
+        >
           <Table>
             <thead>
               <TableRow isHeader>
@@ -164,7 +170,7 @@ export default function TeamPage() {
               </TableRow>
             </thead>
             <tbody>
-              {members.map((member) => (
+              {pager.pageRows.map((member) => (
                 <TableRow key={member.account_user_id}>
                   <TableCell className="font-medium text-slate-900 dark:text-slate-100">
                     {member.full_name ?? "—"}
@@ -218,6 +224,14 @@ export default function TeamPage() {
             </tbody>
           </Table>
         </div>
+        <Pagination
+          page={pager.page}
+          pageSize={pager.pageSize}
+          rowCount={pager.rowCount}
+          hasNextPage={pager.hasNextPage}
+          onPrev={pager.onPrev}
+          onNext={pager.onNext}
+        />
       </QueryBoundary>
     </div>
   );

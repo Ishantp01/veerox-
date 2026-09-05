@@ -51,7 +51,10 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
     : (["Live", "Client", "Channel", "Started", "Ended", "# Messages"] as const);
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
+    <div
+      data-tour="page-table"
+      className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900"
+    >
       <Table>
         <thead>
           <TableRow isHeader>
