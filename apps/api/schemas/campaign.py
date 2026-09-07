@@ -61,6 +61,12 @@ class CampaignOut(BaseModel):
     # Voice-only: dial-attempt cap for targets that never connect (any
     # integer >= 1, default 3). See workers/campaign_dialer.py.
     max_attempts: int = 3
+    # The teammate who created this campaign. NULL for pre-attribution rows and
+    # X-Admin-Token-created ones. A role=="member" caller only ever sees their
+    # own campaigns in the list; admins see all, with `created_by_name` filled
+    # in for the "Created by" column.
+    created_by_account_user_id: UUID | None = None
+    created_by_name: str | None = None
     created_at: datetime
     counts: CampaignCounts
 

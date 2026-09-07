@@ -9,7 +9,7 @@ import { Send, ArrowLeft, CheckCircle2 } from "lucide-react";
 import { forgotToken } from "@/lib/hooks/useAuthApi";
 
 const identifierSchema = z.object({
-  identifier: z.string().trim().min(1, "Enter your email or mobile number"),
+  identifier: z.string().trim().min(1, "Enter your email").email("Enter a valid email address"),
 });
 
 const GENERIC_MESSAGE = "If an account matches, a new login token has been sent.";
@@ -24,7 +24,7 @@ export default function ForgotTokenPage() {
     e.preventDefault();
     const parsed = identifierSchema.safeParse({ identifier });
     if (!parsed.success) {
-      setError(parsed.error.issues[0]?.message ?? "Enter your email or mobile number.");
+      setError(parsed.error.issues[0]?.message ?? "Enter your email.");
       return;
     }
 
@@ -59,7 +59,7 @@ export default function ForgotTokenPage() {
             <>
               <div className="flex flex-col items-center text-center gap-3 mb-2">
                 <CheckCircle2 size={28} className="text-primary-400" />
-                <h2 className="text-base font-bold text-slate-100">Check your email or phone</h2>
+                <h2 className="text-base font-bold text-slate-100">Check your email</h2>
                 <p className="text-sm text-slate-400">{GENERIC_MESSAGE}</p>
               </div>
               <Link
@@ -73,20 +73,20 @@ export default function ForgotTokenPage() {
             <>
               <h2 className="text-base font-bold text-slate-100 mb-1">Forgot your token?</h2>
               <p className="text-sm text-slate-400 mb-6">
-                Enter your email or mobile number and we&apos;ll send a new login token. Your
+                Enter your email and we&apos;ll send a new login token. Your
                 previous token will stop working.
               </p>
 
               <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
                 <div>
-                  <Label htmlFor="identifier" className="!text-slate-400">Email or mobile number</Label>
+                  <Label htmlFor="identifier" className="!text-slate-400">Email</Label>
                   <Input
                     id="identifier"
-                    type="text"
-                    autoComplete="username"
+                    type="email"
+                    autoComplete="email"
                     value={identifier}
                     onChange={(e) => { setIdentifier(e.target.value); setError(null); }}
-                    placeholder="you@example.com or +919876543210"
+                    placeholder="you@example.com"
                     aria-invalid={error ? true : undefined}
                     className="!bg-white/5 !border-white/10 !text-slate-100 text-sm"
                   />

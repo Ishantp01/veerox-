@@ -648,6 +648,132 @@ async def test_transfer_to_human_falls_back_to_any_teammate_when_owner_has_no_mo
     assert sent[0]["to"] == "+918888888888"
 
 
+async def _seed_campaign_conversation(
+    db: AsyncSession, *, creator_id: uuid.UUID | None, user: User
+) -> uuid.UUID:
+    """A conversation linked to a CampaignTarget whose campaign was created
+    by ``creator_id`` — returns the conversation id."""
+    campaign = CallCampaign(
+        org_id=ORG_ID, name="Camp", criteria="c", created_by_account_user_id=creator_id
+    )
+    db.add(campaign)
+    await db.flush()
+    conversation = Conversation(org_id=ORG_ID, user_id=user.id, channel="voice")
+    db.add(conversation)
+    await db.flush()
+    db.add(
+        CampaignTarget(
+            campaign_id=campaign.id, org_id=ORG_ID, phone=user.phone, conversation_id=conversation.id
+        )
+    )
+    await db.commit()
+    return conversation.id
+
+
+async def test_transfer_to_human_campaign_escalation_routes_to_campaign_creator(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An escalation from a campaign call goes to that campaign's creator —
+    Lead assignment + WhatsApp notify — not the team round robin."""
+    sent: list[dict[str, object]] = []
+
+    async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
+        sent.append({"to": to})
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
+    await _seed_org(db_session)
+
+    creator = AccountUser(email="creator@example.com", token_hash="x", mobile="+919111111111")
+    other = AccountUser(email="other@example.com", token_hash="y", mobile="+919222222222")
+    db_session.add_all([creator, other])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            OrgMembership(org_id=ORG_ID, account_user_id=creator.id, role="member"),
+            OrgMembership(org_id=ORG_ID, account_user_id=other.id, role="admin"),
+        ]
+    )
+    user = User(org_id=ORG_ID, phone="+910000000200", name="Lead")
+    db_session.add(user)
+    await db_session.flush()
+    conv_id = await _seed_campaign_conversation(db_session, creator_id=creator.id, user=user)
+
+    result = await transfer_to_human(
+        db_session, reason="pricing", user_id=user.id, channel="voice", conversation_id=conv_id
+    )
+
+    lead = (
+        await db_session.execute(select(Lead).where(Lead.id == uuid.UUID(result["lead_id"])))
+    ).scalar_one()
+    assert lead.claimed_by_account_user_id == creator.id
+    assert [s["to"] for s in sent] == ["+919111111111"]
+
+
+async def test_transfer_to_human_campaign_with_no_creator_falls_back_to_round_robin(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[dict[str, object]] = []
+
+    async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
+        sent.append({"to": to})
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
+    await _seed_org(db_session)
+
+    teammate = AccountUser(email="tm@example.com", token_hash="x", mobile="+919333333333")
+    db_session.add(teammate)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=teammate.id, role="member"))
+    user = User(org_id=ORG_ID, phone="+910000000201", name="Lead")
+    db_session.add(user)
+    await db_session.flush()
+    conv_id = await _seed_campaign_conversation(db_session, creator_id=None, user=user)
+
+    result = await transfer_to_human(
+        db_session, reason="pricing", user_id=user.id, channel="voice", conversation_id=conv_id
+    )
+
+    lead = (
+        await db_session.execute(select(Lead).where(Lead.id == uuid.UUID(result["lead_id"])))
+    ).scalar_one()
+    assert lead.claimed_by_account_user_id == teammate.id
+    assert [s["to"] for s in sent] == ["+919333333333"]
+
+
+async def test_transfer_to_human_campaign_creator_without_mobile_still_assigns_lead(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _unexpected_send_template(*args: object, **kwargs: object) -> None:
+        raise AssertionError("must not round-robin to another teammate")
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _unexpected_send_template)
+    await _seed_org(db_session)
+
+    creator = AccountUser(email="nomobile@example.com", token_hash="x", mobile=None)
+    teammate = AccountUser(email="tm2@example.com", token_hash="y", mobile="+919444444444")
+    db_session.add_all([creator, teammate])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            OrgMembership(org_id=ORG_ID, account_user_id=creator.id, role="member"),
+            OrgMembership(org_id=ORG_ID, account_user_id=teammate.id, role="admin"),
+        ]
+    )
+    user = User(org_id=ORG_ID, phone="+910000000202", name="Lead")
+    db_session.add(user)
+    await db_session.flush()
+    conv_id = await _seed_campaign_conversation(db_session, creator_id=creator.id, user=user)
+
+    result = await transfer_to_human(
+        db_session, reason="pricing", user_id=user.id, channel="voice", conversation_id=conv_id
+    )
+
+    lead = (
+        await db_session.execute(select(Lead).where(Lead.id == uuid.UUID(result["lead_id"])))
+    ).scalar_one()
+    assert lead.claimed_by_account_user_id == creator.id
+
+
 async def test_transfer_to_human_no_org_contact_skips_send_without_error(
     db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:

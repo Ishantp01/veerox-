@@ -67,6 +67,15 @@ class CallCampaign(Base):
     # >= 1); defaults to 3, the old hard-coded value. A target that actually
     # answered is never retried regardless of this (see handle_call_ended).
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="3")
+    # The account_user who created this campaign. NULL for pre-attribution rows
+    # and X-Admin-Token-created ones. A role=="member" caller only sees/acts on
+    # campaigns where this is their id (see routers/admin.py::_member_lead_scope);
+    # admins and platform superusers see all. Also decides who a campaign
+    # escalation is routed to (see core/tools.py::transfer_to_human). SET NULL on
+    # delete so removing a teammate never blocks the delete or loses the campaign.
+    created_by_account_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("account_users.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

@@ -65,6 +65,7 @@ from apps.api.deps import (
     CurrentUserDep,
     DbDep,
     RedisDep,
+    RequestAccountUserDep,
     RequestOrgDep,
     SessionPayloadDep,
     enforce_plan_limit,
@@ -399,18 +400,22 @@ async def get_reports_timeseries(
 @router.get("/reports/campaigns", response_model=list[ReportsCampaignRow])
 async def get_reports_campaigns(
     db: DbDep,
-    org: RequestOrgDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> list[ReportsCampaignRow]:
     """Per-campaign conversion table for the reports page — reuses
     ``_campaign_counts`` (defined further down) so this stays consistent
-    with the counts already shown on the campaigns list."""
-    org_id = org
-    stmt = (
-        select(CallCampaign)
-        .where(CallCampaign.org_id == org_id)
-        .order_by(CallCampaign.created_at.desc())
-    )
+    with the counts already shown on the campaigns list. Siloed the same
+    way as ``list_campaigns``: a role=="member" caller only sees campaigns
+    they created."""
+    stmt = select(CallCampaign).order_by(CallCampaign.created_at.desc())
+    if scope_org_id is not None:
+        stmt = stmt.where(CallCampaign.org_id == scope_org_id)
+    member_scope = _member_lead_scope(scope_org_id, org, payload)
+    if member_scope is not None:
+        stmt = stmt.where(CallCampaign.created_by_account_user_id == member_scope)
     campaigns = (await db.execute(stmt)).scalars().all()
     counts_by_id = await _campaign_counts_bulk(db, [c.id for c in campaigns])
 
@@ -634,6 +639,10 @@ def _member_lead_scope(
 ) -> UUID | None:
     """Which account_user a role=="member" caller is restricted to.
 
+    Despite the name this is generic ownership scoping — also used to limit a
+    member to campaigns they created (CallCampaign.created_by_account_user_id),
+    not just leads.
+
     Returns None for an admin, a platform superuser, or the shared
     X-Admin-Token (scope_org_id already None in that case) — those see every
     lead in scope. Returns the caller's own account_user id for a
@@ -651,6 +660,27 @@ def _member_lead_scope(
     if scope_org_id is not None and org.role == "member" and payload is not None:
         return UUID(payload["account_user_id"])
     return None
+
+
+def _guard_campaign_access(
+    campaign: CallCampaign | None,
+    scope_org_id: UUID | None,
+    org: CurrentOrg,
+    payload: dict[str, str] | None,
+) -> CallCampaign:
+    """404 unless this caller may see/act on ``campaign``. A role=="member"
+    caller is limited to campaigns they created
+    (CallCampaign.created_by_account_user_id); everyone else sees the whole
+    org. Always 404 (never 403) so a member can't even probe which campaign
+    ids exist. Shared by every single-campaign endpoint."""
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if scope_org_id is not None and campaign.org_id != scope_org_id:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    member_scope = _member_lead_scope(scope_org_id, org, payload)
+    if member_scope is not None and campaign.created_by_account_user_id != member_scope:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
 
 
 @router.get("/leads")
@@ -1146,6 +1176,7 @@ _DEFAULT_IMPORT_CRITERIA = (
 async def import_leads_file(
     db: DbDep,
     org: RequestOrgDep,
+    account_user_id: RequestAccountUserDep,
     file: UploadFile = File(...),
     x_admin_token: str | None = Header(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
@@ -1230,6 +1261,7 @@ async def import_leads_file(
         template_language=template_language,
         template_params=parsed_template_params,
         custom_message=custom_message,
+        created_by_account_user_id=account_user_id,
     )
 
 
@@ -1238,6 +1270,7 @@ async def import_leads_bulk(
     payload: LeadBulkImportIn,
     db: DbDep,
     org: RequestOrgDep,
+    account_user_id: RequestAccountUserDep,
     x_admin_token: str | None = Header(None),
 ) -> CampaignCreateResult:
     """Bulk-import leads from a JSON array — the programmatic counterpart to
@@ -1294,6 +1327,7 @@ async def import_leads_bulk(
         template_language=payload.template_language,
         template_params=payload.template_params,
         custom_message=payload.custom_message,
+        created_by_account_user_id=account_user_id,
     )
 
 
@@ -1362,7 +1396,9 @@ async def _campaign_counts_bulk(
     return counts_by_id
 
 
-def _campaign_out(campaign: CallCampaign, counts: CampaignCounts) -> CampaignOut:
+def _campaign_out(
+    campaign: CallCampaign, counts: CampaignCounts, created_by_name: str | None = None
+) -> CampaignOut:
     return CampaignOut(
         id=campaign.id,
         org_id=campaign.org_id,
@@ -1378,6 +1414,8 @@ def _campaign_out(campaign: CallCampaign, counts: CampaignCounts) -> CampaignOut
         script_id=campaign.script_id,
         phone_number_id=campaign.phone_number_id,
         max_attempts=campaign.max_attempts,
+        created_by_account_user_id=campaign.created_by_account_user_id,
+        created_by_name=created_by_name,
         created_at=campaign.created_at,
         counts=counts,
     )
@@ -1400,6 +1438,7 @@ async def _create_campaign_from_rows(
     script_id: UUID | None = None,
     phone_number_id: UUID | None = None,
     max_attempts: int = 3,
+    created_by_account_user_id: UUID | None = None,
 ) -> CampaignCreateResult:
     """Shared core for every campaign-creation entry point (CSV/xlsx upload,
     JSON bulk import). Creates exactly ONE ``CallCampaign`` regardless of how
@@ -1446,6 +1485,7 @@ async def _create_campaign_from_rows(
         script_id=script_id,
         phone_number_id=phone_number_id,
         max_attempts=max_attempts,
+        created_by_account_user_id=created_by_account_user_id,
         created_at=datetime.now(UTC),
     )
     db.add(campaign)
@@ -1575,6 +1615,7 @@ async def _create_campaigns_from_rows(
     script_id: UUID | None = None,
     phone_number_id: UUID | None = None,
     max_attempts: int = 3,
+    created_by_account_user_id: UUID | None = None,
 ) -> CampaignCreateResult:
     """Multi-channel orchestrator on top of ``_create_campaign_from_rows``.
     Always creates exactly ONE campaign, regardless of how many distinct
@@ -1638,6 +1679,7 @@ async def _create_campaigns_from_rows(
         script_id=script_id,
         phone_number_id=phone_number_id,
         max_attempts=max_attempts,
+        created_by_account_user_id=created_by_account_user_id,
     )
     result.errors = row_errors + result.errors
     result.skipped += len(row_errors)
@@ -1648,6 +1690,7 @@ async def _create_campaigns_from_rows(
 async def create_campaign(
     db: DbDep,
     org: RequestOrgDep,
+    account_user_id: RequestAccountUserDep,
     name: str = Form(...),
     criteria: str = Form(...),
     file: UploadFile = File(...),
@@ -1734,13 +1777,16 @@ async def create_campaign(
         script_id=script_id,
         phone_number_id=phone_number_id,
         max_attempts=max_attempts,
+        created_by_account_user_id=account_user_id,
     )
 
 
 @router.get("/campaigns", response_model=list[CampaignOut])
 async def list_campaigns(
     db: DbDep,
-    org: RequestOrgDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
 ) -> list[CampaignOut]:
@@ -1748,8 +1794,12 @@ async def list_campaigns(
     trip — the counts come along as correlated subqueries on the same
     SELECT instead of a separate query afterward (DB is a remote Neon
     instance; see ``get_stats`` above for the same pattern applied to the
-    dashboard stats tile)."""
-    org_id = org
+    dashboard stats tile).
+
+    Siloed for a role=="member" caller: they only see campaigns they
+    created (CallCampaign.created_by_account_user_id). Admins, platform
+    superusers, and the shared X-Admin-Token see every campaign in scope —
+    same rule as leads (see ``_member_lead_scope``)."""
 
     def _target_count(condition):  # noqa: ANN001, ANN202 — SQLAlchemy boolean expr
         return (
@@ -1768,9 +1818,13 @@ async def list_campaigns(
             _target_count(CampaignTarget.status == "failed"),
             _target_count(CampaignTarget.qualified.is_(True)),
         )
-        .where(CallCampaign.org_id == org_id)
         .order_by(CallCampaign.created_at.desc())
     )
+    if scope_org_id is not None:
+        stmt = stmt.where(CallCampaign.org_id == scope_org_id)
+    member_scope = _member_lead_scope(scope_org_id, org, payload)
+    if member_scope is not None:
+        stmt = stmt.where(CallCampaign.created_by_account_user_id == member_scope)
     if channel:
         # CallCampaign.channel is a display-only summary ("voice"/"whatsapp"/
         # "mixed") — filtering on it directly would wrongly exclude "mixed"
@@ -1782,10 +1836,29 @@ async def list_campaigns(
         )
 
     rows = (await db.execute(stmt)).all()
+
+    # One extra round trip for the "Created by" column (admins only — a
+    # member's list is all their own campaigns). Mirrors how the counts above
+    # are batched rather than looked up per row.
+    creator_ids = {c.created_by_account_user_id for c, *_ in rows if c.created_by_account_user_id}
+    names_by_id: dict[UUID, str | None] = {}
+    if creator_ids:
+        names_by_id = {
+            uid: (full_name or email)
+            for uid, full_name, email in (
+                await db.execute(
+                    select(AccountUser.id, AccountUser.full_name, AccountUser.email).where(
+                        AccountUser.id.in_(creator_ids)
+                    )
+                )
+            ).all()
+        }
+
     return [
         _campaign_out(
             campaign,
             CampaignCounts(pending=pending, calling=calling, completed=completed, failed=failed, qualified=qualified),
+            names_by_id.get(campaign.created_by_account_user_id),
         )
         for campaign, pending, calling, completed, failed, qualified in rows
     ]
@@ -1839,11 +1912,14 @@ async def sample_campaign_xlsx(x_admin_token: str | None = Header(None)) -> Stre
 async def get_campaign(
     campaign_id: UUID,
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> CampaignDetailOut:
-    campaign = await db.get(CallCampaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+    campaign = _guard_campaign_access(
+        await db.get(CallCampaign, campaign_id), scope_org_id, org, payload
+    )
 
     stmt = (
         select(CampaignTarget)
@@ -1865,6 +1941,9 @@ async def update_campaign(
     campaign_id: UUID,
     body: CampaignUpdateIn,
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> CampaignOut:
     """Change a campaign's voice overrides after creation.
@@ -1879,9 +1958,9 @@ async def update_campaign(
     script without recreating it. Pass a field as ``null`` to clear it back
     to the org-default fallback.
     """
-    campaign = await db.get(CallCampaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+    campaign = _guard_campaign_access(
+        await db.get(CallCampaign, campaign_id), scope_org_id, org, payload
+    )
 
     fields = body.model_dump(exclude_unset=True)
     if "script_id" in fields:
@@ -1911,11 +1990,14 @@ async def update_campaign(
 async def pause_campaign(
     campaign_id: UUID,
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> CampaignStatusUpdateOut:
-    campaign = await db.get(CallCampaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+    campaign = _guard_campaign_access(
+        await db.get(CallCampaign, campaign_id), scope_org_id, org, payload
+    )
     campaign.status = "paused"
     await db.commit()
     return CampaignStatusUpdateOut(id=campaign.id, status=campaign.status)
@@ -1925,14 +2007,17 @@ async def pause_campaign(
 async def resume_campaign(
     campaign_id: UUID,
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> CampaignStatusUpdateOut:
     """Starts a campaign now — covers draft, scheduled, and paused campaigns
     alike, since "resume" just means "the dialer/dispatcher may act on this
     campaign starting now"."""
-    campaign = await db.get(CallCampaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+    campaign = _guard_campaign_access(
+        await db.get(CallCampaign, campaign_id), scope_org_id, org, payload
+    )
     campaign.status = "running"
     # Manually starting a scheduled campaign early shouldn't leave a stale
     # future timestamp displayed once it's already running.
@@ -1944,17 +2029,20 @@ async def resume_campaign(
 @router.post("/campaigns/{campaign_id}/schedule", response_model=CampaignStatusUpdateOut)
 async def schedule_campaign(
     campaign_id: UUID,
-    payload: CampaignScheduleIn,
+    body: CampaignScheduleIn,
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> CampaignStatusUpdateOut:
-    campaign = await db.get(CallCampaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-    if payload.scheduled_start_at <= datetime.now(UTC):
+    campaign = _guard_campaign_access(
+        await db.get(CallCampaign, campaign_id), scope_org_id, org, payload
+    )
+    if body.scheduled_start_at <= datetime.now(UTC):
         raise HTTPException(status_code=400, detail="scheduled_start_at must be in the future")
     campaign.status = "scheduled"
-    campaign.scheduled_start_at = payload.scheduled_start_at
+    campaign.scheduled_start_at = body.scheduled_start_at
     await db.commit()
     return CampaignStatusUpdateOut(id=campaign.id, status=campaign.status)
 

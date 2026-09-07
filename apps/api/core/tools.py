@@ -33,6 +33,7 @@ from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.whatsapp_assets import asset_public_url, load_org_assets, resolve_asset
 from apps.api.db.models.account_user import AccountUser
+from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.appointment import Appointment
 from apps.api.db.models.conversation import Conversation
@@ -729,6 +730,13 @@ async def transfer_to_human(
     else on the org can reassign it (assignment is automatic-only; there is
     no manual "assign lead" action anywhere in the product).
 
+    Exception: when the escalation is raised from a campaign call/chat (the
+    conversation is linked to a ``CampaignTarget``), it skips the round-robin
+    and goes to that campaign's creator
+    (``CallCampaign.created_by_account_user_id``) — both the Lead assignment
+    and the WhatsApp notification. If that person has no mobile on file the
+    Lead is still assigned to them, just without the WhatsApp ping.
+
     Sends ``agent_connect_request`` (caller's number + reason) once that
     template is Meta-approved (``_AGENT_CONNECT_TEMPLATE_APPROVED``);
     until then, falls back to the already-approved
@@ -753,9 +761,30 @@ async def transfer_to_human(
             phone = user.phone
             name = user.name
 
+    # An escalation raised from a campaign call/chat goes straight to that
+    # campaign's creator — they own its outreach (see
+    # CallCampaign.created_by_account_user_id) — instead of the team
+    # round-robin. CampaignTarget.conversation_id is set for both channels
+    # (voice bridge's attach_campaign_conversation, WhatsApp core/agent.py).
+    campaign_owner: tuple[UUID, str | None] | None = None
+    if conversation_id is not None:
+        target = (
+            await db.execute(
+                select(CampaignTarget).where(CampaignTarget.conversation_id == conversation_id)
+            )
+        ).scalar_one_or_none()
+        if target is not None:
+            campaign = await db.get(CallCampaign, target.campaign_id)
+            if campaign is not None and campaign.created_by_account_user_id is not None:
+                owner = await db.get(AccountUser, campaign.created_by_account_user_id)
+                campaign_owner = (campaign.created_by_account_user_id, owner.mobile if owner else None)
+
     notify_targets = await _resolve_team_notify_targets(db, org_id)
     notify_account_user_id: UUID | None = None
-    if notify_targets:
+    notify_phone: str | None = None
+    if campaign_owner is not None:
+        notify_account_user_id, notify_phone = campaign_owner
+    elif notify_targets:
         # INCR is atomic across concurrent calls, so two escalations landing
         # at the same instant still get distinct, consecutive turns instead
         # of racing onto the same teammate. The counter only ever grows —
@@ -764,6 +793,7 @@ async def transfer_to_human(
         turn = await redis.incr(f"{_TRANSFER_ROUND_ROBIN_PREFIX}{org_id}")
         notify_account_user_id, notify_phone = notify_targets[(turn - 1) % len(notify_targets)]
 
+    if notify_account_user_id is not None and notify_phone:
         if _AGENT_CONNECT_TEMPLATE_APPROVED:
             template_name = _AGENT_CONNECT_TEMPLATE_NAME
             body_params = [phone or "not provided", reason or _NO_REASON_GIVEN]
@@ -791,6 +821,15 @@ async def transfer_to_human(
                 notify_phone=notify_phone,
                 exc_info=True,
             )
+    elif campaign_owner is not None:
+        # Lead still lands on the campaign owner's dashboard below; we just
+        # can't WhatsApp them. Not falling back to round-robin — that would
+        # defeat the point of routing it to them.
+        logger.warning(
+            "transfer_to_human_campaign_owner_no_mobile",
+            org_id=str(org_id),
+            account_user_id=str(notify_account_user_id),
+        )
     else:
         logger.warning("transfer_to_human_no_notify_phone", org_id=str(org_id))
 

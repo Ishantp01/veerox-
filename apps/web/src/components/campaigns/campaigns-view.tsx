@@ -103,6 +103,9 @@ export function CampaignsView() {
   const { data, isLoading, isError, error, refetch } = useCampaigns(channelFilter || undefined);
   const campaigns = data ?? [];
   const pager = useClientPagination(campaigns, 20, channelFilter);
+  // Only shown to admins — a "member" only ever gets their own campaigns back,
+  // so the API leaves created_by_name null for them.
+  const showCreator = campaigns.some((c) => c.created_by_name);
 
   const [name, setName] = useState("");
   const [criteria, setCriteria] = useState("");
@@ -594,6 +597,7 @@ export function CampaignsView() {
                 <TableHeader>Status</TableHeader>
                 <TableHeader>Progress</TableHeader>
                 <TableHeader>Qualified</TableHeader>
+                {showCreator && <TableHeader>Created by</TableHeader>}
                 <TableHeader>Created</TableHeader>
                 <TableHeader>Actions</TableHeader>
               </TableRow>
@@ -662,6 +666,11 @@ export function CampaignsView() {
                     <TableCell>
                       <span className="font-semibold text-emerald-600">{c.counts.qualified}</span>
                     </TableCell>
+                    {showCreator && (
+                      <TableCell className="text-xs text-slate-500">
+                        {c.created_by_name ?? "—"}
+                      </TableCell>
+                    )}
                     <TableCell className="text-xs text-slate-500">{formatDateTime(c.created_at)}</TableCell>
                     <TableCell>
                       {isInert ? (

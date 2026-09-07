@@ -419,6 +419,10 @@ export interface Campaign {
   // Voice-only: how many times the dialer re-calls a target that never
   // connects before marking it failed (any integer >= 1, default 3).
   max_attempts: number;
+  /** The teammate who created this campaign. A "member" only ever sees their
+   * own campaigns; admins see all, with `created_by_name` for the column. */
+  created_by_account_user_id: string | null;
+  created_by_name: string | null;
   created_at: string;
   counts: CampaignCounts;
 }

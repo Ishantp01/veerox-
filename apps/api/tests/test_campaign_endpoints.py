@@ -8,13 +8,14 @@ setup in test_admin_endpoints.py.
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.api.channels.voice.org_numbers import replace_org_phone_numbers
 from apps.api.config import settings
@@ -45,11 +46,21 @@ async def fake_redis() -> FakeRedis:
 
 @pytest_asyncio.fixture
 async def client(
-    db_session: AsyncSession, fake_redis: FakeRedis
+    db_session: AsyncSession, fake_redis: FakeRedis, test_engine, monkeypatch
 ) -> AsyncGenerator[AsyncClient, None]:
     from apps.api.main import create_app
+    from apps.api.routers import auth as auth_router
 
     app = create_app()
+
+    # /auth/login (used by the member-scoping tests below) writes via its own
+    # AsyncSessionLocal, not the request's db — redirect it at the test engine
+    # like conftest's shared client fixture does, else it hits the real DB.
+    monkeypatch.setattr(
+        auth_router,
+        "AsyncSessionLocal",
+        async_sessionmaker(bind=test_engine, expire_on_commit=False),
+    )
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
@@ -67,6 +78,109 @@ async def client(
 async def _seed_org(db: AsyncSession) -> None:
     db.add(Org(id=ORG_ID, name="Test Org"))
     await db.commit()
+
+
+@contextmanager
+def _require_session_auth(value: bool) -> Iterator[None]:
+    original = settings.require_session_auth
+    settings.require_session_auth = value
+    try:
+        yield
+    finally:
+        settings.require_session_auth = original
+
+
+async def _login_as(
+    client: AsyncClient, db: AsyncSession, *, email: str, role: str
+) -> tuple[dict[str, str], uuid.UUID]:
+    """Create an org membership with the given role, log in, and return
+    ``(X-Session-Token header, account_user_id)``."""
+    login_token = generate_login_token()
+    account = AccountUser(email=email, token_hash=hash_token(login_token))
+    db.add(account)
+    await db.flush()
+    account_id = account.id
+    db.add(OrgMembership(org_id=ORG_ID, account_user_id=account_id, role=role))
+    await db.commit()
+
+    login = await client.post("/auth/login", json={"token": login_token})
+    return {"X-Session-Token": login.json()["token"]}, account_id
+
+
+async def _create_campaign_as(
+    client: AsyncClient, headers: dict[str, str], *, name: str, phone: str
+) -> str:
+    with _require_session_auth(True):
+        resp = await client.post(
+            "/admin/campaigns",
+            data={"name": name, "criteria": "n/a", "channel": "voice"},
+            files={"file": ("leads.csv", f"name,phone\nA,{phone}\n", "text/csv")},
+            headers=headers,
+        )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["campaign"]["id"]
+
+
+async def test_list_campaigns_member_only_sees_own(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    a_headers, a_id = await _login_as(client, db_session, email="a@example.com", role="member")
+    b_headers, _ = await _login_as(client, db_session, email="b@example.com", role="member")
+    admin_headers, _ = await _login_as(client, db_session, email="adm@example.com", role="admin")
+
+    a_campaign = await _create_campaign_as(client, a_headers, name="A camp", phone="+910000000060")
+    b_campaign = await _create_campaign_as(client, b_headers, name="B camp", phone="+910000000061")
+
+    with _require_session_auth(True):
+        a_list = (await client.get("/admin/campaigns", headers=a_headers)).json()
+        b_list = (await client.get("/admin/campaigns", headers=b_headers)).json()
+        admin_list = (await client.get("/admin/campaigns", headers=admin_headers)).json()
+
+    assert {c["id"] for c in a_list} == {a_campaign}
+    assert {c["id"] for c in b_list} == {b_campaign}
+    assert {a_campaign, b_campaign} <= {c["id"] for c in admin_list}
+
+    # Creator attribution persisted + name surfaced for the admin view.
+    stored = (
+        await db_session.execute(select(CallCampaign).where(CallCampaign.id == uuid.UUID(a_campaign)))
+    ).scalar_one()
+    assert stored.created_by_account_user_id == a_id
+    admin_a_row = next(c for c in admin_list if c["id"] == a_campaign)
+    assert admin_a_row["created_by_name"] == "a@example.com"
+
+
+async def test_campaign_actions_404_for_non_creator_member(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    a_headers, _ = await _login_as(client, db_session, email="a2@example.com", role="member")
+    b_headers, _ = await _login_as(client, db_session, email="b2@example.com", role="member")
+    cid = await _create_campaign_as(client, a_headers, name="A camp", phone="+910000000062")
+
+    later = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    with _require_session_auth(True):
+        assert (await client.get(f"/admin/campaigns/{cid}", headers=b_headers)).status_code == 404
+        assert (
+            await client.post(f"/admin/campaigns/{cid}/pause", headers=b_headers)
+        ).status_code == 404
+        assert (
+            await client.post(f"/admin/campaigns/{cid}/resume", headers=b_headers)
+        ).status_code == 404
+        assert (
+            await client.post(
+                f"/admin/campaigns/{cid}/schedule",
+                json={"scheduled_start_at": later},
+                headers=b_headers,
+            )
+        ).status_code == 404
+        assert (
+            await client.patch(
+                f"/admin/campaigns/{cid}", json={"max_attempts": 5}, headers=b_headers
+            )
+        ).status_code == 404
+        # The creator still can.
+        assert (await client.get(f"/admin/campaigns/{cid}", headers=a_headers)).status_code == 200
 
 
 async def test_create_campaign_stages_targets_not_leads(
