@@ -14,6 +14,7 @@ from apps.api.channels.voice.realtime_bridge import router as voice_stream_route
 from apps.api.channels.voice.webhook import router as voice_router
 from apps.api.channels.whatsapp.webhook import router as whatsapp_router
 from apps.api.config import settings
+from apps.api.db.startup_seed import ensure_env_seed_data_on_startup
 from apps.api.logging import setup_logging
 from apps.api.rate_limit import limiter
 from apps.api.routers import (
@@ -44,6 +45,7 @@ from apps.api.workers.whatsapp_dispatcher import run_whatsapp_dispatcher
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging()
     init_sentry()
+    await ensure_env_seed_data_on_startup()
     plivo_registration_task = asyncio.create_task(plivo_client.register_inbound_answer_url())
     dialer_task = asyncio.create_task(run_campaign_dialer())
     whatsapp_dispatcher_task = asyncio.create_task(run_whatsapp_dispatcher())
