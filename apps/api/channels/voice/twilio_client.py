@@ -80,6 +80,7 @@ async def initiate_call(
             to=to_e164,
             error=str(exc),
             status=getattr(getattr(exc, "response", None), "status_code", None),
+            body=getattr(getattr(exc, "response", None), "text", None),
         )
         raise
 
