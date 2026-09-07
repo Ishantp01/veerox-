@@ -31,6 +31,7 @@ from apps.api.core.prompts import (
     current_datetime_block,
 )
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
+from apps.api.core.whatsapp_assets import asset_catalog_prompt_block
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.org import Org
@@ -97,7 +98,11 @@ async def _system_prompt_for(db: AsyncSession, org_id: UUID, channel: Channel) -
     org = await db.get(Org, org_id)
     base = org.script if org is not None and org.script else OUTBOUND_CALL_PROMPT
     append = VOICE_APPEND if channel == "voice" else WHATSAPP_APPEND
-    return f"{base.strip()}\n\n{current_datetime_block()}\n\n{append.strip()}"
+    prompt = f"{base.strip()}\n\n{current_datetime_block()}\n\n{append.strip()}"
+    catalog = await asset_catalog_prompt_block(db, org_id)
+    if catalog:
+        prompt = f"{prompt}\n\n{catalog}"
+    return prompt
 
 
 async def _is_kill_switch_active() -> bool:

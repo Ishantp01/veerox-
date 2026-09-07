@@ -31,6 +31,7 @@ from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice.org_numbers import get_rotating_numbers
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
+from apps.api.core.whatsapp_assets import asset_public_url, load_org_assets, resolve_asset
 from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.appointment import Appointment
@@ -234,6 +235,48 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_whatsapp_file",
+            "description": (
+                "Send one of the business's saved files (a document/PDF, image, or "
+                "video) to the contact over WhatsApp — use this when someone asks for "
+                "information the business keeps as a file: a price list, brochure, plan, "
+                "catalogue, spec sheet, etc. The files you can send are listed in your "
+                "instructions; pass the file's name exactly as written there. Only works "
+                "while the contact has an open WhatsApp chat with us (they've messaged "
+                "recently). If they don't name a different number, it goes to their own."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "The exact name of the file to send, as listed in your "
+                            "instructions (e.g. 'Price List 2026')."
+                        ),
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional short caption to send alongside the file, e.g. "
+                            "'Here's our current pricing.'"
+                        ),
+                    },
+                    "phone": {
+                        "type": "string",
+                        "description": (
+                            "Phone number to send to (E.164 preferred). Omit to use the "
+                            "current contact's own number."
+                        ),
+                    },
+                },
+                "required": ["name"],
             },
         },
     },
@@ -1095,6 +1138,87 @@ async def send_whatsapp_message(
     return {"status": "ok", "phone": normalized}
 
 
+async def send_whatsapp_file(
+    db: AsyncSession,
+    name: str,
+    caption: str | None = None,
+    phone: str | None = None,
+    user_id: UUID | None = None,
+    org_id: UUID | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Send one of the org's saved WhatsApp media assets to the contact.
+
+    Resolves ``name`` against the org's library (see
+    ``core/whatsapp_assets.py``), then hands Meta a public link to the file
+    (``routers/media.py`` serves the bytes). Media, like free-form text,
+    only reaches a contact inside Meta's 24h window — outside it Meta
+    rejects with error 131047 and this returns ``reason="outside_24h_window"``
+    so the model can ask the contact to message first.
+    """
+    org_id = org_id or _default_org_id()
+
+    target_phone = phone
+    caller: User | None = None
+    if user_id is not None:
+        caller = await db.get(User, user_id)
+    if not target_phone:
+        target_phone = caller.phone if caller else None
+    if not target_phone:
+        return {"status": "error", "reason": "no_phone_number_available"}
+
+    resolved = await resolve_asset(db, org_id, name)
+    if resolved is None:
+        available = [a.name for a in await load_org_assets(db, org_id)]
+        return {
+            "status": "error",
+            "reason": "no_matching_file",
+            "requested": name,
+            "available": available,
+        }
+    if isinstance(resolved, list):
+        return {"status": "error", "reason": "ambiguous_file_name", "matches": resolved}
+
+    normalized = _normalize_phone(target_phone)
+    org = await db.get(Org, org_id)
+    phone_number_id = org.whatsapp_phone_number_id if org else None
+
+    try:
+        await wa_client.send_media(
+            normalized,
+            resolved.media_type,
+            asset_public_url(resolved),
+            caption=caption,
+            filename=resolved.filename,
+            phone_number_id=phone_number_id,
+        )
+    except httpx.HTTPStatusError as exc:
+        if _meta_error_code(exc) == _REENGAGEMENT_ERROR_CODE:
+            logger.info(
+                "send_whatsapp_file_tool_outside_window",
+                phone=normalized,
+                file=resolved.name,
+            )
+            return {"status": "error", "reason": "outside_24h_window"}
+        logger.warning(
+            "send_whatsapp_file_tool_failed", phone=normalized, error=str(exc)
+        )
+        return {"status": "error", "reason": "whatsapp_send_failed"}
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "send_whatsapp_file_tool_failed", phone=normalized, error=str(exc)
+        )
+        return {"status": "error", "reason": "whatsapp_send_failed"}
+
+    logger.info(
+        "send_whatsapp_file_tool_ok",
+        phone=normalized,
+        org_id=str(org_id),
+        file=resolved.name,
+        media_type=resolved.media_type,
+    )
+    return {"status": "ok", "phone": normalized, "file": resolved.name}
+
 
 # Deterministic backstop for a recurring misfire: gpt-4o-mini sometimes reads
 # "connect me to a human/agent/team member" as a request to be *called*, and
@@ -1196,5 +1320,6 @@ DISPATCH_TABLE: dict[str, ToolHandler] = {
     "qualify_lead": qualify_lead,
     "lookup_customer": lookup_customer,
     "send_whatsapp_message": send_whatsapp_message,
+    "send_whatsapp_file": send_whatsapp_file,
     "initiate_ai_call": initiate_ai_call,
 }

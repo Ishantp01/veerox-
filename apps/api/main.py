@@ -28,6 +28,7 @@ from apps.api.routers import (
     health,
     helpdesk,
     leads,
+    media,
     sales,
     team,
     templates,
@@ -105,6 +106,7 @@ def create_app() -> FastAPI:
     app.include_router(tickets.admin_router)
     app.include_router(admin.router)
     app.include_router(helpdesk.router)
+    app.include_router(media.router)
     app.include_router(diag.router)
     app.include_router(whatsapp_router)
     app.include_router(voice_router)

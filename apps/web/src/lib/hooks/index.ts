@@ -99,6 +99,14 @@ export {
   type TemplateSyncResult,
 } from "./useTemplates";
 export {
+  useWhatsappAssets,
+  useUploadWhatsappAsset,
+  useUpdateWhatsappAsset,
+  useDeleteWhatsappAsset,
+  type UploadWhatsappAssetInput,
+  type UpdateWhatsappAssetInput,
+} from "./useWhatsappAssets";
+export {
   useBillingStatus,
   useBillingUsage,
   useAvailablePlans,

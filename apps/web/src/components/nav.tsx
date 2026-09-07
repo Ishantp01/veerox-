@@ -8,6 +8,7 @@ import {
   MessageSquare,
   MessagesSquare,
   FileText,
+  Paperclip,
   Phone,
   Users,
   UserCheck,
@@ -66,6 +67,7 @@ const GROUPS: NavGroup[] = [
       { href: "/calling", label: "AI Calling", Icon: Phone, iconClassName: "text-purple-500" },
       { href: "/whatsapp", label: "AI WhatsApp", Icon: MessageSquare, iconClassName: "text-green-500" },
       { href: "/whatsapp/templates", label: "WhatsApp Templates", Icon: FileText, iconClassName: "text-blue-400" },
+      { href: "/whatsapp/media", label: "WhatsApp Media", Icon: Paperclip, iconClassName: "text-green-500" },
     ],
   },
   {

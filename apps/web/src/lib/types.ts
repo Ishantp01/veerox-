@@ -239,6 +239,23 @@ export interface ScriptLibraryItem {
   updated_at: string;
 }
 
+// GET/POST/PATCH/DELETE /admin/whatsapp-assets — one file in the org's
+// WhatsApp media library. The AI agent sends the right one to a contact who
+// asks for that information (see apps/api/core/tools.py's send_whatsapp_file).
+// Metadata only — the bytes are served from GET /media/wa-asset/{id}.
+export interface WhatsAppAsset {
+  id: string;
+  name: string;
+  description: string | null;
+  /** "document" | "image" | "video" — the Meta message type. */
+  media_type: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  created_at: string;
+  updated_at: string;
+}
+
 // One of an org's dedicated Plivo/Twilio numbers — an org can have several
 // per provider (see apps/api/db/models/org_phone_number.py). Outbound calls
 // dial from whichever row per provider has is_default true.

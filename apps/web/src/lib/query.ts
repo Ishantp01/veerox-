@@ -62,6 +62,7 @@ export const queryKeys = {
   followUpRules: () => ["follow-up-rules"] as const,
   followUpTasks: (filters?: { status?: string }) => ["follow-up-tasks", filters ?? {}] as const,
   templates: (filters?: { active?: boolean }) => ["whatsapp-templates", filters ?? {}] as const,
+  whatsappAssets: () => ["whatsapp-assets"] as const,
   platformSettings: () => ["platform-settings"] as const,
   socialLinks: () => ["social-links"] as const,
 };

@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import re
+import secrets
 from collections.abc import Iterable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -42,6 +43,7 @@ from apps.api.core.tools import (
     _normalize_phone,
 )
 from apps.api.core.usage import get_credit_usage
+from apps.api.core.whatsapp_assets import MAX_ASSET_BYTES, media_type_for_mime
 from apps.api.db.models import (
     AccountUser,
     CallCampaign,
@@ -52,6 +54,7 @@ from apps.api.db.models import (
     Org,
     Script,
     User,
+    WhatsAppAsset,
 )
 from apps.api.db.models.org_membership import OrgMembership
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
@@ -88,6 +91,7 @@ from apps.api.schemas.admin import (
 from apps.api.schemas.org_numbers import OrgPhoneNumberOut
 from apps.api.schemas.script import ScriptCreateIn, ScriptUpdateIn
 from apps.api.schemas.script import ScriptOut as ScriptLibraryOut
+from apps.api.schemas.whatsapp_asset import WhatsAppAssetOut, WhatsAppAssetUpdateIn
 from apps.api.schemas.campaign import (
     CampaignCounts,
     CampaignCreateResult,
@@ -2200,6 +2204,108 @@ async def delete_script(
     if script is None or script.org_id != org:
         raise HTTPException(status_code=404, detail="Script not found")
     await db.delete(script)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/whatsapp-assets", response_model=list[WhatsAppAssetOut])
+async def list_whatsapp_assets(
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> list[WhatsAppAssetOut]:
+    """This org's WhatsApp media library — files the AI agent can send to a
+    contact who asks for that information (see core/tools.py's
+    send_whatsapp_file). Metadata only; the bytes are served from the public
+    /media/wa-asset route."""
+    result = await db.execute(
+        select(WhatsAppAsset)
+        .where(WhatsAppAsset.org_id == org)
+        .order_by(WhatsAppAsset.created_at)
+    )
+    return [WhatsAppAssetOut.model_validate(a) for a in result.scalars().all()]
+
+
+@router.post("/whatsapp-assets", response_model=WhatsAppAssetOut, status_code=201)
+async def create_whatsapp_asset(
+    db: DbDep,
+    org: RequestOrgDep,
+    name: str = Form(...),
+    description: str | None = Form(None),
+    file: UploadFile = File(...),
+    x_admin_token: str | None = Header(None),
+) -> WhatsAppAssetOut:
+    """Upload a file (PDF/document, image, or video) into this org's WhatsApp
+    media library. ``media_type`` is inferred from the file's content type.
+    Capped at 16 MB (see MAX_ASSET_BYTES / Meta's own media limits)."""
+    label = name.strip()
+    if not label:
+        raise HTTPException(status_code=422, detail="A name is required.")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=422, detail="The uploaded file is empty.")
+    if len(raw) > MAX_ASSET_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File is too large — the limit is {MAX_ASSET_BYTES // (1024 * 1024)} MB.",
+        )
+
+    mime = file.content_type or "application/octet-stream"
+    asset = WhatsAppAsset(
+        org_id=org,
+        name=label,
+        description=(description.strip() or None) if description else None,
+        media_type=media_type_for_mime(mime),
+        filename=(file.filename or label)[:255],
+        mime_type=mime[:128],
+        size_bytes=len(raw),
+        data=raw,
+        access_key=secrets.token_urlsafe(32),
+    )
+    db.add(asset)
+    await db.commit()
+    await db.refresh(asset)
+    return WhatsAppAssetOut.model_validate(asset)
+
+
+@router.patch("/whatsapp-assets/{asset_id}", response_model=WhatsAppAssetOut)
+async def update_whatsapp_asset(
+    asset_id: UUID,
+    body: WhatsAppAssetUpdateIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> WhatsAppAssetOut:
+    """Rename a library file or edit its description (what the agent reads to
+    decide when to send it). Replacing the file itself = delete + re-upload."""
+    asset = await db.get(WhatsAppAsset, asset_id)
+    if asset is None or asset.org_id != org:
+        raise HTTPException(status_code=404, detail="File not found")
+    fields = body.model_dump(exclude_unset=True)
+    if "name" in fields and fields["name"]:
+        asset.name = fields["name"].strip()
+    if "description" in fields:
+        value = fields["description"]
+        asset.description = value.strip() or None if value else None
+    await db.commit()
+    await db.refresh(asset)
+    return WhatsAppAssetOut.model_validate(asset)
+
+
+@router.delete("/whatsapp-assets/{asset_id}")
+async def delete_whatsapp_asset(
+    asset_id: UUID,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> dict[str, bool]:
+    """Remove a file from the library. The agent's instructions stop listing
+    it on its next turn."""
+    asset = await db.get(WhatsAppAsset, asset_id)
+    if asset is None or asset.org_id != org:
+        raise HTTPException(status_code=404, detail="File not found")
+    await db.delete(asset)
     await db.commit()
     return {"ok": True}
 

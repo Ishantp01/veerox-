@@ -19,6 +19,7 @@ from apps.api.db.models.support_ticket import SupportTicket
 from apps.api.db.models.template import WhatsAppTemplate
 from apps.api.db.models.usage_counter import UsageCounter
 from apps.api.db.models.user import User
+from apps.api.db.models.whatsapp_asset import WhatsAppAsset
 
 __all__ = [
     "AccountUser",
@@ -42,5 +43,6 @@ __all__ = [
     "SupportTicket",
     "UsageCounter",
     "User",
+    "WhatsAppAsset",
     "WhatsAppTemplate",
 ]

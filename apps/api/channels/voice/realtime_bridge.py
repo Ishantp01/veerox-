@@ -44,6 +44,7 @@ from apps.api.core.prompts import (
     current_datetime_block,
 )
 from apps.api.core.usage import get_credit_usage
+from apps.api.core.whatsapp_assets import asset_catalog_prompt_block
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.script import Script
@@ -206,14 +207,22 @@ async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | N
             if default_script is not None:
                 base = default_script.content
 
+        catalog = (
+            await asset_catalog_prompt_block(db, org_id) if org_id is not None else ""
+        )
+
+    tail = f"{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
+    if catalog:
+        tail = f"{tail}\n\n{catalog}"
+
     if campaign is not None:
         return (
             f"{base.strip()}\n\n"
             f"{campaign_qualification_append(campaign.criteria).strip()}\n\n"
-            f"{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
+            f"{tail}"
         )
 
-    return f"{base.strip()}\n\n{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
+    return f"{base.strip()}\n\n{tail}"
 
 
 def _session_update_event(instructions: str) -> dict[str, Any]:

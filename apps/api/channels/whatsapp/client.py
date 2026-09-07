@@ -211,6 +211,66 @@ async def send_template(
     return data
 
 
+async def send_media(
+    to_e164: str,
+    media_type: str,
+    link: str,
+    caption: str | None = None,
+    filename: str | None = None,
+    phone_number_id: str | None = None,
+) -> dict[str, Any]:
+    """Send an image / document / video WhatsApp message via the Graph API.
+
+    ``media_type`` is one of ``"image"``, ``"document"``, ``"video"`` — it's
+    both the Meta message ``type`` and the key its object nests under.
+    ``link`` is a publicly reachable HTTPS URL Meta fetches the file from
+    (see ``routers/media.py`` — we host the org's uploaded assets there).
+    ``filename`` is only meaningful for documents (what the recipient sees).
+
+    Like free-form text, media only reaches a contact inside Meta's 24h
+    customer-service window — outside it Meta returns error 131047, which
+    the caller (``core/tools.py::send_whatsapp_file``) surfaces as an error
+    rather than retrying.
+
+    Returns the raw JSON response (contains the outbound message id). Raises
+    ``httpx.HTTPStatusError`` on a non-2xx response.
+    """
+    url = _graph_url("/messages", phone_number_id)
+    media_obj: dict[str, Any] = {"link": link}
+    if caption:
+        media_obj["caption"] = caption
+    if media_type == "document" and filename:
+        media_obj["filename"] = filename
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_e164,
+        "type": media_type,
+        media_type: media_obj,
+    }
+    try:
+        r = await _http.post(url, json=payload, headers=_auth_headers())
+        r.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "whatsapp_send_media_failed",
+            to=to_e164,
+            media_type=media_type,
+            error=str(exc),
+            status=getattr(getattr(exc, "response", None), "status_code", None),
+            meta_error=_meta_error_detail(exc),
+        )
+        raise
+
+    data: dict[str, Any] = r.json()
+    logger.info(
+        "whatsapp_send_media_ok",
+        to=to_e164,
+        media_type=media_type,
+        wa_message_id=_extract_outbound_id(data),
+    )
+    return data
+
+
 async def create_template(
     name: str,
     body_text: str,
