@@ -195,5 +195,10 @@ async def ensure_env_seed_data(db: AsyncSession) -> None:
 
 
 async def ensure_env_seed_data_on_startup() -> None:
-    async with AsyncSessionLocal() as db:
-        await ensure_env_seed_data(db)
+    try:
+        async with AsyncSessionLocal() as db:
+            await ensure_env_seed_data(db)
+    except Exception:
+        logger.exception("startup_seed_env_data_failed")
+        if settings.startup_seed_required:
+            raise

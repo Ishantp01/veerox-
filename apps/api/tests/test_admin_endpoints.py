@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncGenerator, Iterator
+from datetime import UTC, datetime, timedelta
 from contextlib import contextmanager
 
 import pytest
@@ -23,6 +24,7 @@ from apps.api.config import settings
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.db.models import (
     AccountUser,
+    Appointment,
     CallCampaign,
     CampaignTarget,
     Conversation,
@@ -1405,3 +1407,165 @@ async def test_calling_settings_reports_configured_when_creds_set(
     body = response.json()
     assert body["configured"] is True
     assert body["phone_number"] == "+15550001111"
+
+
+# --- Per-team-member scoping: conversations & appointments ---------------------
+
+
+async def _member_and_id(
+    client: AsyncClient, db: AsyncSession, email: str
+) -> tuple[dict[str, str], uuid.UUID]:
+    headers = await _login_as(client, db, email=email, role="member")
+    member_id = (
+        await db.execute(select(AccountUser).where(AccountUser.email == email))
+    ).scalar_one().id
+    return headers, member_id
+
+
+async def test_list_conversations_member_only_sees_own_lead_conversations(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    mine = User(org_id=ORG_ID, phone="+910000000030")
+    theirs = User(org_id=ORG_ID, phone="+910000000031")
+    db_session.add_all([mine, theirs])
+    await db_session.flush()
+
+    member_headers, member_id = await _member_and_id(
+        client, db_session, "conv-member@example.com"
+    )
+    db_session.add_all(
+        [
+            Lead(org_id=ORG_ID, user_id=mine.id, claimed_by_account_user_id=member_id),
+            Lead(org_id=ORG_ID, user_id=theirs.id),
+            Conversation(org_id=ORG_ID, user_id=mine.id, channel="whatsapp"),
+            Conversation(org_id=ORG_ID, user_id=theirs.id, channel="whatsapp"),
+        ]
+    )
+    await db_session.commit()
+
+    with _require_session_auth(True):
+        response = await client.get("/admin/conversations", headers=member_headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert [c["user_id"] for c in body] == [str(mine.id)]
+
+    with _require_session_auth(True):
+        admin_headers = await _login_as(
+            client, db_session, email="conv-admin@example.com", role="admin"
+        )
+        admin_response = await client.get("/admin/conversations", headers=admin_headers)
+    assert len(admin_response.json()) == 2
+
+
+async def test_conversation_messages_404_for_member_without_owning_lead(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    other = User(org_id=ORG_ID, phone="+910000000032")
+    db_session.add(other)
+    await db_session.flush()
+    member_headers, _ = await _member_and_id(client, db_session, "conv-m2@example.com")
+    conv = Conversation(org_id=ORG_ID, user_id=other.id, channel="whatsapp")
+    db_session.add(conv)
+    await db_session.flush()
+    db_session.add(
+        Message(
+            org_id=ORG_ID,
+            conversation_id=conv.id,
+            user_id=other.id,
+            role="user",
+            content="hi",
+            channel="whatsapp",
+        )
+    )
+    await db_session.commit()
+
+    with _require_session_auth(True):
+        response = await client.get(
+            f"/admin/conversations/{conv.id}/messages", headers=member_headers
+        )
+    assert response.status_code == 404
+
+
+async def test_appointments_member_scope_and_get_404(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    mine = User(org_id=ORG_ID, phone="+910000000040")
+    theirs = User(org_id=ORG_ID, phone="+910000000041")
+    db_session.add_all([mine, theirs])
+    await db_session.flush()
+    member_headers, member_id = await _member_and_id(client, db_session, "appt-m@example.com")
+
+    my_lead = Lead(org_id=ORG_ID, user_id=mine.id, claimed_by_account_user_id=member_id)
+    other_lead = Lead(org_id=ORG_ID, user_id=theirs.id)
+    db_session.add_all([my_lead, other_lead])
+    await db_session.flush()
+    mine_appt = Appointment(
+        org_id=ORG_ID, lead_id=my_lead.id, scheduled_at=datetime.now(UTC) + timedelta(days=1)
+    )
+    other_appt = Appointment(
+        org_id=ORG_ID, lead_id=other_lead.id, scheduled_at=datetime.now(UTC) + timedelta(days=2)
+    )
+    db_session.add_all([mine_appt, other_appt])
+    await db_session.commit()
+
+    with _require_session_auth(True):
+        listed = await client.get("/appointments", headers=member_headers)
+        assert [a["id"] for a in listed.json()] == [str(mine_appt.id)]
+
+        assert (
+            await client.get(f"/appointments/{other_appt.id}", headers=member_headers)
+        ).status_code == 404
+        assert (
+            await client.get(f"/appointments/{mine_appt.id}", headers=member_headers)
+        ).status_code == 200
+
+
+async def test_member_outbound_whatsapp_claims_lead(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A member's outbound WhatsApp claims a lead for that customer, so the
+    conversation the send opens lands in their scoped Conversations list
+    (that filtering itself is covered by
+    test_list_conversations_member_only_sees_own_lead_conversations)."""
+    await _seed_org(db_session)
+    member_headers, member_id = await _member_and_id(client, db_session, "ob-wa@example.com")
+
+    with _require_session_auth(True):
+        sent = await client.post(
+            "/admin/outbound/whatsapp",
+            json={"phone": "+919000000050", "text": "hi there"},
+            headers=member_headers,
+        )
+        assert sent.status_code == 200
+
+    lead = (
+        await db_session.execute(select(Lead).where(Lead.phone == "+919000000050"))
+    ).scalar_one()
+    assert lead.claimed_by_account_user_id == member_id
+    conv = (
+        await db_session.execute(select(Conversation).where(Conversation.user_id == lead.user_id))
+    ).scalar_one()
+    assert conv.channel == "whatsapp"
+
+
+async def test_member_outbound_call_claims_lead(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    member_headers, member_id = await _member_and_id(client, db_session, "ob-call@example.com")
+
+    with _require_session_auth(True):
+        called = await client.post(
+            "/admin/outbound/call",
+            json={"to_phone": "+919000000051"},
+            headers=member_headers,
+        )
+        assert called.status_code == 200
+
+    lead = (
+        await db_session.execute(select(Lead).where(Lead.phone == "+919000000051"))
+    ).scalar_one()
+    assert lead.claimed_by_account_user_id == member_id

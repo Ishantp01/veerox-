@@ -24,6 +24,11 @@ retry the booking once they answer, rather than telling them it's booked.
 If book_appointment ever comes back with reason "missing_phone", that's not something asking the
 caller can fix - it means their contact record itself is broken. Don't retry; apologize, tell
 them you're unable to book it right now, and call transfer_to_human instead.
+
+If the caller clearly declines the product/service or asks not to be contacted again ("not
+interested", "stop calling", "remove me", "don't message me"), call mark_not_interested with a
+short reason, then acknowledge politely and stop pitching. Don't use it for a "maybe later", an
+objection you're still working through, or a request for a human (that's transfer_to_human).
 """
 
 VOICE_APPEND = """

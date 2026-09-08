@@ -27,6 +27,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from sqlalchemy import String, case, cast, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from apps.api.channels.voice import failover as voice_failover
@@ -64,11 +65,13 @@ from apps.api.deps import (
     CurrentOrgDep,
     CurrentUserDep,
     DbDep,
+    MemberScopeDep,
     RedisDep,
     RequestAccountUserDep,
     RequestOrgDep,
     SessionPayloadDep,
     enforce_plan_limit,
+    owned_lead_user_ids,
     verify_admin_or_session,
 )
 from apps.api.rate_limit import limiter
@@ -498,6 +501,8 @@ async def export_reports_xlsx(
 async def list_conversations(
     db: DbDep,
     scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
     limit: int = Query(50, ge=1, le=200),
@@ -522,6 +527,9 @@ async def list_conversations(
     )
     if scope_org_id is not None:
         stmt = stmt.where(Conversation.org_id == scope_org_id)
+    member_scope = _member_lead_scope(scope_org_id, org, payload)
+    if member_scope is not None:
+        stmt = stmt.where(Conversation.user_id.in_(owned_lead_user_ids(member_scope)))
     if channel:
         stmt = stmt.where(Conversation.channel == channel)
     stmt = stmt.order_by(Conversation.started_at.desc()).limit(limit).offset(offset)
@@ -543,8 +551,14 @@ async def list_conversations(
 async def get_conversation_messages(
     conversation_id: UUID,
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> list[MessageOut]:
+    await _guard_conversation_access(
+        db, await db.get(Conversation, conversation_id), scope_org_id, org, payload
+    )
     stmt = (
         select(Message)
         .where(Message.conversation_id == conversation_id)
@@ -565,13 +579,16 @@ _SUMMARY_SYSTEM_PROMPT = (
 async def summarize_conversation(
     conversation_id: UUID,
     db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> ConversationOut:
     """Generate (or regenerate) an AI summary of a conversation's transcript,
     on demand — not automatic, since not every conversation needs one."""
-    conversation = await db.get(Conversation, conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+    conversation = await _guard_conversation_access(
+        db, await db.get(Conversation, conversation_id), scope_org_id, org, payload
+    )
 
     stmt = (
         select(Message)
@@ -660,6 +677,78 @@ def _member_lead_scope(
     if scope_org_id is not None and org.role == "member" and payload is not None:
         return UUID(payload["account_user_id"])
     return None
+
+
+async def _guard_conversation_access(
+    db: AsyncSession,
+    conversation: Conversation | None,
+    scope_org_id: UUID | None,
+    org: CurrentOrg,
+    payload: dict[str, str] | None,
+) -> Conversation:
+    """404 unless this caller may see ``conversation``. A ``role=="member"``
+    caller only sees a conversation whose customer (``Conversation.user_id``)
+    is behind a Lead they've claimed — same ownership rule as leads. Always
+    404 (never 403) so a member can't probe which conversation ids exist."""
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if scope_org_id is not None and conversation.org_id != scope_org_id:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    member_scope = _member_lead_scope(scope_org_id, org, payload)
+    if member_scope is not None:
+        owned = await db.execute(
+            owned_lead_user_ids(member_scope).where(Lead.user_id == conversation.user_id).limit(1)
+        )
+        if owned.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
+
+
+async def _claim_customer_lead_for_member(
+    db: AsyncSession,
+    org_id: UUID,
+    user: User,
+    member_scope: UUID | None,
+    *,
+    channel: str,
+) -> None:
+    """When a ``role=="member"`` places an outbound call/WhatsApp to ``user``,
+    ensure they own a Lead for that customer — otherwise the conversation the
+    channel pipeline creates afterwards wouldn't show in their scoped
+    Conversations list (see ``_guard_conversation_access`` /
+    ``owned_lead_user_ids``).
+
+    No-op for admins / platform superusers / ``X-Admin-Token`` (``member_scope``
+    is None). Claims the customer's most recent lead if it's unclaimed;
+    creates a minimal lead if they have none. A lead already claimed by
+    someone else is left alone — that customer is another rep's.
+    """
+    if member_scope is None:
+        return
+    existing = (
+        await db.execute(
+            select(Lead)
+            .where(Lead.org_id == org_id, Lead.user_id == user.id)
+            .order_by(Lead.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if existing.claimed_by_account_user_id is None:
+            existing.claimed_by_account_user_id = member_scope
+            existing.claimed_at = func.now()
+        return
+    db.add(
+        Lead(
+            org_id=org_id,
+            user_id=user.id,
+            phone=user.phone,
+            channel=channel,
+            intent="outreach",
+            claimed_by_account_user_id=member_scope,
+            claimed_at=func.now(),
+        )
+    )
 
 
 def _guard_campaign_access(
@@ -2588,6 +2677,7 @@ async def outbound_whatsapp(
     payload: OutboundWhatsappIn,
     db: DbDep,
     org: RequestOrgDep,
+    member_scope: MemberScopeDep,
     x_admin_token: str | None = Header(None),
 ) -> OutboundWhatsappOut:
     """Send an outbound WhatsApp message and persist the assistant turn.
@@ -2608,6 +2698,10 @@ async def outbound_whatsapp(
         user = User(org_id=org_id, phone=payload.phone)
         db.add(user)
         await db.flush()
+
+    # A member messaging this customer takes ownership of their lead so the
+    # conversation shows up in their scoped Conversations list.
+    await _claim_customer_lead_for_member(db, org_id, user, member_scope, channel="whatsapp")
 
     # Find an open WhatsApp conversation for this user, otherwise open a new one.
     conv_stmt = (
@@ -2723,6 +2817,7 @@ async def outbound_call(
     db: DbDep,
     org: RequestOrgDep,
     redis: RedisDep,
+    member_scope: MemberScopeDep,
     x_admin_token: str | None = Header(None),
 ) -> OutboundCallOut:
     """Place an outbound voice call via Plivo.
@@ -2739,6 +2834,14 @@ async def outbound_call(
     org_id = org
     usage = await get_credit_usage(db, org_id)
     await enforce_plan_limit(db, org_id, "max_call_minutes", usage.call_minutes)
+
+    # A member calling this customer takes ownership of their lead so the
+    # voice conversation (created later by the realtime bridge, keyed on the
+    # same org_id + phone) shows up in their scoped Conversations list.
+    if member_scope is not None:
+        customer = await _get_or_create_user_by_phone(db, org_id, payload.to_phone)
+        await _claim_customer_lead_for_member(db, org_id, customer, member_scope, channel="voice")
+        await db.commit()
 
     if not voice_failover.is_configured():
         logger.warning(

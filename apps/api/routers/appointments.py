@@ -5,7 +5,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.core.tools import (
@@ -18,7 +18,13 @@ from apps.api.core.tools import (
     send_appointment_confirmation,
 )
 from apps.api.db.models import Appointment, Contact, FollowUpTask, Lead
-from apps.api.deps import DbDep, RequestOrgDep, verify_admin_or_session
+from apps.api.deps import (
+    DbDep,
+    MemberScopeDep,
+    RequestOrgDep,
+    owned_lead_ids,
+    verify_admin_or_session,
+)
 from apps.api.schemas.appointment import (
     APPOINTMENT_STATUSES,
     AppointmentCreate,
@@ -41,6 +47,18 @@ def _appointment_out(appointment: Appointment, name: str | None, phone: str | No
     out.name = name
     out.phone = phone
     return out
+
+
+def _member_scope_clause(scope: UUID):
+    """Rows a ``role=="member"`` caller may see: an appointment whose Lead
+    they've claimed, or whose Contact they created (Contact is already
+    creator-siloed — see routers/crm.py)."""
+    return or_(
+        Appointment.lead_id.in_(owned_lead_ids(scope)),
+        Appointment.contact_id.in_(
+            select(Contact.id).where(Contact.created_by_account_user_id == scope)
+        ),
+    )
 
 
 async def _resolve_name_phone(
@@ -66,6 +84,7 @@ async def _resolve_name_phone(
 async def list_appointments(
     db: DbDep,
     org_id: RequestOrgDep,
+    member_scope: MemberScopeDep,
     status: str | None = Query(None, pattern=_STATUS_PATTERN),
     starts_after: datetime | None = Query(None),
     starts_before: datetime | None = Query(None),
@@ -92,6 +111,8 @@ async def list_appointments(
         .where(Appointment.org_id == org_id)
         .order_by(order_by)
     )
+    if member_scope is not None:
+        stmt = stmt.where(_member_scope_clause(member_scope))
     if status:
         stmt = stmt.where(Appointment.status == status)
     if starts_after:
@@ -105,7 +126,10 @@ async def list_appointments(
 
 @router.post("", response_model=AppointmentOut, status_code=201)
 async def create_appointment(
-    payload: AppointmentCreate, db: DbDep, org_id: RequestOrgDep
+    payload: AppointmentCreate,
+    db: DbDep,
+    org_id: RequestOrgDep,
+    member_scope: MemberScopeDep,
 ) -> AppointmentOut:
     conflict = await find_conflicting_appointment(db, org_id, payload.scheduled_at)
     if conflict is not None:
@@ -126,6 +150,12 @@ async def create_appointment(
         lead = await db.get(Lead, lead_id)
         if lead is None or lead.org_id != org_id:
             raise HTTPException(status_code=404, detail="Lead not found")
+        # A member booking against a lead nobody has claimed self-claims it,
+        # so the appointment they just made stays visible to them (same
+        # first-claim-wins semantics as admin.py's escalation claim).
+        if member_scope is not None and lead.claimed_by_account_user_id is None:
+            lead.claimed_by_account_user_id = member_scope
+            lead.claimed_at = func.now()
         notify_phone = lead.phone
         notify_name = lead.name
     elif payload.contact_id is not None:
@@ -143,6 +173,8 @@ async def create_appointment(
             phone=_normalize_phone(contact.phone),
             intent="booking",
             channel="dashboard",
+            claimed_by_account_user_id=member_scope,
+            claimed_at=func.now() if member_scope is not None else None,
         )
         db.add(new_lead)
         await db.flush()  # populate new_lead.id for the Appointment FK below
@@ -182,11 +214,13 @@ async def create_appointment(
 
 @router.get("/{appointment_id}", response_model=AppointmentOut)
 async def get_appointment(
-    appointment_id: UUID, db: DbDep, org_id: RequestOrgDep
+    appointment_id: UUID, db: DbDep, org_id: RequestOrgDep, member_scope: MemberScopeDep
 ) -> AppointmentOut:
     stmt = select(Appointment).where(
         Appointment.id == appointment_id, Appointment.org_id == org_id
     )
+    if member_scope is not None:
+        stmt = stmt.where(_member_scope_clause(member_scope))
     appointment = (await db.execute(stmt)).scalar_one_or_none()
     if appointment is None:
         raise HTTPException(status_code=404, detail="Appointment not found")
@@ -196,11 +230,17 @@ async def get_appointment(
 
 @router.patch("/{appointment_id}", response_model=AppointmentOut)
 async def update_appointment(
-    appointment_id: UUID, payload: AppointmentUpdateIn, db: DbDep, org_id: RequestOrgDep
+    appointment_id: UUID,
+    payload: AppointmentUpdateIn,
+    db: DbDep,
+    org_id: RequestOrgDep,
+    member_scope: MemberScopeDep,
 ) -> AppointmentOut:
     stmt = select(Appointment).where(
         Appointment.id == appointment_id, Appointment.org_id == org_id
     )
+    if member_scope is not None:
+        stmt = stmt.where(_member_scope_clause(member_scope))
     appointment = (await db.execute(stmt)).scalar_one_or_none()
     if appointment is None:
         raise HTTPException(status_code=404, detail="Appointment not found")

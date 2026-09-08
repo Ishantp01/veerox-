@@ -20,6 +20,7 @@ from apps.api.core.tools import (
     capture_lead,
     initiate_ai_call,
     lookup_customer,
+    mark_not_interested,
     qualify_lead,
     transfer_to_human,
 )
@@ -972,3 +973,68 @@ async def test_lookup_customer_returns_user_when_present(
     assert result["found"] is True
     assert result["name"] == "Existing"
     assert result["phone"] == "+919876543210"
+
+
+async def test_mark_not_interested_sets_lead_lost_and_cancels_followups(
+    db_session: AsyncSession, fake_redis: _FakeRedis
+) -> None:
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000200")
+    db_session.add(user)
+    await db_session.flush()
+    lead = Lead(org_id=ORG_ID, user_id=user.id, phone="+910000000200", intent="outreach")
+    db_session.add(lead)
+    await db_session.flush()
+    task = FollowUpTask(
+        org_id=ORG_ID,
+        lead_id=lead.id,
+        rule_id=None,
+        run_at=datetime.now(UTC) + timedelta(days=1),
+        status="pending",
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    result = await mark_not_interested(
+        db_session, reason="said not interested", user_id=user.id, org_id=ORG_ID
+    )
+    assert result["status"] == "ok"
+
+    await db_session.refresh(lead)
+    await db_session.refresh(task)
+    assert lead.status == "lost"
+    assert lead.metadata_["not_interested_reason"] == "said not interested"
+    assert task.status == "cancelled"
+
+
+async def test_mark_not_interested_noop_without_lead(
+    db_session: AsyncSession, fake_redis: _FakeRedis
+) -> None:
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000201")
+    db_session.add(user)
+    await db_session.commit()
+
+    result = await mark_not_interested(
+        db_session, reason="x", user_id=user.id, org_id=ORG_ID
+    )
+    assert result == {"status": "noop", "reason": "no_lead"}
+
+
+async def test_mark_not_interested_leaves_converted_lead(
+    db_session: AsyncSession, fake_redis: _FakeRedis
+) -> None:
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000202")
+    db_session.add(user)
+    await db_session.flush()
+    lead = Lead(
+        org_id=ORG_ID, user_id=user.id, phone="+910000000202", intent="outreach", status="converted"
+    )
+    db_session.add(lead)
+    await db_session.commit()
+
+    result = await mark_not_interested(db_session, reason="x", user_id=user.id, org_id=ORG_ID)
+    assert result["status"] == "noop"
+    await db_session.refresh(lead)
+    assert lead.status == "converted"

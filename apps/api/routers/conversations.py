@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
 from apps.api.db.models import Conversation, Message
-from apps.api.deps import DbDep, verify_admin_or_session
+from apps.api.deps import DbDep, MemberScopeDep, owned_lead_user_ids, verify_admin_or_session
 from apps.api.schemas.conversation import ConversationOut, MessageOut
 
 router = APIRouter(
@@ -18,9 +18,14 @@ router = APIRouter(
 async def list_conversations(
     user_id: UUID,
     db: DbDep,
+    member_scope: MemberScopeDep,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> list[Conversation]:
+    if member_scope is not None and user_id not in {
+        row for row in (await db.execute(owned_lead_user_ids(member_scope))).scalars()
+    }:
+        return []
     result = await db.execute(
         select(Conversation)
         .where(Conversation.user_id == user_id)
@@ -36,9 +41,14 @@ async def get_transcript(
     user_id: UUID,
     conversation_id: UUID,
     db: DbDep,
+    member_scope: MemberScopeDep,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> list[Message]:
+    if member_scope is not None and user_id not in {
+        row for row in (await db.execute(owned_lead_user_ids(member_scope))).scalars()
+    }:
+        return []
     result = await db.execute(
         select(Message)
         .where(Message.conversation_id == conversation_id, Message.user_id == user_id)

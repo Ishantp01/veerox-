@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.voice import failover as voice_failover
@@ -170,6 +170,31 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["interested", "reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_not_interested",
+            "description": (
+                "Mark this customer as not interested so their lead is closed as lost. "
+                "Call this when the customer clearly declines the product/service or asks "
+                "not to be contacted again ('not interested', 'stop calling/messaging', "
+                "'remove me', 'don't contact me'). Do NOT call it for a soft 'maybe "
+                "later', a pricing objection you're still handling, or someone who just "
+                "wants a human — use transfer_to_human for that. After calling it, "
+                "acknowledge politely and don't keep pitching."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief note on why they declined, in their own words if given.",
+                    },
+                },
+                "required": ["reason"],
             },
         },
     },
@@ -941,6 +966,58 @@ async def qualify_lead(
     return {"status": "ok", "interested": interested, "lead_id": lead_id}
 
 
+async def mark_not_interested(
+    db: AsyncSession,
+    reason: str,
+    user_id: UUID | None = None,
+    org_id: UUID | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Close the current customer's lead as lost when they clearly decline.
+
+    Acts on that customer's most recent ``Lead`` for this org (the row the
+    member's outbound call/message created — see
+    ``admin._claim_customer_lead_for_member``). Sets ``status="lost"``,
+    records the reason on ``metadata_``, and cancels any pending follow-up
+    tasks so the customer isn't chased further. Leaves a ``converted`` lead
+    untouched — a won deal isn't undone by a later "not interested".
+
+    ``user_id``/``org_id`` are agent-layer context (the LLM args carry only
+    ``reason``); a no-op when there's no user context or no lead yet.
+    """
+    org_id = org_id or _default_org_id()
+    if user_id is None:
+        return {"status": "error", "reason": "no_user_context"}
+
+    lead = (
+        await db.execute(
+            select(Lead)
+            .where(Lead.org_id == org_id, Lead.user_id == user_id)
+            .order_by(Lead.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if lead is None:
+        return {"status": "noop", "reason": "no_lead"}
+    if lead.status == "converted":
+        return {"status": "noop", "reason": "lead_converted", "lead_id": str(lead.id)}
+
+    lead.status = "lost"
+    meta = dict(lead.metadata_ or {})
+    meta["not_interested_reason"] = reason
+    lead.metadata_ = meta
+
+    await db.execute(
+        update(FollowUpTask)
+        .where(FollowUpTask.lead_id == lead.id, FollowUpTask.status == "pending")
+        .values(status="cancelled")
+    )
+    await db.commit()
+
+    logger.info("mark_not_interested_recorded", lead_id=str(lead.id), org_id=str(org_id))
+    return {"status": "ok", "lead_id": str(lead.id)}
+
+
 async def lookup_customer(
     db: AsyncSession,
     phone: str,
@@ -1357,6 +1434,7 @@ DISPATCH_TABLE: dict[str, ToolHandler] = {
     "book_appointment": book_appointment,
     "transfer_to_human": transfer_to_human,
     "qualify_lead": qualify_lead,
+    "mark_not_interested": mark_not_interested,
     "lookup_customer": lookup_customer,
     "send_whatsapp_message": send_whatsapp_message,
     "send_whatsapp_file": send_whatsapp_file,

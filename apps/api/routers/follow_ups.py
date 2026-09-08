@@ -7,7 +7,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from apps.api.db.models import FollowUpRule, FollowUpTask
-from apps.api.deps import DbDep, RequestOrgDep, enforce_plan_feature, verify_admin_or_session
+from apps.api.deps import (
+    DbDep,
+    MemberScopeDep,
+    RequestOrgDep,
+    enforce_plan_feature,
+    owned_lead_ids,
+    verify_admin_or_session,
+)
 from apps.api.schemas.follow_up import (
     FollowUpRuleCreate,
     FollowUpRuleOut,
@@ -119,6 +126,7 @@ async def delete_follow_up_rule(rule_id: UUID, db: DbDep, org: RequestOrgDep) ->
 async def list_follow_up_tasks(
     db: DbDep,
     org: RequestOrgDep,
+    member_scope: MemberScopeDep,
     status: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -129,6 +137,8 @@ async def list_follow_up_tasks(
         .where(FollowUpTask.org_id == org)
         .order_by(FollowUpTask.run_at.desc())
     )
+    if member_scope is not None:
+        stmt = stmt.where(FollowUpTask.lead_id.in_(owned_lead_ids(member_scope)))
     if status:
         stmt = stmt.where(FollowUpTask.status == status)
     stmt = stmt.limit(limit).offset(offset)
@@ -137,11 +147,17 @@ async def list_follow_up_tasks(
 
 
 @router.post("/follow-up-tasks/{task_id}/cancel", response_model=FollowUpTaskOut)
-async def cancel_follow_up_task(task_id: UUID, db: DbDep, org: RequestOrgDep) -> FollowUpTask:
+async def cancel_follow_up_task(
+    task_id: UUID, db: DbDep, org: RequestOrgDep, member_scope: MemberScopeDep
+) -> FollowUpTask:
     await enforce_plan_feature(db, org, "automated_followups")
     task = await db.get(FollowUpTask, task_id)
     if task is None or task.org_id != org:
         raise HTTPException(status_code=404, detail="Follow-up task not found")
+    if member_scope is not None:
+        owned = await db.execute(owned_lead_ids(member_scope))
+        if task.lead_id is None or task.lead_id not in set(owned.scalars()):
+            raise HTTPException(status_code=404, detail="Follow-up task not found")
     if task.status == "pending":
         task.status = "cancelled"
         await db.commit()

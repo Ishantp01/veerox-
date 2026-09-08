@@ -393,6 +393,68 @@ async def resolve_request_account_user_id(
 RequestAccountUserDep = Annotated[UUID, Depends(resolve_request_account_user_id)]
 
 
+async def resolve_member_scope_account_user_id(
+    db: DbDep,
+    payload: SessionPayloadDep,
+    x_admin_token: str | None = Header(None),
+) -> UUID | None:
+    """Which account_user a caller's view of per-member data is restricted to.
+
+    Returns None — "see everything in the org" — for the shared
+    `X-Admin-Token`, a platform superuser, or a `role=="admin"` org
+    membership. Returns the caller's own account_user id for a
+    `role=="member"` session, who should only see appointments/conversations/
+    follow-ups tied to a `Lead` they've claimed
+    (`Lead.claimed_by_account_user_id`).
+
+    The routers-level equivalent of `admin.py::_member_lead_scope`, usable
+    from routers that only depend on `verify_admin_or_session` +
+    `RequestOrgDep` (appointments.py, conversations.py, follow_ups.py) rather
+    than the analytics-scope dependency stack `admin.py` uses.
+    """
+    if x_admin_token is not None and x_admin_token == settings.admin_token:
+        return None
+    if payload is None:
+        return None
+
+    account_user_id = UUID(payload["account_user_id"])
+    result = await db.execute(select(AccountUser).where(AccountUser.id == account_user_id))
+    account_user = result.scalar_one_or_none()
+    if account_user is not None and account_user.is_active and account_user.is_superuser:
+        return None
+
+    membership = await db.execute(
+        select(OrgMembership).where(
+            OrgMembership.account_user_id == account_user_id,
+            OrgMembership.org_id == UUID(payload["org_id"]),
+        )
+    )
+    row = membership.scalar_one_or_none()
+    if row is None or row.role == "admin":
+        return None
+    return account_user_id
+
+
+MemberScopeDep = Annotated[UUID | None, Depends(resolve_member_scope_account_user_id)]
+
+
+def owned_lead_ids(scope_account_user_id: UUID):
+    """Subquery of `leads.id` claimed by `scope_account_user_id` — the set of
+    leads a `role=="member"` caller owns. Pair with `Appointment.lead_id.in_(...)`
+    / `FollowUpTask.lead_id.in_(...)`."""
+    from apps.api.db.models.lead import Lead
+
+    return select(Lead.id).where(Lead.claimed_by_account_user_id == scope_account_user_id)
+
+
+def owned_lead_user_ids(scope_account_user_id: UUID):
+    """Subquery of customer `users.id` behind the leads a member owns. Pair
+    with `Conversation.user_id.in_(...)`."""
+    from apps.api.db.models.lead import Lead
+
+    return select(Lead.user_id).where(Lead.claimed_by_account_user_id == scope_account_user_id)
+
+
 async def resolve_analytics_scope_org_id(
     db: DbDep,
     payload: SessionPayloadDep,

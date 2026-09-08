@@ -12,6 +12,7 @@ import { NewAppointmentDialog } from "@/components/crm/new-appointment-dialog";
 import { EmptyState, Pagination, Select, SkeletonRows, Table, TableCell, TableHeader, TableRow } from "@/components/ui";
 import { useAppointments, useClientPagination, useUpdateAppointment, type AppointmentSort } from "@/lib/hooks";
 import { formatDateTime } from "@/lib/format";
+import { useAuth } from "@/lib/auth-context";
 import type { AppointmentStatus } from "@/lib/types";
 
 const SELECT_CLS =
@@ -26,6 +27,8 @@ export default function AppointmentsPage() {
     sort,
   });
   const updateAppointment = useUpdateAppointment();
+  const { user } = useAuth();
+  const scopedToMember = user?.role === "member" && !user?.is_superuser;
   const appointments = data ?? [];
   const pager = useClientPagination(appointments, 20, `${filter}|${sort}`);
 
@@ -33,7 +36,11 @@ export default function AppointmentsPage() {
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="Appointments"
-        description="Bookings scheduled from calls, WhatsApp, or manually."
+        description={
+          scopedToMember
+            ? "Bookings for leads assigned to you, from calls, WhatsApp, or manually."
+            : "Bookings scheduled from calls, WhatsApp, or manually."
+        }
         action={
           <div className="flex flex-wrap items-center gap-3">
             <Select

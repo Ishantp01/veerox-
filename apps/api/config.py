@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     # module's cp1252 encode fallback on every line). Opt-in only, never
     # tied to `environment` again.
     db_echo: bool = False
+    startup_seed_required: bool = False
     test_database_url: str = "sqlite+aiosqlite:///:memory:"
 
     # OpenAI
