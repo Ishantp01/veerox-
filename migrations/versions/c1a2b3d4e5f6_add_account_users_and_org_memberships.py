@@ -74,6 +74,17 @@ def upgrade() -> None:
     # before first login; this only seeds the account + membership rows.
     op.execute(
         """
+        INSERT INTO orgs (id, name, created_at)
+        VALUES (
+            '00000000-0000-0000-0000-000000000001',
+            'Demo Org',
+            now()
+        )
+        ON CONFLICT (id) DO NOTHING
+        """
+    )
+    op.execute(
+        """
         INSERT INTO account_users (id, email, password_hash, full_name, is_active, is_superuser, created_at)
         VALUES (
             '00000000-0000-0000-0000-0000000000a1',
