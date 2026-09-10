@@ -762,11 +762,12 @@ async def transfer_to_human(
     and the WhatsApp notification. If that person has no mobile on file the
     Lead is still assigned to them, just without the WhatsApp ping.
 
-    Sends ``agent_connect_request`` (caller's number + reason) once that
-    template is Meta-approved (``_AGENT_CONNECT_TEMPLATE_APPROVED``);
-    until then, falls back to the already-approved
-    ``appointment_confirmation`` template reused with escalation-shaped
-    params, same as before that template existed.
+    Sends the org's chosen handoff template (``Org.agent_connect_template_name``,
+    set on the WhatsApp settings page) with caller's number + reason. When
+    unset, sends ``agent_connect_request`` once that template is
+    Meta-approved (``_AGENT_CONNECT_TEMPLATE_APPROVED``); until then, falls
+    back to the already-approved ``appointment_confirmation`` template
+    reused with escalation-shaped params, same as before that template existed.
 
     The ``Lead`` row is only written when the agent layer supplies a
     ``user_id`` (the LLM args don't carry one). When absent, the Redis
@@ -818,8 +819,16 @@ async def transfer_to_human(
         turn = await redis.incr(f"{_TRANSFER_ROUND_ROBIN_PREFIX}{org_id}")
         notify_account_user_id, notify_phone = notify_targets[(turn - 1) % len(notify_targets)]
 
+    org = await db.get(Org, org_id)
     if notify_account_user_id is not None and notify_phone:
-        if _AGENT_CONNECT_TEMPLATE_APPROVED:
+        # An org-chosen template (WhatsApp settings page) wins over the
+        # built-ins — it's expected to take the same two params as
+        # agent_connect_request: {{1}} caller number, {{2}} reason.
+        chosen = org.agent_connect_template_name if org else None
+        if chosen:
+            template_name = chosen
+            body_params = [phone or "not provided", reason or _NO_REASON_GIVEN]
+        elif _AGENT_CONNECT_TEMPLATE_APPROVED:
             template_name = _AGENT_CONNECT_TEMPLATE_NAME
             body_params = [phone or "not provided", reason or _NO_REASON_GIVEN]
         else:
@@ -830,7 +839,6 @@ async def transfer_to_human(
                 phone or "not provided",
             ]
 
-        org = await db.get(Org, org_id)
         phone_number_id = org.whatsapp_phone_number_id if org else None
         try:
             await wa_client.send_template(

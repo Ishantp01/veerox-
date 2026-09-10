@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Bot, ChevronRight, Phone } from "lucide-react";
+import { Bot, ChevronRight, Phone, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -16,7 +16,15 @@ import {
   Textarea,
   useToast,
 } from "@/components/ui";
-import { useCallingSettings, useScript, useUpdateCallingSettings, useUpdateScript } from "@/lib/hooks";
+import {
+  useCallingSettings,
+  useScript,
+  useTemplates,
+  useUpdateCallingSettings,
+  useUpdateScript,
+  useUpdateWhatsAppSettings,
+  useWhatsAppSettings,
+} from "@/lib/hooks";
 import { ScriptLibrary } from "./script-library";
 
 interface CollapsibleSectionProps {
@@ -212,6 +220,87 @@ function ProviderPreference() {
   );
 }
 
+/**
+ * Picks which approved WhatsApp template the human-handoff notification
+ * sends (apps/api/core/tools.py::transfer_to_human). Only templates with
+ * exactly two body variables are offered — {{1}} is filled with the
+ * caller's number, {{2}} with the escalation reason. Empty = built-in default.
+ */
+function HandoffTemplatePreference() {
+  const whatsapp = useWhatsAppSettings();
+  const templates = useTemplates({ active: true });
+  const updateSettings = useUpdateWhatsAppSettings();
+  const { toast } = useToast();
+
+  const current = whatsapp.data?.agent_connect_template_name ?? "";
+  const twoVarTemplates = (templates.data ?? []).filter((t) => t.param_labels.length === 2);
+  // Keep a currently-saved template visible even if it no longer fits the
+  // two-variable filter (renamed, param labels edited, deactivated).
+  const options = twoVarTemplates.some((t) => t.name === current)
+    ? twoVarTemplates
+    : current
+      ? [...twoVarTemplates, { name: current, language: "" }]
+      : twoVarTemplates;
+
+  return (
+    <QueryBoundary
+      isLoading={whatsapp.isLoading}
+      isError={whatsapp.isError}
+      error={whatsapp.error}
+      onRetry={() => whatsapp.refetch()}
+      loadingFallback={<Skeleton className="h-20 w-full rounded-xl" />}
+    >
+      {whatsapp.data && (
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            When the AI hands a conversation to a human, the assigned teammate gets a
+            WhatsApp ping. Pick which approved template it uses. The template must have
+            exactly two variables: <code className="text-xs">{"{{1}}"}</code> the caller&apos;s
+            number, <code className="text-xs">{"{{2}}"}</code> the reason. Leave on default to
+            use the built-in template.
+          </p>
+          <div className="max-w-md">
+            <Label htmlFor="handoff-template">Handoff notification template</Label>
+            <Select
+              id="handoff-template"
+              value={current}
+              disabled={updateSettings.isPending || templates.isLoading}
+              onChange={(value) => {
+                updateSettings.mutate(
+                  { agent_connect_template_name: value || null },
+                  {
+                    onSuccess: () =>
+                      toast({ title: "Handoff template saved", variant: "success" }),
+                    onError: (err) =>
+                      toast({
+                        title: "Could not save template",
+                        description: err.message,
+                        variant: "error",
+                      }),
+                  }
+                );
+              }}
+            >
+              <option value="">Default (built-in template)</option>
+              {options.map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name}
+                  {t.language ? ` (${t.language})` : ""}
+                </option>
+              ))}
+            </Select>
+            {!templates.isLoading && twoVarTemplates.length === 0 && (
+              <p className="mt-1 text-xs text-slate-400">
+                No approved two-variable templates yet — add one on the Templates page.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </QueryBoundary>
+  );
+}
+
 export interface SettingsViewProps {
   title: string;
   description: string;
@@ -242,6 +331,15 @@ export function SettingsView({ title, description, channel }: SettingsViewProps)
         >
           {channel === "calling" ? <ScriptLibrary /> : <ScriptEditor />}
         </CollapsibleSection>
+
+        {channel === "whatsapp" && (
+          <CollapsibleSection
+            title="Human Handoff"
+            icon={<Users size={15} aria-hidden className="text-slate-400" />}
+          >
+            <HandoffTemplatePreference />
+          </CollapsibleSection>
+        )}
 
         {channel === "calling" && (
           <CollapsibleSection

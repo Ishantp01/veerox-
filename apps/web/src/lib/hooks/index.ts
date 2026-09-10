@@ -28,7 +28,12 @@ export {
 } from "./useLeads";
 export { useEscalations, useClaimEscalation, type EscalationFilters } from "./useEscalations";
 export { useKillSwitch, useSetKillSwitch } from "./useKillSwitch";
-export { useWhatsAppSettings, useCallingSettings, useUpdateCallingSettings } from "./useConfig";
+export {
+  useWhatsAppSettings,
+  useUpdateWhatsAppSettings,
+  useCallingSettings,
+  useUpdateCallingSettings,
+} from "./useConfig";
 export { useScript, useUpdateScript } from "./useScript";
 export {
   useScripts,

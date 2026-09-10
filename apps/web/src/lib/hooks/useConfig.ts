@@ -2,7 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
-import type { CallingSettings, CallingSettingsInput, WhatsAppSettings } from "@/lib/types";
+import type {
+  CallingSettings,
+  CallingSettingsInput,
+  WhatsAppSettings,
+  WhatsAppSettingsInput,
+} from "@/lib/types";
 
 /**
  * Read-only WhatsApp/Meta channel config status (masked secrets). Static
@@ -14,6 +19,27 @@ export function useWhatsAppSettings() {
   return useQuery<WhatsAppSettings>({
     queryKey: queryKeys.whatsappSettings(),
     queryFn: () => apiFetch<WhatsAppSettings>("/admin/settings/whatsapp"),
+  });
+}
+
+/**
+ * Set (or, with `agent_connect_template_name: null`, clear back to the
+ * built-in default) which approved template the human-handoff notification
+ * sends — see apps/api/core/tools.py::transfer_to_human.
+ *
+ * PUT /admin/settings/whatsapp → WhatsAppSettings
+ */
+export function useUpdateWhatsAppSettings() {
+  const queryClient = useQueryClient();
+  return useMutation<WhatsAppSettings, Error, WhatsAppSettingsInput>({
+    mutationFn: (body) =>
+      apiFetch<WhatsAppSettings>("/admin/settings/whatsapp", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKeys.whatsappSettings(), data);
+    },
   });
 }
 

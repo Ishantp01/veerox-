@@ -90,6 +90,7 @@ from apps.api.schemas.admin import (
     PromptsOut,
     ScriptIn,
     ScriptOut,
+    WhatsAppSettingsIn,
     WhatsAppSettingsOut,
 )
 from apps.api.schemas.org_numbers import OrgPhoneNumberOut
@@ -2147,16 +2148,11 @@ async def get_settings(
     }
 
 
-@router.get("/settings/whatsapp", response_model=WhatsAppSettingsOut)
-async def get_whatsapp_settings(
-    x_admin_token: str | None = Header(None),
-) -> WhatsAppSettingsOut:
-    """Read-only status of the WhatsApp/Meta channel config for the
-    /whatsapp/settings page. View-only: these are Render env vars
-    (apps/api/config.py), not DB rows — a persisted override would create a
-    second source of truth that can silently diverge from them (see the
-    OPENAI_CHAT_MODEL incident in project notes).
-    """
+def _whatsapp_settings_out(org_record: Org | None) -> WhatsAppSettingsOut:
+    """Meta channel status (view-only env vars — a persisted override would
+    create a second source of truth that can silently diverge from them, see
+    the OPENAI_CHAT_MODEL incident in project notes), plus the one editable
+    DB-backed field: the org's handoff-notification template choice."""
     return WhatsAppSettingsOut(
         configured=bool(settings.meta_access_token and settings.meta_phone_number_id),
         app_id_configured=bool(settings.meta_app_id),
@@ -2167,7 +2163,39 @@ async def get_whatsapp_settings(
         whatsapp_business_account_id=settings.meta_whatsapp_business_account_id,
         graph_api_version=settings.meta_graph_api_version,
         webhook_url=f"{settings.public_base_url.rstrip('/')}/webhook/whatsapp",
+        agent_connect_template_name=(
+            org_record.agent_connect_template_name if org_record else None
+        ),
     )
+
+
+@router.get("/settings/whatsapp", response_model=WhatsAppSettingsOut)
+async def get_whatsapp_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> WhatsAppSettingsOut:
+    """WhatsApp/Meta channel config status for the /whatsapp/settings page."""
+    return _whatsapp_settings_out(await db.get(Org, org))
+
+
+@router.put("/settings/whatsapp", response_model=WhatsAppSettingsOut)
+async def update_whatsapp_settings(
+    body: WhatsAppSettingsIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> WhatsAppSettingsOut:
+    """Set (or, with null, clear back to the built-in default) which approved
+    template the human-handoff notification sends — see
+    core/tools.py::transfer_to_human."""
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    name = (body.agent_connect_template_name or "").strip()
+    record.agent_connect_template_name = name or None
+    await db.commit()
+    return _whatsapp_settings_out(record)
 
 
 @router.get("/settings/calling", response_model=CallingSettingsOut)

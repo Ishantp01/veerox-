@@ -364,6 +364,14 @@ export interface WhatsAppSettings {
   whatsapp_business_account_id: string | null;
   graph_api_version: string;
   webhook_url: string;
+  // Chosen template for the human-handoff notification. null = built-in
+  // default. The one editable field here (PUT /admin/settings/whatsapp).
+  agent_connect_template_name: string | null;
+}
+
+// PUT /admin/settings/whatsapp
+export interface WhatsAppSettingsInput {
+  agent_connect_template_name: string | null;
 }
 
 // GET /admin/settings/calling — Plivo channel config status, plus the

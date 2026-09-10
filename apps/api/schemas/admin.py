@@ -131,6 +131,22 @@ class WhatsAppSettingsOut(BaseModel):
     whatsapp_business_account_id: str | None
     graph_api_version: str
     webhook_url: str
+    # Org's chosen template for the human-handoff notification
+    # (core/tools.py::transfer_to_human). None = built-in default. Editable
+    # via PUT /admin/settings/whatsapp.
+    agent_connect_template_name: str | None = None
+
+
+class WhatsAppSettingsIn(BaseModel):
+    agent_connect_template_name: str | None = Field(
+        None,
+        description=(
+            "Approved WhatsApp template name to use for the human-handoff "
+            "notification. Must have exactly two body variables: {{1}} the "
+            "caller's number, {{2}} the escalation reason. Omit/null to use "
+            "the built-in default."
+        ),
+    )
 
 
 class CallingSettingsOut(BaseModel):

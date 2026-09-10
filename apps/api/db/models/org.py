@@ -90,3 +90,10 @@ class Org(Base):
     # dispatcher) via `initiate_call`'s `preferred_provider` kwarg — see
     # routers/admin.py's PUT /admin/settings/calling.
     preferred_voice_provider: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Which approved WhatsApp template the human-handoff notification sends
+    # (core/tools.py::transfer_to_human), chosen on the /whatsapp/settings
+    # page. The template must have exactly two body variables: {{1}} the
+    # caller's number, {{2}} the escalation reason. NULL = built-in default
+    # (the hardcoded `agent_connect_request` once Meta-approved, otherwise
+    # the `appointment_confirmation` fallback). Set via PUT /admin/settings/whatsapp.
+    agent_connect_template_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
