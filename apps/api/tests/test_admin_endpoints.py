@@ -1262,6 +1262,31 @@ async def test_whatsapp_settings_reports_configured_when_creds_set(
     assert body["phone_number_id"] == "1555000"
 
 
+async def test_update_whatsapp_settings_sets_and_clears_handoff_template(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    db_session.add(Org(id=uuid.UUID(settings.default_org_id), name="Org"))
+    await db_session.commit()
+
+    set_resp = await client.put(
+        "/admin/settings/whatsapp",
+        json={"agent_connect_template_name": "  team_handoff  "},
+        headers=ADMIN_HEADERS,
+    )
+    assert set_resp.status_code == 200
+    assert set_resp.json()["agent_connect_template_name"] == "team_handoff"
+
+    get_resp = await client.get("/admin/settings/whatsapp", headers=ADMIN_HEADERS)
+    assert get_resp.json()["agent_connect_template_name"] == "team_handoff"
+
+    clear_resp = await client.put(
+        "/admin/settings/whatsapp",
+        json={"agent_connect_template_name": None},
+        headers=ADMIN_HEADERS,
+    )
+    assert clear_resp.json()["agent_connect_template_name"] is None
+
+
 async def test_update_org_numbers_sets_both_providers_independently(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

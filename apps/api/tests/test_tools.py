@@ -559,6 +559,84 @@ async def test_transfer_to_human_notifies_org_owner_via_whatsapp(
     ]
 
 
+async def test_transfer_to_human_uses_org_chosen_handoff_template(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Org.agent_connect_template_name overrides the built-in fallback and
+    is sent with [caller number, reason] body params."""
+    sent: list[dict[str, object]] = []
+
+    async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
+        sent.append({"to": to, "template_name": template_name, **kwargs})
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
+    await _seed_org(db_session)
+    org = await db_session.get(Org, ORG_ID)
+    assert org is not None
+    org.agent_connect_template_name = "team_handoff"
+
+    owner = AccountUser(email="owner@example.com", token_hash="x", mobile="+919999999999")
+    db_session.add(owner)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+    lead_user = User(org_id=ORG_ID, phone="+910000000099", name="Asha")
+    db_session.add(lead_user)
+    await db_session.commit()
+
+    await transfer_to_human(
+        db_session, reason="wants pricing details", user_id=lead_user.id, channel="whatsapp"
+    )
+
+    assert len(sent) == 1
+    assert sent[0]["template_name"] == "team_handoff"
+    assert sent[0]["body_params"] == ["+910000000099", "wants pricing details"]
+
+
+async def test_transfer_to_human_sizes_body_params_to_chosen_template(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chosen handoff template with more (or fewer) than two variables is
+    sent with a param list sized to its own placeholder count — extras
+    padded with the reason — so Meta doesn't reject the send."""
+    from apps.api.db.models import WhatsAppTemplate
+
+    sent: list[dict[str, object]] = []
+
+    async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
+        sent.append({"to": to, "template_name": template_name, **kwargs})
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
+    await _seed_org(db_session)
+    org = await db_session.get(Org, ORG_ID)
+    assert org is not None
+    org.agent_connect_template_name = "appointment_confirmation"
+    db_session.add(
+        WhatsAppTemplate(
+            org_id=ORG_ID,
+            name="appointment_confirmation",
+            language="en_US",
+            param_labels=["Param 1", "Param 2", "Param 3"],
+            active=True,
+        )
+    )
+
+    owner = AccountUser(email="owner@example.com", token_hash="x", mobile="+919999999999")
+    db_session.add(owner)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+    lead_user = User(org_id=ORG_ID, phone="+910000000099", name="Asha")
+    db_session.add(lead_user)
+    await db_session.commit()
+
+    await transfer_to_human(
+        db_session, reason="wants a callback", user_id=lead_user.id, channel="whatsapp"
+    )
+
+    assert len(sent) == 1
+    assert sent[0]["template_name"] == "appointment_confirmation"
+    assert sent[0]["body_params"] == ["+910000000099", "wants a callback", "wants a callback"]
+
+
 async def test_transfer_to_human_auto_assigns_lead_to_notified_teammate(
     db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -41,6 +41,7 @@ from apps.api.db.models.follow_up import FollowUpTask
 from apps.api.db.models.lead import Lead
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
+from apps.api.db.models.template import WhatsAppTemplate
 from apps.api.db.models.user import User
 from apps.api.redis_client import get_redis_pool
 
@@ -696,6 +697,29 @@ _AGENT_CONNECT_TEMPLATE_APPROVED = False
 _NO_REASON_GIVEN = "Not specified"
 
 
+async def _handoff_body_params(
+    db: AsyncSession, template_name: str, *, phone: str | None, reason: str | None
+) -> list[str]:
+    """Body params for whichever handoff template the org picked on the
+    WhatsApp settings page, sized to that template's own ``{{n}}`` count.
+
+    A handoff only ever really carries two facts — the caller's number and
+    the reason — so ``{{1}}``/``{{2}}`` get those. A template with only one
+    variable gets just the number; a zero-variable one gets nothing; a
+    template with three or more has the extra slots padded with the reason
+    so the Meta send doesn't fail on a param-count mismatch. Defaults to two
+    params if the chosen template has no local row (shouldn't happen — the
+    dropdown only lists synced templates).
+    """
+    row = (
+        await db.execute(select(WhatsAppTemplate).where(WhatsAppTemplate.name == template_name))
+    ).scalars().first()
+    count = len(row.param_labels) if row and row.param_labels is not None else 2
+    caller = phone or "not provided"
+    why = reason or _NO_REASON_GIVEN
+    return ([caller, why] + [why] * count)[:count]
+
+
 async def _resolve_team_notify_targets(db: AsyncSession, org_id: UUID) -> list[tuple[UUID, str]]:
     """Every org teammate's ``(account_user_id, WhatsApp-notify number)`` for
     a human handoff, in a stable order (earliest-added membership first).
@@ -763,7 +787,8 @@ async def transfer_to_human(
     Lead is still assigned to them, just without the WhatsApp ping.
 
     Sends the org's chosen handoff template (``Org.agent_connect_template_name``,
-    set on the WhatsApp settings page) with caller's number + reason. When
+    set on the WhatsApp settings page) — any approved template, its params
+    sized to its own placeholder count (``_handoff_body_params``). When
     unset, sends ``agent_connect_request`` once that template is
     Meta-approved (``_AGENT_CONNECT_TEMPLATE_APPROVED``); until then, falls
     back to the already-approved ``appointment_confirmation`` template
@@ -822,12 +847,13 @@ async def transfer_to_human(
     org = await db.get(Org, org_id)
     if notify_account_user_id is not None and notify_phone:
         # An org-chosen template (WhatsApp settings page) wins over the
-        # built-ins — it's expected to take the same two params as
-        # agent_connect_request: {{1}} caller number, {{2}} reason.
+        # built-ins. Any approved template can be picked; its params are
+        # sized to its own {{n}} count — {{1}} caller number, {{2}} reason,
+        # extras padded (see _handoff_body_params).
         chosen = org.agent_connect_template_name if org else None
         if chosen:
             template_name = chosen
-            body_params = [phone or "not provided", reason or _NO_REASON_GIVEN]
+            body_params = await _handoff_body_params(db, chosen, phone=phone, reason=reason)
         elif _AGENT_CONNECT_TEMPLATE_APPROVED:
             template_name = _AGENT_CONNECT_TEMPLATE_NAME
             body_params = [phone or "not provided", reason or _NO_REASON_GIVEN]

@@ -222,9 +222,10 @@ function ProviderPreference() {
 
 /**
  * Picks which approved WhatsApp template the human-handoff notification
- * sends (apps/api/core/tools.py::transfer_to_human). Only templates with
- * exactly two body variables are offered — {{1}} is filled with the
- * caller's number, {{2}} with the escalation reason. Empty = built-in default.
+ * sends (apps/api/core/tools.py::transfer_to_human). Any active template can
+ * be chosen — its variables are filled server-side: {{1}} the caller's
+ * number, {{2}} the escalation reason, and any further {{n}} padded with the
+ * reason. Empty = built-in default.
  */
 function HandoffTemplatePreference() {
   const whatsapp = useWhatsAppSettings();
@@ -233,14 +234,13 @@ function HandoffTemplatePreference() {
   const { toast } = useToast();
 
   const current = whatsapp.data?.agent_connect_template_name ?? "";
-  const twoVarTemplates = (templates.data ?? []).filter((t) => t.param_labels.length === 2);
-  // Keep a currently-saved template visible even if it no longer fits the
-  // two-variable filter (renamed, param labels edited, deactivated).
-  const options = twoVarTemplates.some((t) => t.name === current)
-    ? twoVarTemplates
-    : current
-      ? [...twoVarTemplates, { name: current, language: "" }]
-      : twoVarTemplates;
+  const activeTemplates = templates.data ?? [];
+  // Keep a currently-saved template visible even if it's since been
+  // deactivated or renamed on the Templates page.
+  const options =
+    current && !activeTemplates.some((t) => t.name === current)
+      ? [...activeTemplates, { name: current, language: "" }]
+      : activeTemplates;
 
   return (
     <QueryBoundary
@@ -254,10 +254,10 @@ function HandoffTemplatePreference() {
         <div className="flex flex-col gap-3">
           <p className="text-sm text-slate-500 dark:text-slate-400">
             When the AI hands a conversation to a human, the assigned teammate gets a
-            WhatsApp ping. Pick which approved template it uses. The template must have
-            exactly two variables: <code className="text-xs">{"{{1}}"}</code> the caller&apos;s
-            number, <code className="text-xs">{"{{2}}"}</code> the reason. Leave on default to
-            use the built-in template.
+            WhatsApp ping. Pick which approved template it uses. Its variables are filled
+            automatically: <code className="text-xs">{"{{1}}"}</code> the caller&apos;s number,{" "}
+            <code className="text-xs">{"{{2}}"}</code> the reason, and any further variables
+            repeat the reason. Leave on default to use the built-in template.
           </p>
           <div className="max-w-md">
             <Label htmlFor="handoff-template">Handoff notification template</Label>
@@ -289,9 +289,9 @@ function HandoffTemplatePreference() {
                 </option>
               ))}
             </Select>
-            {!templates.isLoading && twoVarTemplates.length === 0 && (
+            {!templates.isLoading && activeTemplates.length === 0 && (
               <p className="mt-1 text-xs text-slate-400">
-                No approved two-variable templates yet — add one on the Templates page.
+                No active templates yet — sync or add one on the Templates page.
               </p>
             )}
           </div>
