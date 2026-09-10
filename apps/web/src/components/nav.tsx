@@ -205,14 +205,7 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
       >
         {/* Logo */}
         <div className="mb-6 px-3 flex items-center justify-between gap-2.5">
-          <div className="flex items-center gap-2.5">
-            <img src="/logo.jpg" alt="Work Assign Ai" className="h-8 w-8 rounded-xl object-contain shrink-0" />
-            <div>
-              <p className="text-base font-extrabold tracking-tight leading-none text-slate-900 dark:text-white">Work Assign Ai</p>
-              <p className="text-[10px] font-semibold text-slate-400 mt-1 uppercase tracking-[0.2em] dark:text-slate-500">Virox</p>
-              <p className="text-[10px] text-slate-400 mt-0.5 dark:text-slate-500">AI employees for your business</p>
-            </div>
-          </div>
+          <img src="/logo.jpg" alt="Work Assign Ai" className="h-auto w-full max-w-[180px] object-contain" />
           <button
             type="button"
             onClick={onCloseMobile}
