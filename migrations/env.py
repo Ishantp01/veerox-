@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # Ensure all models are imported so autogenerate can discover them.
 from apps.api.db.base import Base
 import apps.api.db.models  # noqa: F401 — side-effect import registers all ORM classes
-
+ 
 config = context.config
 
 if config.config_file_name is not None:
