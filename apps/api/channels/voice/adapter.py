@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -77,6 +78,14 @@ class CallState:
     # once per call, never on later turns (mid-call language switching stays
     # an explicit caller request, handled entirely by the model itself).
     language_hint_sent: bool = False
+    # ``time.monotonic()`` deadline before which caller speech does NOT
+    # barge in on the agent's response. Set by realtime_bridge.py when it
+    # fires the opening greeting: on an outbound call the callee almost
+    # always says "hello?" the instant they pick up, which would otherwise
+    # trip ``input_audio_buffer.speech_started`` and wipe the greeting
+    # before they hear any of it. Cleared to 0 once the greeting response
+    # actually finishes, so normal barge-in resumes for the rest of the call.
+    greeting_guard_until: float = 0.0
 
 
 def realtime_tools() -> list[dict[str, Any]]:
@@ -377,6 +386,12 @@ async def handle_openai_event(
             await _send_media(call_ws, state, delta)
 
     elif etype == "input_audio_buffer.speech_started":
+        if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
+            # Still inside the opening-greeting window — the callee's
+            # reflexive "hello?" on an outbound call must not clear the
+            # greeting audio before they've heard it. Let the greeting play.
+            log.info("voice_greeting_barge_in_suppressed")
+            return
         # Barge-in: the caller started talking over the agent. Clear
         # whatever's buffered on the provider, and — on the ElevenLabs path
         # — also cancel the in-flight TTS turn and ask OpenAI to stop
@@ -465,8 +480,13 @@ async def handle_openai_event(
         await oai_ws.send(json.dumps({"type": "response.create"}))
         log.info("voice_tool_dispatched", tool=name)
 
+    elif etype == "response.done":
+        # The opening greeting has finished playing — lift the barge-in
+        # suppression so normal interruption works for the rest of the call.
+        state.greeting_guard_until = 0.0
+
     elif etype == "error":
         log.warning("openai_realtime_error", error=event.get("error"))
 
-    elif etype not in ("session.created", "session.updated", "response.created", "response.done"):
+    elif etype not in ("session.created", "session.updated", "response.created"):
         log.info("voice_openai_event_unhandled", etype=etype)

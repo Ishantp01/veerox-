@@ -6,8 +6,8 @@ import { Providers } from "@/components/providers";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "Veerox AI — Admin",
-  description: "Admin dashboard for Veerox AI voice + WhatsApp agent",
+  title: "Work Assign Ai — Admin",
+  description: "Admin dashboard for Work Assign Ai voice + WhatsApp agent",
 };
 
 /**

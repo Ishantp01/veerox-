@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -463,6 +464,11 @@ async def voice_stream(ws: WebSocket) -> None:
             if precall is None:
                 await oai.send(json.dumps(_session_update_event(instructions)))
             # Make the agent greet first instead of waiting for the caller.
+            # Protect this greeting from being wiped by the callee's
+            # reflexive "hello?" on an outbound call — adapter.handle_openai_
+            # event suppresses barge-in until this deadline (or until the
+            # greeting's response.done arrives, whichever comes first).
+            state.greeting_guard_until = time.monotonic() + 10.0
             await oai.send(
                 json.dumps(
                     {

@@ -69,12 +69,10 @@ export default function LoginPage() {
       {/* Brand panel */}
       <div className="hidden shrink-0 flex-col justify-between border-r border-slate-200 bg-white px-14 py-14 dark:border-slate-800 dark:bg-slate-950 lg:flex lg:w-[46%]">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-gradient-to-br from-primary-400 to-primary-600 text-white shadow-glow">
-            <span className="text-base font-black leading-none">V</span>
-          </div>
+          <img src="/logo.jpg" alt="Work Assign Ai" className="h-9 w-9 rounded-[10px] object-contain" />
           <div className="leading-tight">
-            <div className="text-[17px] font-extrabold tracking-wide text-slate-900 dark:text-white">VEEROX</div>
-            <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-400 dark:text-slate-500">SOFTWARE</div>
+            <div className="text-[17px] font-extrabold tracking-wide text-slate-900 dark:text-white">Work Assign Ai</div>
+            <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-400 dark:text-slate-500">VIROX</div>
           </div>
         </div>
 
@@ -131,7 +129,7 @@ export default function LoginPage() {
           </p>
         </div>
 
-        <div className="text-xs text-slate-400 dark:text-slate-500">© 2026 Veerox AI · Built for Success!</div>
+        <div className="text-xs text-slate-400 dark:text-slate-500">© 2026 Virox · Work Assign Ai</div>
       </div>
 
       {/* Form panel */}
@@ -147,10 +145,8 @@ export default function LoginPage() {
 
         <div className="w-full max-w-sm">
           <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-gradient-to-br from-primary-400 to-primary-600 text-white shadow-glow">
-              <span className="text-base font-black leading-none">V</span>
-            </div>
-            <div className="text-[17px] font-extrabold tracking-wide text-slate-900 dark:text-white">VEEROX</div>
+            <img src="/logo.jpg" alt="Work Assign Ai" className="h-9 w-9 rounded-[10px] object-contain" />
+            <div className="text-[17px] font-extrabold tracking-wide text-slate-900 dark:text-white">Work Assign Ai</div>
           </div>
 
           <h2 className="text-xl font-bold text-slate-900 dark:text-white">Sign in</h2>
