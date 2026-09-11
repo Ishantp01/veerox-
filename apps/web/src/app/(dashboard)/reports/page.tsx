@@ -24,7 +24,7 @@ import {
 } from "@/components/ui";
 import { downloadCsv } from "@/lib/download-csv";
 import { useReportsCampaigns, useReportsTimeseries } from "@/lib/hooks";
-import { formatShortDate, formatUsd } from "@/lib/format";
+import { formatShortDate } from "@/lib/format";
 
 const ReportsTrendChart = dynamic(
   () => import("@/components/reports/trend-chart").then((m) => m.ReportsTrendChart),
@@ -70,9 +70,8 @@ export default function ReportsPage() {
           calls: acc.calls + p.calls,
           whatsapp: acc.whatsapp + p.whatsapp_messages,
           qualified: acc.qualified + p.qualified_count,
-          spend: acc.spend + p.usd_spend,
         }),
-        { calls: 0, whatsapp: 0, qualified: 0, spend: 0 }
+        { calls: 0, whatsapp: 0, qualified: 0 }
       ),
     [points]
   );
@@ -172,18 +171,17 @@ export default function ReportsPage() {
         error={timeseries.error}
         onRetry={() => timeseries.refetch()}
         loadingFallback={
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, i) => (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, i) => (
               <Skeleton key={i} className="h-20 rounded-xl" />
             ))}
           </div>
         }
       >
-        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <SummaryStat label="Calls" value={totals.calls} />
           <SummaryStat label="WhatsApp Messages" value={totals.whatsapp} />
           <SummaryStat label="Qualified Leads" value={totals.qualified} />
-          <SummaryStat label="Spend" value={formatUsd(totals.spend)} />
         </div>
 
         <Card className="mb-8">
@@ -211,7 +209,6 @@ export default function ReportsPage() {
                         <TableHeader>Calls</TableHeader>
                         <TableHeader>WhatsApp</TableHeader>
                         <TableHeader>Qualified</TableHeader>
-                        <TableHeader>Spend</TableHeader>
                       </TableRow>
                     </thead>
                     <tbody>
@@ -221,7 +218,6 @@ export default function ReportsPage() {
                           <TableCell className="tabular-nums">{p.calls}</TableCell>
                           <TableCell className="tabular-nums">{p.whatsapp_messages}</TableCell>
                           <TableCell className="tabular-nums">{p.qualified_count}</TableCell>
-                          <TableCell className="tabular-nums">{formatUsd(p.usd_spend)}</TableCell>
                         </TableRow>
                       ))}
                     </tbody>

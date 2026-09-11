@@ -3,7 +3,6 @@
 import dynamic from "next/dynamic";
 import {
   AlertTriangle,
-  DollarSign,
   MessageSquare,
   PhoneCall,
   Sparkles,
@@ -17,7 +16,6 @@ import { SystemStatus } from "@/components/dashboard/system-status";
 import { TopCampaigns } from "@/components/dashboard/top-campaigns";
 import { Skeleton } from "@/components/ui";
 import { useStats } from "@/lib/hooks";
-import { formatUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const StatsTrendChart = dynamic(
@@ -59,7 +57,7 @@ export interface StatsGridProps {
  */
 export function StatsGrid({ variant }: StatsGridProps) {
   const stats = useStats();
-  const cardCount = variant === "all" ? 5 : 4;
+  const cardCount = variant === "all" ? 4 : 3;
 
   return (
     <QueryBoundary
@@ -82,7 +80,7 @@ export function StatsGrid({ variant }: StatsGridProps) {
             <div
               className={cn(
                 "grid grid-cols-1 gap-4 sm:grid-cols-2",
-                cardCount === 5 ? "md:grid-cols-3 xl:grid-cols-5" : "md:grid-cols-4",
+                cardCount === 4 ? "md:grid-cols-4" : "md:grid-cols-3",
               )}
             >
               {variant === "all" && (
@@ -120,13 +118,6 @@ export function StatsGrid({ variant }: StatsGridProps) {
                 }
                 icon={Sparkles}
                 tint="purple"
-              />
-              <StatCard
-                label="Spend Today"
-                value={formatUsd(stats.data.usd_spend_today)}
-                sublabel="LLM + audio cost"
-                icon={DollarSign}
-                tint="amber"
               />
               <StatCard
                 label="Errors Today"
