@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { DashboardShell } from "@/components/layout/dashboard-shell";
+import { SocialLinksFloatingBar } from "@/components/layout/social-links-floating-bar";
 import { OnboardingTour } from "@/components/onboarding/onboarding-tour";
 import { Spinner } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
@@ -117,6 +118,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <OnboardingTour>
       <DashboardShell>
         {children}
+        <SocialLinksFloatingBar />
         {/* Help Desk chatbot widget removed from here — see removefeature.md to re-add. */}
       </DashboardShell>
     </OnboardingTour>

@@ -114,6 +114,10 @@ async def asset_catalog_prompt_block(db: AsyncSession, org_id: UUID) -> str:
         lines.append(f'- "{a.name}" ({a.media_type}){desc}')
     lines.append(
         "Only send a file the contact actually asked for, or one that directly "
-        "answers their question. Never name a file that isn't in this list."
+        "answers their question — go by intent, not by whether their wording "
+        "matches the file's name or description. A vague 'what do you guys do' "
+        "or 'tell me about your company' counts as asking for a company-info "
+        "file if one is listed above, just as much as an exact request would. "
+        "Never name a file that isn't in this list."
     )
     return "\n".join(lines)

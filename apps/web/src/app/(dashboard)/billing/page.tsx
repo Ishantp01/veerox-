@@ -176,7 +176,7 @@ export default function BillingPage() {
             {user?.is_superuser && (
               <>
                 <PlanAdminTable />
-                {/* HelpDeskScriptPanel and SocialLinksPanel removed from here — see removefeature.md to re-add. */}
+                {/* HelpDeskScriptPanel removed from here — see removefeature.md to re-add. SocialLinksPanel lives on the Settings page now. */}
               </>
             )}
           </div>

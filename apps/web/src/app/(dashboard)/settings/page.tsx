@@ -1,20 +1,26 @@
 "use client";
 
 import { useState } from "react";
-import { Phone, MessageSquare } from "lucide-react";
+import { Phone, MessageSquare, Share2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { SettingsView } from "@/components/settings/settings-view";
+import { SocialLinksPanel } from "@/components/billing/platform-settings-panel";
 import { useAuth } from "@/lib/auth-context";
 
-type Tab = "calling" | "whatsapp";
+type Tab = "calling" | "whatsapp" | "social";
 
 const TABS: { key: Tab; label: string; icon: typeof Phone }[] = [
   { key: "calling", label: "AI Calling", icon: Phone },
   { key: "whatsapp", label: "AI WhatsApp", icon: MessageSquare },
 ];
 
-// The superuser-only "Help Desk Bot" and "Social Links" tabs (PLATFORM_TABS)
-// were removed from here — see removefeature.md to re-add.
+// Superuser-only, appended to TABS below when user.is_superuser.
+const PLATFORM_TABS: { key: Tab; label: string; icon: typeof Phone }[] = [
+  { key: "social", label: "Social Links", icon: Share2 },
+];
+
+// The superuser-only "Help Desk Bot" tab was removed from here — see
+// removefeature.md to re-add.
 
 /**
  * Sidebar-level Settings entry point. Merges the two per-channel settings
@@ -25,6 +31,7 @@ const TABS: { key: Tab; label: string; icon: typeof Phone }[] = [
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>("calling");
   const { user } = useAuth();
+  const tabs = user?.is_superuser ? [...TABS, ...PLATFORM_TABS] : TABS;
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -59,7 +66,7 @@ export default function SettingsPage() {
         data-tour="settings-channel-tabs"
         className="mb-6 inline-flex gap-1 rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-900"
       >
-        {TABS.map(({ key, label, icon: Icon }) => (
+        {tabs.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             type="button"
@@ -90,6 +97,7 @@ export default function SettingsPage() {
           channel="whatsapp"
         />
       )}
+      {tab === "social" && user?.is_superuser && <SocialLinksPanel />}
     </div>
   );
 }

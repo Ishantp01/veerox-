@@ -87,6 +87,20 @@ having to go looking:
 
 ## 2. Social Media Links (icon row in the topbar/navbar)
 
+**Update (2026-09-14): restored, but as a draggable floating bar, not a
+topbar row.** `apps/web/src/components/layout/social-links-floating-bar.tsx`
+(`SocialLinksFloatingBar`) is a new component — fixed bottom-right by default
+on every dashboard page (drag-to-reposition, position persisted via
+localStorage, same pattern as `help-desk-widget.tsx`'s `useDraggableOffset`),
+mounted in `apps/web/src/app/(dashboard)/layout.tsx` — that reads
+`useSocialLinks()`/`SOCIAL_META` the same way the original `SocialLinksRow`
+did, just rendered as a floating icon column instead of an inline topbar row.
+`SocialLinksPanel` (the superuser-only editor) is mounted again too, as a
+"Social Links" tab on the **Settings** page
+(`apps/web/src/app/(dashboard)/settings/page.tsx`'s `PLATFORM_TABS`), not the
+Billing page. The rest of this section describes the original, now-superseded
+topbar placement for history.
+
 ### What was disconnected
 - **`apps/web/src/components/layout/topbar.tsx`**
   Removed the `SocialLinksRow` component (rendered the row of social icons —
