@@ -123,7 +123,14 @@ export default function SupportTicketsPage() {
                   <TableCell className="font-medium text-slate-900 dark:text-slate-100">
                     {t.org_name}
                   </TableCell>
-                  <TableCell>{t.account_user_name || t.account_user_email}</TableCell>
+                  <TableCell>
+                    <div>{t.account_user_name || t.account_user_email}</div>
+                    {t.account_user_mobile && (
+                      <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                        {t.account_user_mobile}
+                      </div>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <div>{t.subject}</div>
                     <div className="mt-0.5 max-w-xs truncate text-xs text-slate-500 dark:text-slate-400">

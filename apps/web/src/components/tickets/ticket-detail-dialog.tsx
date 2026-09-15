@@ -103,6 +103,19 @@ export function TicketDetailDialog({ ticket, onClose, onStatusChange }: TicketDe
                       {admin.account_user_name || admin.account_user_email}
                     </dd>
                   </div>
+                  {admin.account_user_mobile && (
+                    <div>
+                      <dt className="text-xs text-slate-500 dark:text-slate-400">Phone</dt>
+                      <dd className="font-medium text-slate-800 dark:text-slate-100">
+                        <a
+                          href={`tel:${admin.account_user_mobile}`}
+                          className="text-primary-600 hover:underline dark:text-primary-400"
+                        >
+                          {admin.account_user_mobile}
+                        </a>
+                      </dd>
+                    </div>
+                  )}
                 </div>
               )}
 

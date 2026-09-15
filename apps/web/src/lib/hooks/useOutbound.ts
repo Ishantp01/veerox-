@@ -56,6 +56,10 @@ export interface OutboundWhatsAppInput {
   template_lang?: string;
   /** Ordered values for the template body {{1}}, {{2}} ... placeholders. */
   template_params?: string[];
+  /** Value for the template header's {{1}}, if it has one. */
+  template_header_params?: string[];
+  /** Dynamic values for URL/COPY_CODE buttons, by 0-based button position. */
+  template_button_params?: { index: number; type: "url" | "copy_code"; value: string }[];
 }
 
 /**

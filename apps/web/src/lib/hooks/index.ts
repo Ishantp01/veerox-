@@ -76,6 +76,7 @@ export {
   useAppointments,
   useCreateAppointment,
   useUpdateAppointment,
+  useDeleteAppointment,
   type AppointmentFilters,
   type AppointmentSort,
   type AppointmentCreateInput,

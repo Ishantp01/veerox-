@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
-import type { Template } from "@/lib/types";
+import type { Template, TemplateButton } from "@/lib/types";
 
 export interface TemplateFilters {
   active?: boolean;
@@ -23,6 +23,14 @@ export interface TemplateCreateInput {
   category?: string;
   param_labels: string[];
   body_preview?: string;
+  header_type?: string;
+  header_text?: string;
+  header_example?: string;
+  /** For an IMAGE/VIDEO/DOCUMENT header: an existing WhatsAppAsset id to
+   * upload to Meta for the header's media handle. */
+  header_asset_id?: string;
+  footer_text?: string;
+  buttons?: TemplateButton[];
   active?: boolean;
 }
 
@@ -49,6 +57,9 @@ export interface TemplateUpdateInput {
   category?: string;
   param_labels?: string[];
   body_preview?: string;
+  /** For IMAGE/VIDEO/DOCUMENT headers: a default media URL that pre-fills
+   * the send form's header field, so it doesn't need retyping every send. */
+  header_example?: string;
   active?: boolean;
 }
 
@@ -83,6 +94,9 @@ export function useDeleteTemplate() {
 
 export interface TemplateSyncResult {
   created: Template[];
+  /** Existing rows that had header/footer/button structure backfilled from
+   * Meta (only fills gaps, never overwrites). */
+  updated: Template[];
   skipped: number;
   total_on_meta: number;
 }

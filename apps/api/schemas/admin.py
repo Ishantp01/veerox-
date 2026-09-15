@@ -7,6 +7,14 @@ from pydantic import BaseModel, Field, model_validator
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn, OrgPhoneNumberOut
 
 
+class TemplateButtonSendParam(BaseModel):
+    index: int = Field(..., description="0-based position of this button in the template.")
+    type: Literal["url", "copy_code"] = Field(
+        ..., description="Which dynamic button kind this fills — matches the button's own type."
+    )
+    value: str = Field(..., description="The {{1}} URL suffix, or the coupon code to show.")
+
+
 class OutboundWhatsappIn(BaseModel):
     phone: str = Field(..., description="Recipient phone number in E.164 format.")
     text: str | None = Field(
@@ -30,6 +38,17 @@ class OutboundWhatsappIn(BaseModel):
     template_params: list[str] | None = Field(
         None,
         description="Ordered values for the template body {{1}}, {{2}} ... placeholders.",
+    )
+    template_header_params: list[str] | None = Field(
+        None,
+        description="Value(s) for the template header's {{1}} placeholder, if it has one.",
+    )
+    template_button_params: list[TemplateButtonSendParam] | None = Field(
+        None,
+        description=(
+            "Dynamic values for URL/COPY_CODE buttons — one entry per button that "
+            "needs one, matched by its 0-based position in the template."
+        ),
     )
 
     @model_validator(mode="after")

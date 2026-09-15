@@ -25,6 +25,7 @@ export interface AdminTicket extends Ticket {
   org_name: string;
   account_user_email: string;
   account_user_name: string | null;
+  account_user_mobile: string | null;
 }
 
 /** GET /tickets → Ticket[], scoped to the caller's own org. */

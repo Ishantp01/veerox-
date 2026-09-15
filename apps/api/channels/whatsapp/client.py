@@ -147,11 +147,17 @@ async def send_text(to_e164: str, body: str, phone_number_id: str | None = None)
     return data
 
 
+_MEDIA_HEADER_FORMATS = {"IMAGE", "VIDEO", "DOCUMENT"}
+
+
 async def send_template(
     to_e164: str,
     template_name: str,
     language_code: str = "en_US",
     body_params: list[str] | None = None,
+    header_params: list[str] | None = None,
+    header_type: str | None = None,
+    button_params: list[dict[str, Any]] | None = None,
     phone_number_id: str | None = None,
 ) -> dict[str, Any]:
     """Send a pre-approved WhatsApp **template** message via the Graph API.
@@ -163,8 +169,26 @@ async def send_template(
 
     ``body_params`` fills the ``{{1}}``, ``{{2}}`` ... placeholders in the
     template body, in order. Pass ``None`` for templates with no variables
-    (e.g. the built-in ``hello_world``). ``phone_number_id`` overrides the
-    platform default the same way it does for ``send_text``.
+    (e.g. the built-in ``hello_world``).
+
+    ``header_params`` fills the template's header. What it means depends on
+    ``header_type`` (the template's own ``format``, e.g. from
+    ``WhatsAppTemplate.header_type``):
+    - ``"TEXT"`` or omitted: fills the header's ``{{1}}`` text variable, if
+      it has one — pass a one-item list.
+    - ``"IMAGE"`` / ``"VIDEO"`` / ``"DOCUMENT"``: the header itself IS the
+      parameter (there's no ``{{1}}``) — Meta rejects the send with "Format
+      mismatch, expected IMAGE, received UNKNOWN" if this is left out for
+      such a template. Pass a one-item list with a public HTTPS URL to the
+      media.
+
+    ``button_params`` fills the dynamic parts of URL / COPY_CODE buttons —
+    each item is ``{"index": <button's 0-based position in the template>,
+    "type": "url" | "copy_code", "value": <the {{1}} suffix or coupon code>}``.
+    QUICK_REPLY and static PHONE_NUMBER/URL buttons need no entry here.
+
+    ``phone_number_id`` overrides the platform default the same way it does
+    for ``send_text``.
 
     Returns the raw JSON response (contains the outbound message id). Raises
     ``httpx.HTTPStatusError`` on a non-2xx response.
@@ -174,13 +198,48 @@ async def send_template(
         "name": template_name,
         "language": {"code": language_code},
     }
+    components: list[dict[str, Any]] = []
+    if header_params:
+        media_format = (header_type or "").upper()
+        if media_format in _MEDIA_HEADER_FORMATS:
+            media_key = media_format.lower()
+            components.append(
+                {
+                    "type": "header",
+                    "parameters": [{"type": media_key, media_key: {"link": header_params[0]}}],
+                }
+            )
+        else:
+            components.append(
+                {
+                    "type": "header",
+                    "parameters": [{"type": "text", "text": p} for p in header_params],
+                }
+            )
     if body_params:
-        template["components"] = [
+        components.append(
             {
                 "type": "body",
                 "parameters": [{"type": "text", "text": p} for p in body_params],
             }
-        ]
+        )
+    for btn in button_params or []:
+        sub_type = btn.get("type")
+        value = btn.get("value")
+        if sub_type == "copy_code":
+            parameters = [{"type": "coupon_code", "coupon_code": value}]
+        else:
+            parameters = [{"type": "text", "text": value}]
+        components.append(
+            {
+                "type": "button",
+                "sub_type": sub_type,
+                "index": str(btn.get("index", 0)),
+                "parameters": parameters,
+            }
+        )
+    if components:
+        template["components"] = components
     payload = {
         "messaging_product": "whatsapp",
         "to": to_e164,
@@ -271,12 +330,74 @@ async def send_media(
     return data
 
 
+_MEDIA_HEADER_TYPES = {"IMAGE", "VIDEO", "DOCUMENT"}
+
+
+async def get_header_media_handle(data: bytes, mime_type: str, filename: str) -> str:
+    """Upload file bytes to Meta's Resumable Upload API and return a media
+    ``handle`` usable as a template HEADER's ``example.header_handle``.
+
+    Two-step dance, distinct from ``send_template``'s header (which just
+    takes a public link) — *creating* an IMAGE/VIDEO/DOCUMENT header template
+    requires Meta to already hold the file:
+
+    1. ``POST /{app_id}/uploads`` starts an upload session scoped to this
+       file's size/type, returning an ``upload:...`` session id.
+    2. ``POST /{session_id}`` with the raw bytes (``Authorization: OAuth
+       {token}``, not ``Bearer``) returns the ``h`` handle.
+
+    Raises ``httpx.HTTPStatusError`` on a non-2xx response from either step,
+    or ``RuntimeError`` if ``settings.meta_app_id`` isn't configured.
+    """
+    if not settings.meta_app_id:
+        raise RuntimeError("META_APP_ID must be set to upload template header media")
+
+    start_url = f"{_GRAPH_BASE}/{settings.meta_graph_api_version}/{settings.meta_app_id}/uploads"
+    try:
+        start_r = await _http.post(
+            start_url,
+            params={"file_length": len(data), "file_type": mime_type, "file_name": filename},
+            headers=_auth_headers(),
+        )
+        start_r.raise_for_status()
+        upload_session_id = start_r.json()["id"]
+
+        upload_r = await _http.post(
+            f"{_GRAPH_BASE}/{settings.meta_graph_api_version}/{upload_session_id}",
+            headers={"Authorization": f"OAuth {settings.meta_access_token}", "file_offset": "0"},
+            content=data,
+            # The shared client's default 10s timeout is fine for small JSON
+            # calls but too tight for a document/video upload (up to 16MB) on
+            # anything but a fast connection — give the actual byte transfer
+            # more room before treating a slow-but-working upload as failed.
+            timeout=60.0,
+        )
+        upload_r.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "whatsapp_header_media_upload_failed",
+            filename=filename,
+            error=str(exc),
+            status=getattr(getattr(exc, "response", None), "status_code", None),
+            meta_error=_meta_error_detail(exc),
+        )
+        raise
+
+    return upload_r.json()["h"]
+
+
 async def create_template(
     name: str,
     body_text: str,
     category: str = "UTILITY",
     language_code: str = "en_US",
     example_params: list[str] | None = None,
+    header_type: str | None = None,
+    header_text: str | None = None,
+    header_example: str | None = None,
+    header_handle: str | None = None,
+    footer_text: str | None = None,
+    buttons: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Submit a new WhatsApp message template to Meta for review.
 
@@ -292,6 +413,17 @@ async def create_template(
     supplies one example value per placeholder, in order — Meta requires an
     example for every variable to approve a template.
 
+    ``header_type``/``header_text``/``header_example`` add an optional TEXT
+    header. For an IMAGE/VIDEO/DOCUMENT header, pass ``header_type`` plus
+    ``header_handle`` (from ``get_header_media_handle``) instead of
+    ``header_text``/``header_example``.
+    ``footer_text`` adds an optional static footer (no variables allowed).
+    ``buttons`` is Meta's raw ``components[].buttons`` list — each dict is one
+    of ``{"type": "QUICK_REPLY", "text": ...}``,
+    ``{"type": "URL", "text": ..., "url": ..., "example": [...]}``,
+    ``{"type": "PHONE_NUMBER", "text": ..., "phone_number": ...}``, or
+    ``{"type": "COPY_CODE", "example": ...}``.
+
     Returns the raw JSON response (contains the new template's id + status).
     Raises ``httpx.HTTPStatusError`` on a non-2xx response (e.g. a name
     that's already taken for this language, or a malformed component).
@@ -300,14 +432,42 @@ async def create_template(
         f"{_GRAPH_BASE}/{settings.meta_graph_api_version}"
         f"/{settings.meta_whatsapp_business_account_id}/message_templates"
     )
+    components: list[dict[str, Any]] = []
+
+    if header_type and header_type.upper() in _MEDIA_HEADER_TYPES and header_handle:
+        components.append(
+            {
+                "type": "HEADER",
+                "format": header_type.upper(),
+                "example": {"header_handle": [header_handle]},
+            }
+        )
+    elif header_type and header_text:
+        header_component: dict[str, Any] = {
+            "type": "HEADER",
+            "format": header_type,
+            "text": header_text,
+        }
+        if header_example:
+            header_component["example"] = {"header_text": [header_example]}
+        components.append(header_component)
+
     body_component: dict[str, Any] = {"type": "BODY", "text": body_text}
     if example_params:
         body_component["example"] = {"body_text": [example_params]}
+    components.append(body_component)
+
+    if footer_text:
+        components.append({"type": "FOOTER", "text": footer_text})
+
+    if buttons:
+        components.append({"type": "BUTTONS", "buttons": buttons})
+
     payload = {
         "name": name,
         "language": language_code,
         "category": category,
-        "components": [body_component],
+        "components": components,
     }
     try:
         r = await _http.post(url, json=payload, headers=_auth_headers())

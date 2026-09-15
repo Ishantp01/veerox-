@@ -25,6 +25,7 @@ import {
   useUpdateWhatsAppSettings,
   useWhatsAppSettings,
 } from "@/lib/hooks";
+import { useAuth } from "@/lib/auth-context";
 import { ScriptLibrary } from "./script-library";
 
 interface CollapsibleSectionProps {
@@ -318,6 +319,12 @@ export interface SettingsViewProps {
  * call on it resolves to (channels/whatsapp/adapter.py, channels/voice/webhook.py).
  */
 export function SettingsView({ title, description, channel }: SettingsViewProps) {
+  const { user } = useAuth();
+  // Provider preference is centralized with the org admin — a plain
+  // role=="member" account doesn't get to see this section exists, let alone
+  // change it (mirrors the 403 guard on GET/PUT /admin/settings/calling).
+  const isOrgAdmin = user?.is_superuser || user?.role !== "member";
+
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader title={title} description={description} />
@@ -341,7 +348,7 @@ export function SettingsView({ title, description, channel }: SettingsViewProps)
           </CollapsibleSection>
         )}
 
-        {channel === "calling" && (
+        {channel === "calling" && isOrgAdmin && (
           <CollapsibleSection
             title="Voice Provider"
             icon={<Phone size={15} aria-hidden className="text-slate-400" />}

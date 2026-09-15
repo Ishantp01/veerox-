@@ -46,6 +46,9 @@ from apps.api.core.prompts import (
 )
 from apps.api.core.usage import get_credit_usage
 from apps.api.core.whatsapp_assets import asset_catalog_prompt_block
+from apps.api.core.whatsapp_template_catalog import (
+    template_catalog_prompt_block as wa_template_catalog_prompt_block,
+)
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.script import Script
@@ -211,10 +214,15 @@ async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | N
         catalog = (
             await asset_catalog_prompt_block(db, org_id) if org_id is not None else ""
         )
+        template_catalog = (
+            await wa_template_catalog_prompt_block(db, org_id) if org_id is not None else ""
+        )
 
     tail = f"{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
     if catalog:
         tail = f"{tail}\n\n{catalog}"
+    if template_catalog:
+        tail = f"{tail}\n\n{template_catalog}"
 
     if campaign is not None:
         return (

@@ -141,6 +141,15 @@ export interface FollowUpRule {
   created_at: string;
 }
 
+export interface TemplateButton {
+  type: "QUICK_REPLY" | "URL" | "PHONE_NUMBER" | "COPY_CODE";
+  text?: string | null;
+  url?: string | null;
+  phone_number?: string | null;
+  /** URL's {{1}} sample, or the sample code for COPY_CODE. */
+  example?: string | null;
+}
+
 export interface Template {
   id: string;
   org_id: string;
@@ -149,6 +158,13 @@ export interface Template {
   category: string | null;
   param_labels: string[];
   body_preview: string | null;
+  /** Only TEXT is creatable from the dashboard — IMAGE/VIDEO/DOCUMENT
+   * headers need a media handle from Meta's separate upload API. */
+  header_type: string | null;
+  header_text: string | null;
+  header_example: string | null;
+  footer_text: string | null;
+  buttons: TemplateButton[];
   active: boolean;
   created_at: string;
   /** Live Meta review status (PENDING/APPROVED/REJECTED), matched by

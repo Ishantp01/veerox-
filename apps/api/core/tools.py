@@ -32,6 +32,7 @@ from apps.api.channels.voice.org_numbers import get_rotating_numbers
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.whatsapp_assets import asset_public_url, load_org_assets, resolve_asset
+from apps.api.core.whatsapp_template_catalog import resolve_template
 from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
@@ -305,6 +306,84 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "description": (
                             "Phone number to send to (E.164 preferred). Omit to use the "
                             "current contact's own number."
+                        ),
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_whatsapp_template",
+            "description": (
+                "Send one of the business's pre-approved WhatsApp templates — the "
+                "available templates, with their body/header variables and buttons, "
+                "are listed in your instructions. Use this instead of "
+                "send_whatsapp_message whenever the contact has no open 24h WhatsApp "
+                "session (send_whatsapp_message will fail there), or when the "
+                "business specifically wants an approved template sent (e.g. an "
+                "offer with a coupon-code button). Never invent a template name — "
+                "only use one listed in your instructions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The exact template name, as listed in your instructions.",
+                    },
+                    "phone": {
+                        "type": "string",
+                        "description": (
+                            "Phone number to send to (E.164 preferred). Omit to use the "
+                            "current contact's own number."
+                        ),
+                    },
+                    "body_params": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Ordered values for the template body's {{1}}, {{2}}, ... "
+                            "placeholders, matching the 'body params in order' list shown "
+                            "for this template in your instructions."
+                        ),
+                    },
+                    "header_param": {
+                        "type": "string",
+                        "description": (
+                            "For a TEXT header with a {{1}} variable: the value to fill it "
+                            "with. For an IMAGE/VIDEO/DOCUMENT header (see your instructions) "
+                            "this is REQUIRED every send — pass the exact name of one of the "
+                            "business's saved WhatsApp files (same list send_whatsapp_file "
+                            "uses), or a direct https:// URL if you have one. Omitting it for "
+                            "a media-header template makes the send fail."
+                        ),
+                    },
+                    "button_values": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "index": {
+                                    "type": "integer",
+                                    "description": "The button's [n] position shown in your instructions.",
+                                },
+                                "value": {
+                                    "type": "string",
+                                    "description": (
+                                        "The dynamic URL suffix for a dynamic URL button, or "
+                                        "the coupon code for a copy-code button."
+                                    ),
+                                },
+                            },
+                            "required": ["index", "value"],
+                        },
+                        "description": (
+                            "Only for templates with a dynamic URL or copy-code button "
+                            "(see 'buttons' in your instructions) — one entry per such button. "
+                            "Quick-reply and call buttons need no entry."
                         ),
                     },
                 },
@@ -1375,6 +1454,115 @@ async def send_whatsapp_file(
     return {"status": "ok", "phone": normalized, "file": resolved.name}
 
 
+async def send_whatsapp_template(
+    db: AsyncSession,
+    name: str,
+    body_params: list[str] | None = None,
+    header_param: str | None = None,
+    button_values: list[dict[str, Any]] | None = None,
+    phone: str | None = None,
+    user_id: UUID | None = None,
+    org_id: UUID | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Send one of the org's approved WhatsApp templates to the contact.
+
+    Resolves ``name`` against the org's active templates (see
+    ``core/whatsapp_template_catalog.py``, which also lists them in the
+    system prompt), then submits them exactly like the human-driven "Send
+    WhatsApp Message" form does (``routers/admin.py``'s outbound_whatsapp).
+    Unlike ``send_whatsapp_message``, this reaches a contact with no open
+    24h session, since Meta-approved templates are the one way to do that.
+    """
+    org_id = org_id or _default_org_id()
+
+    target_phone = phone
+    caller: User | None = None
+    if user_id is not None:
+        caller = await db.get(User, user_id)
+    if not target_phone:
+        target_phone = caller.phone if caller else None
+    if not target_phone:
+        return {"status": "error", "reason": "no_phone_number_available"}
+
+    resolved = await resolve_template(db, org_id, name)
+    if resolved is None:
+        return {"status": "error", "reason": "no_matching_template", "requested": name}
+    if isinstance(resolved, list):
+        return {"status": "error", "reason": "ambiguous_template_name", "matches": resolved}
+
+    normalized = _normalize_phone(target_phone)
+    org = await db.get(Org, org_id)
+    phone_number_id = org.whatsapp_phone_number_id if org else None
+
+    # A media header (IMAGE/VIDEO/DOCUMENT) has no {{1}} — the header IS the
+    # parameter, and Meta rejects the send outright if it's missing ("Format
+    # mismatch, expected IMAGE, received UNKNOWN"). header_param there names
+    # one of the org's saved WhatsApp files (see send_whatsapp_file) so the
+    # model doesn't need a real hosted URL of its own; a raw https:// URL
+    # also works if the model already has one.
+    header_type = (resolved.header_type or "").upper()
+    is_media_header = header_type in {"IMAGE", "VIDEO", "DOCUMENT"}
+    if is_media_header and not header_param:
+        return {"status": "error", "reason": "header_media_required", "header_type": header_type}
+
+    header_value = header_param
+    if is_media_header and header_param and not header_param.lower().startswith("http"):
+        asset = await resolve_asset(db, org_id, header_param)
+        if asset is None:
+            return {"status": "error", "reason": "no_matching_header_file", "requested": header_param}
+        if isinstance(asset, list):
+            return {"status": "error", "reason": "ambiguous_header_file_name", "matches": asset}
+        header_value = asset_public_url(asset)
+
+    button_params = (
+        [{"index": b.get("index", 0), "type": _button_type_at(resolved, b.get("index", 0)), "value": b.get("value")}
+         for b in button_values]
+        if button_values
+        else None
+    )
+
+    try:
+        await wa_client.send_template(
+            normalized,
+            resolved.name,
+            language_code=resolved.language,
+            body_params=body_params,
+            header_params=[header_value] if header_value else None,
+            header_type=resolved.header_type,
+            button_params=button_params,
+            phone_number_id=phone_number_id,
+        )
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "send_whatsapp_template_tool_failed",
+            phone=normalized,
+            template=resolved.name,
+            error=str(exc),
+        )
+        return {"status": "error", "reason": "whatsapp_send_failed"}
+
+    logger.info(
+        "send_whatsapp_template_tool_ok",
+        phone=normalized,
+        org_id=str(org_id),
+        template=resolved.name,
+    )
+    return {"status": "ok", "phone": normalized, "template": resolved.name}
+
+
+def _button_type_at(template: WhatsAppTemplate, index: int) -> str:
+    """Meta's send-time button sub_type ('url' or 'copy_code') for the
+    template's button at this position — falls back to 'url' if out of
+    range/unrecognized so a malformed model call still gets a sane attempt."""
+    buttons = template.buttons or []
+    if 0 <= index < len(buttons):
+        btype = buttons[index].get("type")
+        if btype == "COPY_CODE":
+            return "copy_code"
+    return "url"
+
+
 # Deterministic backstop for a recurring misfire: gpt-4o-mini sometimes reads
 # "connect me to a human/agent/team member" as a request to be *called*, and
 # picks this tool instead of transfer_to_human — which would actually ring
@@ -1477,5 +1665,6 @@ DISPATCH_TABLE: dict[str, ToolHandler] = {
     "lookup_customer": lookup_customer,
     "send_whatsapp_message": send_whatsapp_message,
     "send_whatsapp_file": send_whatsapp_file,
+    "send_whatsapp_template": send_whatsapp_template,
     "initiate_ai_call": initiate_ai_call,
 }

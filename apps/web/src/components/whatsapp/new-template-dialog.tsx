@@ -17,7 +17,11 @@ import {
   Textarea,
   useToast,
 } from "@/components/ui";
-import { useCreateTemplate } from "@/lib/hooks";
+import { useCreateTemplate, useWhatsappAssets } from "@/lib/hooks";
+import type { TemplateButton } from "@/lib/types";
+
+const MEDIA_HEADER_TYPES = ["IMAGE", "VIDEO", "DOCUMENT"] as const;
+type HeaderKind = "TEXT" | (typeof MEDIA_HEADER_TYPES)[number];
 
 const templateSchema = z.object({
   name: z
@@ -30,6 +34,17 @@ const templateSchema = z.object({
 
 type TemplateFieldErrors = Partial<Record<"name" | "language" | "bodyPreview", string>>;
 
+const BUTTON_TYPES: { value: TemplateButton["type"]; label: string }[] = [
+  { value: "QUICK_REPLY", label: "Quick reply" },
+  { value: "URL", label: "Website URL" },
+  { value: "PHONE_NUMBER", label: "Call phone number" },
+  { value: "COPY_CODE", label: "Copy offer code" },
+];
+
+function emptyButton(type: TemplateButton["type"]): TemplateButton {
+  return { type, text: "", url: "", phone_number: "", example: "" };
+}
+
 export function NewTemplateDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -37,9 +52,21 @@ export function NewTemplateDialog() {
   const [category, setCategory] = useState("UTILITY");
   const [bodyPreview, setBodyPreview] = useState("");
   const [paramLabels, setParamLabels] = useState<string[]>([]);
+  const [hasHeader, setHasHeader] = useState(false);
+  const [headerKind, setHeaderKind] = useState<HeaderKind>("TEXT");
+  const [headerText, setHeaderText] = useState("");
+  const [headerExample, setHeaderExample] = useState("");
+  const [headerAssetId, setHeaderAssetId] = useState("");
+  const [footerText, setFooterText] = useState("");
+  const [buttons, setButtons] = useState<TemplateButton[]>([]);
   const [fieldErrors, setFieldErrors] = useState<TemplateFieldErrors>({});
   const createTemplate = useCreateTemplate();
+  const assets = useWhatsappAssets();
   const { toast } = useToast();
+
+  const matchingAssets = (assets.data ?? []).filter(
+    (a) => a.media_type === headerKind.toLowerCase(),
+  );
 
   function reset() {
     setName("");
@@ -47,8 +74,21 @@ export function NewTemplateDialog() {
     setCategory("UTILITY");
     setBodyPreview("");
     setParamLabels([]);
+    setHasHeader(false);
+    setHeaderKind("TEXT");
+    setHeaderText("");
+    setHeaderExample("");
+    setHeaderAssetId("");
+    setFooterText("");
+    setButtons([]);
     setFieldErrors({});
   }
+
+  function updateButton(index: number, patch: Partial<TemplateButton>) {
+    setButtons((prev) => prev.map((b, i) => (i === index ? { ...b, ...patch } : b)));
+  }
+
+  const isMediaHeader = hasHeader && MEDIA_HEADER_TYPES.includes(headerKind as (typeof MEDIA_HEADER_TYPES)[number]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -62,6 +102,14 @@ export function NewTemplateDialog() {
       setFieldErrors(errors);
       return;
     }
+    if (isMediaHeader && !headerAssetId) {
+      toast({
+        title: "Pick a header file",
+        description: `Choose a saved ${headerKind.toLowerCase()} file from WhatsApp Files for the header.`,
+        variant: "error",
+      });
+      return;
+    }
     setFieldErrors({});
     createTemplate.mutate(
       {
@@ -70,6 +118,19 @@ export function NewTemplateDialog() {
         category: category || undefined,
         param_labels: paramLabels.filter((label) => label.trim().length > 0),
         body_preview: bodyPreview || undefined,
+        header_type: hasHeader
+          ? isMediaHeader
+            ? headerKind
+            : headerText.trim()
+              ? "TEXT"
+              : undefined
+          : undefined,
+        header_text: hasHeader && !isMediaHeader && headerText.trim() ? headerText.trim() : undefined,
+        header_example:
+          hasHeader && !isMediaHeader && headerExample.trim() ? headerExample.trim() : undefined,
+        header_asset_id: isMediaHeader ? headerAssetId : undefined,
+        footer_text: footerText.trim() || undefined,
+        buttons: buttons.filter((b) => b.type === "QUICK_REPLY" || (b.text ?? "").trim()),
       },
       {
         onSuccess: () => {
@@ -166,6 +227,91 @@ export function NewTemplateDialog() {
                 misleading categories, so pick the closest fit.
               </p>
             </div>
+
+            {/* Header */}
+            <div className="rounded-xl border border-slate-200 p-3.5 dark:border-slate-800">
+              <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={hasHeader}
+                  onChange={(e) => setHasHeader(e.target.checked)}
+                  className="rounded border-slate-300 dark:border-slate-600"
+                />
+                Add a header
+              </label>
+              {hasHeader && (
+                <div className="mt-3 flex flex-col gap-3">
+                  <div>
+                    <Label htmlFor="template-header-kind">Header type</Label>
+                    <Select
+                      id="template-header-kind"
+                      value={headerKind}
+                      onChange={(value) => {
+                        setHeaderKind(value as HeaderKind);
+                        setHeaderAssetId("");
+                      }}
+                      className="w-full"
+                    >
+                      <option value="TEXT">Text</option>
+                      <option value="IMAGE">Image</option>
+                      <option value="VIDEO">Video</option>
+                      <option value="DOCUMENT">Document</option>
+                    </Select>
+                  </div>
+
+                  {isMediaHeader ? (
+                    <div>
+                      <Label htmlFor="template-header-asset" required>
+                        Header {headerKind.toLowerCase()} file
+                      </Label>
+                      <Select
+                        id="template-header-asset"
+                        value={headerAssetId}
+                        onChange={setHeaderAssetId}
+                        className="w-full"
+                      >
+                        <option value="">Select a saved file…</option>
+                        {matchingAssets.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.name}
+                          </option>
+                        ))}
+                      </Select>
+                      <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                        {matchingAssets.length === 0
+                          ? `No ${headerKind.toLowerCase()} files saved yet — add one under WhatsApp Files first.`
+                          : "Uploaded to Meta as this template's header when you create it."}
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <Label htmlFor="template-header-text">Header text</Label>
+                        <Input
+                          id="template-header-text"
+                          maxLength={60}
+                          value={headerText}
+                          onChange={(e) => setHeaderText(e.target.value)}
+                          placeholder='e.g. "Your order is on its way" or "Hi {{1}}"'
+                        />
+                      </div>
+                      {headerText.includes("{{1}}") && (
+                        <div>
+                          <Label htmlFor="template-header-example">Example value for {"{{1}}"}</Label>
+                          <Input
+                            id="template-header-example"
+                            value={headerExample}
+                            onChange={(e) => setHeaderExample(e.target.value)}
+                            placeholder="e.g. Asha"
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div>
               <div className="mb-1.5 flex items-center justify-between">
                 <Label className="mb-0">Body parameters</Label>
@@ -234,6 +380,132 @@ export function NewTemplateDialog() {
                 <p id="template-body-preview-error" className="mt-1.5 text-xs text-red-600">
                   {fieldErrors.bodyPreview}
                 </p>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div>
+              <Label htmlFor="template-footer">Footer (optional)</Label>
+              <Input
+                id="template-footer"
+                maxLength={60}
+                value={footerText}
+                onChange={(e) => setFooterText(e.target.value)}
+                placeholder='e.g. "Veerox AI — reply STOP to opt out"'
+              />
+              <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                Small gray text under the body. Static only — no {`{{1}}`} variables allowed here.
+              </p>
+            </div>
+
+            {/* Buttons */}
+            <div>
+              <div className="mb-1.5 flex items-center justify-between">
+                <Label className="mb-0">Buttons (optional)</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={buttons.length >= 10}
+                  onClick={() => setButtons((prev) => [...prev, emptyButton("QUICK_REPLY")])}
+                >
+                  <Plus size={13} aria-hidden /> Add button
+                </Button>
+              </div>
+              {buttons.length === 0 ? (
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Quick replies, a website link, a call button, or a copy-code button — shown
+                  below the message.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {buttons.map((btn, index) => (
+                    <div
+                      key={index}
+                      className="flex flex-col gap-2 rounded-xl border border-slate-200 p-3 dark:border-slate-800"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Select
+                          value={btn.type}
+                          onChange={(value) =>
+                            updateButton(index, emptyButton(value as TemplateButton["type"]))
+                          }
+                          className="w-full"
+                        >
+                          {BUTTON_TYPES.map((t) => (
+                            <option key={t.value} value={t.value}>
+                              {t.label}
+                            </option>
+                          ))}
+                        </Select>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Remove button ${index + 1}`}
+                          onClick={() => setButtons((prev) => prev.filter((_, i) => i !== index))}
+                        >
+                          <Trash2 size={14} aria-hidden />
+                        </Button>
+                      </div>
+
+                      {btn.type === "QUICK_REPLY" && (
+                        <Input
+                          value={btn.text ?? ""}
+                          onChange={(e) => updateButton(index, { text: e.target.value })}
+                          placeholder='Button text, e.g. "Yes, confirm"'
+                        />
+                      )}
+
+                      {btn.type === "URL" && (
+                        <>
+                          <Input
+                            value={btn.text ?? ""}
+                            onChange={(e) => updateButton(index, { text: e.target.value })}
+                            placeholder='Button text, e.g. "Visit website"'
+                          />
+                          <Input
+                            className="font-mono"
+                            value={btn.url ?? ""}
+                            onChange={(e) => updateButton(index, { url: e.target.value })}
+                            placeholder="https://veerox.ai/orders/{{1}}"
+                          />
+                          {(btn.url ?? "").includes("{{1}}") && (
+                            <Input
+                              value={btn.example ?? ""}
+                              onChange={(e) => updateButton(index, { example: e.target.value })}
+                              placeholder="Example value for {{1}} in the URL"
+                            />
+                          )}
+                        </>
+                      )}
+
+                      {btn.type === "PHONE_NUMBER" && (
+                        <>
+                          <Input
+                            value={btn.text ?? ""}
+                            onChange={(e) => updateButton(index, { text: e.target.value })}
+                            placeholder='Button text, e.g. "Call us"'
+                          />
+                          <Input
+                            className="font-mono"
+                            value={btn.phone_number ?? ""}
+                            onChange={(e) => updateButton(index, { phone_number: e.target.value })}
+                            placeholder="+919999999999"
+                          />
+                        </>
+                      )}
+
+                      {btn.type === "COPY_CODE" && (
+                        <Input
+                          value={btn.example ?? ""}
+                          onChange={(e) => updateButton(index, { example: e.target.value })}
+                          placeholder="Sample offer code, e.g. SAVE20"
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </DialogBody>

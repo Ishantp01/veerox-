@@ -88,6 +88,7 @@ def _admin_ticket_out(ticket: SupportTicket, org: Org, account_user: AccountUser
         org_name=org.name,
         account_user_email=account_user.email,
         account_user_name=account_user.full_name,
+        account_user_mobile=account_user.mobile,
     )
 
 

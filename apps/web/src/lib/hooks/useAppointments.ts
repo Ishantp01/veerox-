@@ -55,6 +55,7 @@ export interface AppointmentUpdateInput {
   id: string;
   status?: AppointmentStatus;
   scheduled_at?: string;
+  duration_minutes?: number;
   notes?: string | null;
 }
 
@@ -68,6 +69,18 @@ export function useUpdateAppointment() {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["appointments"] });
+    },
+  });
+}
+
+/** DELETE /appointments/{id} */
+export function useDeleteAppointment() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ ok: boolean }, Error, string>({
+    mutationFn: (id) => apiFetch<{ ok: boolean }>(`/appointments/${id}`, { method: "DELETE" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["appointments"] });
     },

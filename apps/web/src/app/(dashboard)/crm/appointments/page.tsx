@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CalendarClock } from "lucide-react";
+import { CalendarClock, Pencil, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import {
@@ -9,11 +9,30 @@ import {
   APPOINTMENT_STATUS_OPTIONS,
 } from "@/components/crm/appointment-status-badge";
 import { NewAppointmentDialog } from "@/components/crm/new-appointment-dialog";
-import { EmptyState, Pagination, Select, SkeletonRows, Table, TableCell, TableHeader, TableRow } from "@/components/ui";
-import { useAppointments, useClientPagination, useUpdateAppointment, type AppointmentSort } from "@/lib/hooks";
+import { EditAppointmentDialog } from "@/components/crm/edit-appointment-dialog";
+import {
+  Button,
+  EmptyState,
+  Pagination,
+  Select,
+  SkeletonRows,
+  Table,
+  TableCell,
+  TableHeader,
+  TableRow,
+  useConfirm,
+  useToast,
+} from "@/components/ui";
+import {
+  useAppointments,
+  useClientPagination,
+  useDeleteAppointment,
+  useUpdateAppointment,
+  type AppointmentSort,
+} from "@/lib/hooks";
 import { formatDateTime } from "@/lib/format";
 import { useAuth } from "@/lib/auth-context";
-import type { AppointmentStatus } from "@/lib/types";
+import type { Appointment, AppointmentStatus } from "@/lib/types";
 
 const SELECT_CLS =
   "rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200";
@@ -27,10 +46,29 @@ export default function AppointmentsPage() {
     sort,
   });
   const updateAppointment = useUpdateAppointment();
+  const deleteAppointment = useDeleteAppointment();
   const { user } = useAuth();
   const scopedToMember = user?.role === "member" && !user?.is_superuser;
   const appointments = data ?? [];
   const pager = useClientPagination(appointments, 20, `${filter}|${sort}`);
+  const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
+  const confirm = useConfirm();
+  const { toast } = useToast();
+
+  async function handleDelete(appt: Appointment) {
+    const ok = await confirm({
+      title: "Delete appointment",
+      description: `Delete the appointment for "${appt.name ?? "this contact"}" on ${formatDateTime(
+        appt.scheduled_at,
+      )}? This can't be undone.`,
+    });
+    if (!ok) return;
+    deleteAppointment.mutate(appt.id, {
+      onSuccess: () => toast({ title: "Appointment deleted", variant: "success" }),
+      onError: (err) =>
+        toast({ title: "Could not delete appointment", description: err.message, variant: "error" }),
+    });
+  }
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -78,7 +116,7 @@ export default function AppointmentsPage() {
           <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
-                <SkeletonRows rows={5} cols={6} />
+                <SkeletonRows rows={5} cols={7} />
               </tbody>
             </Table>
           </div>
@@ -104,6 +142,7 @@ export default function AppointmentsPage() {
                 <TableHeader>Duration</TableHeader>
                 <TableHeader>Notes</TableHeader>
                 <TableHeader>Status</TableHeader>
+                <TableHeader>Actions</TableHeader>
               </TableRow>
             </thead>
             <tbody>
@@ -139,6 +178,26 @@ export default function AppointmentsPage() {
                       ))}
                     </Select>
                   </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Edit appointment for ${appt.name ?? "contact"}`}
+                        onClick={() => setEditingAppointment(appt)}
+                      >
+                        <Pencil size={14} aria-hidden />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Delete appointment for ${appt.name ?? "contact"}`}
+                        onClick={() => handleDelete(appt)}
+                      >
+                        <Trash2 size={14} aria-hidden />
+                      </Button>
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))}
             </tbody>
@@ -153,6 +212,7 @@ export default function AppointmentsPage() {
           onNext={pager.onNext}
         />
       </QueryBoundary>
+      <EditAppointmentDialog appointment={editingAppointment} onClose={() => setEditingAppointment(null)} />
     </div>
   );
 }

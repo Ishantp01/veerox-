@@ -44,6 +44,7 @@ class AdminTicketOut(TicketOut):
     org_name: str
     account_user_email: str
     account_user_name: str | None = None
+    account_user_mobile: str | None = None
 
 
 class TicketStatusUpdateIn(BaseModel):

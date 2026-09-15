@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { FileText, RefreshCw, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -10,6 +11,7 @@ import {
   Card,
   CardContent,
   EmptyState,
+  Input,
   Pagination,
   SkeletonRows,
   Table,
@@ -26,6 +28,49 @@ import {
   useTemplates,
   useUpdateTemplate,
 } from "@/lib/hooks";
+import type { Template } from "@/lib/types";
+
+const MEDIA_HEADER_TYPES = new Set(["IMAGE", "VIDEO", "DOCUMENT"]);
+
+function DefaultHeaderMediaCell({ template }: { template: Template }) {
+  const [value, setValue] = useState(template.header_example ?? "");
+  const updateTemplate = useUpdateTemplate();
+  const { toast } = useToast();
+
+  if (!MEDIA_HEADER_TYPES.has(template.header_type ?? "")) {
+    return <span className="text-xs text-slate-400">—</span>;
+  }
+
+  function handleSave() {
+    updateTemplate.mutate(
+      { id: template.id, header_example: value.trim() },
+      {
+        onSuccess: () => toast({ title: "Default header media saved" }),
+        onError: (err) =>
+          toast({ title: "Could not save default media URL", description: err.message, variant: "error" }),
+      },
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <Input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="Default https:// URL"
+        className="h-8 min-w-[180px] font-mono text-xs"
+      />
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={value.trim() === (template.header_example ?? "") || updateTemplate.isPending}
+        onClick={handleSave}
+      >
+        Save
+      </Button>
+    </div>
+  );
+}
 
 const STATUS_VARIANT: Record<string, BadgeVariant> = {
   APPROVED: "success",
@@ -59,15 +104,16 @@ export default function TemplatesPage() {
   function handleSync() {
     syncTemplates.mutate(undefined, {
       onSuccess: (result) => {
+        const changed = result.created.length + result.updated.length;
+        const titleParts: string[] = [];
+        if (result.created.length > 0) titleParts.push(`Added ${result.created.length}`);
+        if (result.updated.length > 0) titleParts.push(`Updated ${result.updated.length}`);
         toast({
-          title:
-            result.created.length > 0
-              ? `Added ${result.created.length} template(s) from Meta`
-              : "Already up to date",
+          title: changed > 0 ? `${titleParts.join(", ")} template(s) from Meta` : "Already up to date",
           description:
-            result.created.length > 0
-              ? result.created.map((t) => t.name).join(", ")
-              : `All ${result.total_on_meta} template(s) on Meta already have a local row.`,
+            changed > 0
+              ? [...result.created, ...result.updated].map((t) => t.name).join(", ")
+              : `All ${result.total_on_meta} template(s) on Meta already match locally.`,
         });
       },
       onError: (err) =>
@@ -118,7 +164,7 @@ export default function TemplatesPage() {
             loadingFallback={
               <table className="w-full border-collapse text-sm">
                 <tbody>
-                  <SkeletonRows rows={3} cols={7} />
+                  <SkeletonRows rows={3} cols={8} />
                 </tbody>
               </table>
             }
@@ -139,6 +185,7 @@ export default function TemplatesPage() {
                     <TableHeader>Language</TableHeader>
                     <TableHeader>Category</TableHeader>
                     <TableHeader>Params</TableHeader>
+                    <TableHeader>Default header media</TableHeader>
                     <TableHeader>Status</TableHeader>
                     <TableHeader>Active</TableHeader>
                     <TableHeader>Actions</TableHeader>
@@ -160,6 +207,9 @@ export default function TemplatesPage() {
                         {template.param_labels.length === 0
                           ? "None"
                           : template.param_labels.join(", ")}
+                      </TableCell>
+                      <TableCell>
+                        <DefaultHeaderMediaCell template={template} />
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={template.meta_status} />

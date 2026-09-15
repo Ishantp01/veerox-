@@ -44,7 +44,12 @@ from apps.api.core.tools import (
     _normalize_phone,
 )
 from apps.api.core.usage import get_credit_usage
-from apps.api.core.whatsapp_assets import MAX_ASSET_BYTES, media_type_for_mime
+from apps.api.core.whatsapp_assets import (
+    MAX_ASSET_BYTES,
+    asset_public_url,
+    media_type_for_mime,
+    resolve_asset,
+)
 from apps.api.db.models import (
     AccountUser,
     CallCampaign,
@@ -56,6 +61,7 @@ from apps.api.db.models import (
     Script,
     User,
     WhatsAppAsset,
+    WhatsAppTemplate,
 )
 from apps.api.db.models.org_membership import OrgMembership
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
@@ -2202,6 +2208,7 @@ async def update_whatsapp_settings(
 async def get_calling_settings(
     db: DbDep,
     org: RequestOrgDep,
+    member_scope: MemberScopeDep,
     x_admin_token: str | None = Header(None),
 ) -> CallingSettingsOut:
     """Status of the Plivo voice channel config for the /calling/settings
@@ -2209,7 +2216,14 @@ async def get_calling_settings(
     get_whatsapp_settings for why the credential-status fields stay
     view-only; `preferred_provider` is the one editable field here (see
     `update_calling_settings` below).
+
+    Provider preference is centralized with the org admin: a `role=="member"`
+    caller (`member_scope` non-null — see `MemberScopeDep`) is refused
+    outright rather than shown a read-only value, so the setting stays fully
+    invisible to them, not just non-editable.
     """
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can view calling provider settings")
     record = await db.get(Org, org)
     return CallingSettingsOut(
         configured=voice_plivo.is_configured(),
@@ -2226,12 +2240,18 @@ async def update_calling_settings(
     body: CallingSettingsIn,
     db: DbDep,
     org: RequestOrgDep,
+    member_scope: MemberScopeDep,
     x_admin_token: str | None = Header(None),
 ) -> CallingSettingsOut:
     """Set (or, with `preferred_provider: null`, clear back to automatic)
     this org's preferred voice provider — applied at every outbound-calling
     entry point via `initiate_call`'s `preferred_provider` kwarg (single
-    admin call, AI callback, campaign dialer, follow-up dispatcher)."""
+    admin call, AI callback, campaign dialer, follow-up dispatcher).
+
+    Org-admin-only, same as `get_calling_settings` above — a `role=="member"`
+    caller is refused rather than allowed to change the org's default."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change calling provider settings")
     record = await db.get(Org, org)
     if record is None:
         raise HTTPException(status_code=404, detail="Org not found")
@@ -2782,11 +2802,45 @@ async def outbound_whatsapp(
 
     try:
         if payload.template_name:
+            # Look up the local template row (if any) so we know its header
+            # format — a media header (IMAGE/VIDEO/DOCUMENT) is itself the
+            # parameter (no {{1}}), and Meta rejects the send outright
+            # ("Format mismatch, expected IMAGE, received UNKNOWN") if it's
+            # missing or sent as plain text.
+            template_row = (
+                await db.execute(
+                    select(WhatsAppTemplate).where(
+                        WhatsAppTemplate.org_id == org_id,
+                        WhatsAppTemplate.name == payload.template_name,
+                    )
+                )
+            ).scalars().first()
+            header_type = template_row.header_type if template_row else None
+
+            header_params = payload.template_header_params
+            if (
+                header_type
+                and header_type.upper() in {"IMAGE", "VIDEO", "DOCUMENT"}
+                and header_params
+                and header_params[0]
+                and not header_params[0].lower().startswith("http")
+            ):
+                # Treat a non-URL value as the name of a saved WhatsApp file,
+                # same convention as the send_whatsapp_template agent tool.
+                asset = await resolve_asset(db, org_id, header_params[0])
+                if isinstance(asset, WhatsAppAsset):
+                    header_params = [asset_public_url(asset)]
+
             graph_response = await wa_client.send_template(
                 payload.phone,
                 template_name=payload.template_name,
                 language_code=payload.template_lang,
                 body_params=payload.template_params,
+                header_params=header_params,
+                header_type=header_type,
+                button_params=[b.model_dump() for b in payload.template_button_params]
+                if payload.template_button_params
+                else None,
                 phone_number_id=phone_number_id,
             )
         else:

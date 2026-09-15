@@ -21,7 +21,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useOutboundWhatsApp, useTemplates } from "@/lib/hooks";
 import { ContactPicker } from "@/components/crm/contact-picker";
-import type { Contact } from "@/lib/types";
+import type { Contact, Template } from "@/lib/types";
 
 const whatsappSchema = z
   .object({
@@ -34,6 +34,8 @@ const whatsappSchema = z
     templateName: z.string().trim().optional(),
     templateLang: z.string().trim().optional(),
     templateParams: z.array(z.object({ value: z.string() })),
+    templateHeaderParam: z.string().trim().optional(),
+    templateButtonParams: z.array(z.object({ value: z.string() })),
   })
   .superRefine((data, ctx) => {
     if (data.mode === "text" && !data.text) {
@@ -74,6 +76,14 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [paramLabels, setParamLabels] = useState<string[]>([]);
   const [manualEntry, setManualEntry] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
+  // Only buttons with a dynamic part (URL with {{1}}, or COPY_CODE) need a
+  // value at send time — quick-reply/static-URL/call buttons don't.
+  const dynamicButtons = (selectedTemplate?.buttons ?? [])
+    .map((b, index) => ({ ...b, index }))
+    .filter(
+      (b) => (b.type === "URL" && (b.url ?? "").includes("{{1}}")) || b.type === "COPY_CODE",
+    );
   const outboundWhatsApp = useOutboundWhatsApp();
   const templates = useTemplates({ active: true });
 
@@ -96,29 +106,44 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
       templateName: "",
       templateLang: "en_US",
       templateParams: [],
+      templateHeaderParam: "",
+      templateButtonParams: [],
     },
   });
 
   const { fields, append, remove, replace } = useFieldArray({ control, name: "templateParams" });
+  const { fields: buttonFields, replace: replaceButtonParams } = useFieldArray({
+    control,
+    name: "templateButtonParams",
+  });
   const mode = watch("mode");
 
   function handleTemplateSelect(templateId: string) {
     setSelectedTemplateId(templateId);
     const template = (templates.data ?? []).find((t) => t.id === templateId);
     if (!template) return;
+    setSelectedTemplate(template);
     setValue("templateName", template.name, { shouldValidate: true });
     setValue("templateLang", template.language);
     setParamLabels(template.param_labels);
     replace(template.param_labels.map(() => ({ value: "" })));
+    const isMediaHeader = ["IMAGE", "VIDEO", "DOCUMENT"].includes(template.header_type ?? "");
+    setValue("templateHeaderParam", isMediaHeader ? template.header_example ?? "" : "");
+    const dynamic = (template.buttons ?? [])
+      .filter((b) => (b.type === "URL" && (b.url ?? "").includes("{{1}}")) || b.type === "COPY_CODE");
+    replaceButtonParams(dynamic.map(() => ({ value: "" })));
   }
 
   function handleManualEntryToggle(next: boolean) {
     setManualEntry(next);
     setSelectedTemplateId("");
+    setSelectedTemplate(null);
     setParamLabels([]);
     setValue("templateName", "");
     setValue("templateLang", "en_US");
+    setValue("templateHeaderParam", "");
     replace([]);
+    replaceButtonParams([]);
   }
 
   const onSubmit = handleSubmit((values) => {
@@ -132,6 +157,17 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
             template_params: values.templateParams
               .map((p) => p.value)
               .filter((v) => v.length > 0),
+            template_header_params: values.templateHeaderParam
+              ? [values.templateHeaderParam]
+              : undefined,
+            template_button_params:
+              dynamicButtons.length > 0
+                ? dynamicButtons.map((b, i) => ({
+                    index: b.index,
+                    type: b.type === "COPY_CODE" ? ("copy_code" as const) : ("url" as const),
+                    value: values.templateButtonParams[i]?.value ?? "",
+                  }))
+                : undefined,
           }
         : { phone: values.phone, text: values.text },
       {
@@ -146,6 +182,8 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
             templateName: values.mode === "template" ? values.templateName : "",
             templateLang: values.templateLang || "en_US",
             templateParams: paramLabels.map(() => ({ value: "" })),
+            templateHeaderParam: "",
+            templateButtonParams: dynamicButtons.map(() => ({ value: "" })),
           });
           toast({
             title: "Message sent",
@@ -354,6 +392,38 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
                 );
               })()}
 
+              {selectedTemplate?.header_type &&
+                (["IMAGE", "VIDEO", "DOCUMENT"].includes(selectedTemplate.header_type) ? (
+                  <div>
+                    <Label htmlFor="templateHeaderParam" required>
+                      Header {selectedTemplate.header_type.toLowerCase()}
+                    </Label>
+                    <Input
+                      id="templateHeaderParam"
+                      placeholder="Saved WhatsApp file name, or a direct https:// URL"
+                      {...register("templateHeaderParam")}
+                    />
+                    <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                      Required — this template&apos;s header is a {selectedTemplate.header_type.toLowerCase()},
+                      not text. Name a file already saved under WhatsApp Files, or paste a public URL.
+                      {selectedTemplate.header_example && (
+                        <> Pre-filled from this template&apos;s saved default — edit it to send a different one.</>
+                      )}
+                    </p>
+                  </div>
+                ) : (
+                  (selectedTemplate.header_text ?? "").includes("{{1}}") && (
+                    <div>
+                      <Label htmlFor="templateHeaderParam">Header value ({`{{1}}`})</Label>
+                      <Input
+                        id="templateHeaderParam"
+                        placeholder={selectedTemplate.header_example || "Value for the header's {{1}}"}
+                        {...register("templateHeaderParam")}
+                      />
+                    </div>
+                  )
+                ))}
+
               <div>
                 <div className="mb-1.5 flex items-center justify-between">
                   <Label className="mb-0">Body parameters</Label>
@@ -401,6 +471,31 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
                   </div>
                 )}
               </div>
+
+              {dynamicButtons.length > 0 && (
+                <div>
+                  <Label className="mb-1.5">Button values</Label>
+                  <div className="flex flex-col gap-2">
+                    {buttonFields.map((field, index) => {
+                      const btn = dynamicButtons[index];
+                      const isCopyCode = btn.type === "COPY_CODE";
+                      return (
+                        <div key={field.id} className="flex items-center gap-2">
+                          <span className="w-28 shrink-0 text-xs text-slate-400">
+                            {isCopyCode ? "Copy code" : `"${btn.text}" URL`}
+                          </span>
+                          <Input
+                            placeholder={
+                              isCopyCode ? "e.g. SAVE20" : "Value for the {{1}} in the URL"
+                            }
+                            {...register(`templateButtonParams.${index}.value` as const)}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </>
           )}
 

@@ -277,3 +277,34 @@ async def update_appointment(
     await db.refresh(appointment)
     name, phone = await _resolve_name_phone(db, appointment)
     return _appointment_out(appointment, name, phone)
+
+
+@router.delete("/{appointment_id}")
+async def delete_appointment(
+    appointment_id: UUID, db: DbDep, org_id: RequestOrgDep, member_scope: MemberScopeDep
+) -> dict[str, bool]:
+    stmt = select(Appointment).where(
+        Appointment.id == appointment_id, Appointment.org_id == org_id
+    )
+    if member_scope is not None:
+        stmt = stmt.where(_member_scope_clause(member_scope))
+    appointment = (await db.execute(stmt)).scalar_one_or_none()
+    if appointment is None:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    # Deleting an appointment must not let its pre-scheduled reminder (see
+    # book_appointment in core/tools.py) fire afterwards.
+    if appointment.lead_id is not None:
+        await db.execute(
+            update(FollowUpTask)
+            .where(
+                FollowUpTask.lead_id == appointment.lead_id,
+                FollowUpTask.template_name == _APPOINTMENT_REMINDER_TEMPLATE_NAME,
+                FollowUpTask.status == "pending",
+            )
+            .values(status="cancelled")
+        )
+
+    await db.delete(appointment)
+    await db.commit()
+    return {"ok": True}
