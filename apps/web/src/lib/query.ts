@@ -47,6 +47,7 @@ export const queryKeys = {
   tools: () => ["tools"] as const,
   script: () => ["script"] as const,
   scripts: () => ["scripts"] as const,
+  qualificationCriteriaPresets: () => ["qualification-criteria-presets"] as const,
   orgNumbers: () => ["org-numbers"] as const,
   settings: () => ["settings"] as const,
   whatsappSettings: () => ["settings", "whatsapp"] as const,

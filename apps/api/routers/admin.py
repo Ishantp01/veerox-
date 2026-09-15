@@ -58,6 +58,7 @@ from apps.api.db.models import (
     Lead,
     Message,
     Org,
+    QualificationCriteriaPreset,
     Script,
     User,
     WhatsAppAsset,
@@ -100,6 +101,11 @@ from apps.api.schemas.admin import (
     WhatsAppSettingsOut,
 )
 from apps.api.schemas.org_numbers import OrgPhoneNumberOut
+from apps.api.schemas.qualification_criteria_preset import (
+    QualificationCriteriaPresetCreateIn,
+    QualificationCriteriaPresetOut,
+    QualificationCriteriaPresetUpdateIn,
+)
 from apps.api.schemas.script import ScriptCreateIn, ScriptUpdateIn
 from apps.api.schemas.script import ScriptOut as ScriptLibraryOut
 from apps.api.schemas.whatsapp_asset import WhatsAppAssetOut, WhatsAppAssetUpdateIn
@@ -1506,6 +1512,7 @@ def _campaign_out(
         template_name=campaign.template_name,
         template_language=campaign.template_language,
         template_params=campaign.template_params,
+        template_header_params=campaign.template_header_params,
         custom_message=campaign.custom_message,
         script_id=campaign.script_id,
         phone_number_id=campaign.phone_number_id,
@@ -1530,6 +1537,7 @@ async def _create_campaign_from_rows(
     template_name: str | None = None,
     template_language: str | None = None,
     template_params: list[str] | None = None,
+    template_header_params: list[str] | None = None,
     custom_message: str | None = None,
     script_id: UUID | None = None,
     phone_number_id: UUID | None = None,
@@ -1577,6 +1585,7 @@ async def _create_campaign_from_rows(
         template_name=template_name,
         template_language=template_language,
         template_params=template_params,
+        template_header_params=template_header_params,
         custom_message=custom_message,
         script_id=script_id,
         phone_number_id=phone_number_id,
@@ -1707,6 +1716,7 @@ async def _create_campaigns_from_rows(
     template_name: str | None = None,
     template_language: str | None = None,
     template_params: list[str] | None = None,
+    template_header_params: list[str] | None = None,
     custom_message: str | None = None,
     script_id: UUID | None = None,
     phone_number_id: UUID | None = None,
@@ -1771,6 +1781,7 @@ async def _create_campaigns_from_rows(
         template_name=template_name,
         template_language=template_language,
         template_params=template_params,
+        template_header_params=template_header_params,
         custom_message=custom_message,
         script_id=script_id,
         phone_number_id=phone_number_id,
@@ -1796,6 +1807,7 @@ async def create_campaign(
     template_name: str | None = Form(None),
     template_language: str | None = Form(None),
     template_params: str | None = Form(None),
+    template_header_params: str | None = Form(None),
     custom_message: str | None = Form(None),
     script_id: UUID | None = Form(None),
     phone_number_id: UUID | None = Form(None),
@@ -1833,6 +1845,7 @@ async def create_campaign(
     if max_attempts < 1:
         raise HTTPException(status_code=400, detail="max_attempts must be at least 1")
     parsed_template_params = _parse_template_params_form(template_params)
+    parsed_header_params = _parse_template_params_form(template_header_params)
 
     filename = (file.filename or "").lower()
     raw = await file.read()
@@ -1856,6 +1869,27 @@ async def create_campaign(
         if number is None or number.org_id != org_id:
             raise HTTPException(status_code=400, detail="phone_number_id does not belong to this org")
 
+    # A media (IMAGE/VIDEO/DOCUMENT) header is itself the header parameter —
+    # resolve a saved-file name to its public URL once, here, rather than on
+    # every dispatcher tick. Same convention as the single-send outbound
+    # WhatsApp route (POST /admin/outbound/whatsapp) — a non-"http" value
+    # names a file already saved under WhatsApp Files.
+    if template_name and parsed_header_params and parsed_header_params[0]:
+        template_row = (
+            await db.execute(
+                select(WhatsAppTemplate).where(
+                    WhatsAppTemplate.org_id == org_id, WhatsAppTemplate.name == template_name
+                )
+            )
+        ).scalars().first()
+        header_type = (template_row.header_type if template_row else None) or ""
+        if header_type.upper() in {"IMAGE", "VIDEO", "DOCUMENT"} and not parsed_header_params[
+            0
+        ].lower().startswith("http"):
+            asset = await resolve_asset(db, org_id, parsed_header_params[0])
+            if isinstance(asset, WhatsAppAsset):
+                parsed_header_params = [asset_public_url(asset)]
+
     resolved_status = {"draft": "draft", "now": "running", "scheduled": "scheduled"}[start_mode]
     return await _create_campaigns_from_rows(
         db,
@@ -1869,6 +1903,7 @@ async def create_campaign(
         template_name=template_name,
         template_language=template_language,
         template_params=parsed_template_params,
+        template_header_params=parsed_header_params,
         custom_message=custom_message,
         script_id=script_id,
         phone_number_id=phone_number_id,
@@ -2429,6 +2464,85 @@ async def delete_script(
     if script is None or script.org_id != org:
         raise HTTPException(status_code=404, detail="Script not found")
     await db.delete(script)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/qualification-criteria-presets", response_model=list[QualificationCriteriaPresetOut])
+async def list_qualification_criteria_presets(
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> list[QualificationCriteriaPresetOut]:
+    """This org's saved qualification-criteria presets — picked from a
+    dropdown when creating a campaign (POST /admin/campaigns' ``criteria``)
+    instead of retyping the bar every time."""
+    result = await db.execute(
+        select(QualificationCriteriaPreset)
+        .where(QualificationCriteriaPreset.org_id == org)
+        .order_by(QualificationCriteriaPreset.created_at)
+    )
+    return [QualificationCriteriaPresetOut.model_validate(p) for p in result.scalars().all()]
+
+
+@router.post(
+    "/qualification-criteria-presets", response_model=QualificationCriteriaPresetOut, status_code=201
+)
+async def create_qualification_criteria_preset(
+    body: QualificationCriteriaPresetCreateIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> QualificationCriteriaPresetOut:
+    """Add a preset to this org's qualification-criteria library."""
+    preset = QualificationCriteriaPreset(
+        org_id=org, name=body.name.strip(), criteria_text=body.criteria_text.strip()
+    )
+    db.add(preset)
+    await db.commit()
+    await db.refresh(preset)
+    return QualificationCriteriaPresetOut.model_validate(preset)
+
+
+@router.patch(
+    "/qualification-criteria-presets/{preset_id}", response_model=QualificationCriteriaPresetOut
+)
+async def update_qualification_criteria_preset(
+    preset_id: UUID,
+    body: QualificationCriteriaPresetUpdateIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> QualificationCriteriaPresetOut:
+    """Rename and/or edit a preset's criteria text. Campaigns already created
+    from this preset keep their own copy of the text (CallCampaign.criteria)
+    and are unaffected."""
+    preset = await db.get(QualificationCriteriaPreset, preset_id)
+    if preset is None or preset.org_id != org:
+        raise HTTPException(status_code=404, detail="Qualification criteria preset not found")
+    fields = body.model_dump(exclude_unset=True)
+    if "name" in fields:
+        preset.name = fields["name"].strip()
+    if "criteria_text" in fields:
+        preset.criteria_text = fields["criteria_text"].strip()
+    await db.commit()
+    await db.refresh(preset)
+    return QualificationCriteriaPresetOut.model_validate(preset)
+
+
+@router.delete("/qualification-criteria-presets/{preset_id}")
+async def delete_qualification_criteria_preset(
+    preset_id: UUID,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> dict[str, bool]:
+    """Remove a preset from the library. Campaigns already created from it
+    keep their own copy of the criteria text and are unaffected."""
+    preset = await db.get(QualificationCriteriaPreset, preset_id)
+    if preset is None or preset.org_id != org:
+        raise HTTPException(status_code=404, detail="Qualification criteria preset not found")
+    await db.delete(preset)
     await db.commit()
     return {"ok": True}
 

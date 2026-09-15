@@ -33,6 +33,7 @@ from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
+from apps.api.db.models.template import WhatsAppTemplate
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
@@ -57,10 +58,21 @@ _BATCH_SIZE = 10
 _SEND_TIME_ZONE = ZoneInfo("Asia/Kolkata")
 
 # (target_id, target_name, phone, criteria, attempt_count, phone_number_id,
-# template_name, template_language, template_params, custom_message) — see
-# _claim_targets' docstring.
+# org_id, template_name, template_language, template_params,
+# template_header_params, custom_message) — see _claim_targets' docstring.
 _ClaimedTarget = tuple[
-    str, str | None, str, str, int, str | None, str | None, str | None, list[str] | None, str | None
+    str,
+    str | None,
+    str,
+    str,
+    int,
+    str | None,
+    UUID,
+    str | None,
+    str | None,
+    list[str] | None,
+    list[str] | None,
+    str | None,
 ]
 
 
@@ -90,13 +102,15 @@ async def _claim_targets() -> list[_ClaimedTarget]:
     running WhatsApp campaigns.
 
     Returns ``[(target_id, target_name, phone, criteria, attempt_count,
-    phone_number_id, template_name, template_language, template_params,
-    custom_message), ...]`` so the caller can send outside this short-lived
-    session. ``phone_number_id`` is the owning org's dedicated WhatsApp
-    number (see ``Org.whatsapp_phone_number_id``), or ``None`` to fall back
-    to the platform default. ``template_name``/``template_language``/
-    ``template_params``/``custom_message`` come from the owning campaign —
-    see ``CallCampaign.template_name`` and ``_send_one`` below.
+    phone_number_id, org_id, template_name, template_language,
+    template_params, template_header_params, custom_message), ...]`` so the
+    caller can send outside this short-lived session. ``phone_number_id`` is
+    the owning org's dedicated WhatsApp number (see
+    ``Org.whatsapp_phone_number_id``), or ``None`` to fall back to the
+    platform default. ``template_name``/``template_language``/
+    ``template_params``/``template_header_params``/``custom_message`` come
+    from the owning campaign — see ``CallCampaign.template_name`` and
+    ``_send_one`` below.
 
     Targets belonging to an org that's over its plan's
     ``max_whatsapp_messages`` are skipped (left ``pending``, not
@@ -118,6 +132,7 @@ async def _claim_targets() -> list[_ClaimedTarget]:
                 CallCampaign.template_name,
                 CallCampaign.template_language,
                 CallCampaign.template_params,
+                CallCampaign.template_header_params,
                 CallCampaign.custom_message,
             )
             .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
@@ -143,6 +158,7 @@ async def _claim_targets() -> list[_ClaimedTarget]:
                 template_name,
                 template_language,
                 template_params,
+                template_header_params,
                 custom_message,
             ) = row
             if len(claimed) >= _BATCH_SIZE:
@@ -165,9 +181,11 @@ async def _claim_targets() -> list[_ClaimedTarget]:
                     criteria,
                     target.attempt_count,
                     phone_number_id,
+                    org_id,
                     template_name,
                     template_language,
                     template_params,
+                    template_header_params,
                     custom_message,
                 )
             )
@@ -236,19 +254,47 @@ async def _send_one(
     criteria: str,
     attempt_count: int,
     phone_number_id: str | None,
+    org_id: UUID,
     template_name: str | None,
     template_language: str | None,
     template_params: list[str] | None,
+    template_header_params: list[str] | None,
     custom_message: str | None,
 ) -> None:
     try:
         if template_name:
             body_params = _resolve_template_body_params(template_params, target_name)
+            header_params: list[str] | None = None
+            header_type: str | None = None
+            if template_header_params and template_header_params[0]:
+                # Look up the local template row for its header format — a
+                # media (IMAGE/VIDEO/DOCUMENT) header is itself the
+                # parameter (no {{1}}), so Meta needs header_type to know
+                # not to treat the value as header text. The admin form
+                # already resolved a saved-file name to a public URL at
+                # campaign-creation time (routers/admin.py's create_campaign)
+                # — nothing left to resolve here.
+                async with AsyncSessionLocal() as db:
+                    template_row = (
+                        await db.execute(
+                            select(WhatsAppTemplate).where(
+                                WhatsAppTemplate.org_id == org_id,
+                                WhatsAppTemplate.name == template_name,
+                            )
+                        )
+                    ).scalars().first()
+                header_type = template_row.header_type if template_row else None
+                # Resolved the same way as the body — harmless for a media
+                # header's URL, which never matches a dynamic token and
+                # passes through unchanged.
+                header_params = _resolve_template_body_params(template_header_params, target_name)
             await wa_client.send_template(
                 phone,
                 template_name,
                 template_language or "en_US",
                 body_params=body_params,
+                header_params=header_params,
+                header_type=header_type,
                 phone_number_id=phone_number_id,
             )
         else:

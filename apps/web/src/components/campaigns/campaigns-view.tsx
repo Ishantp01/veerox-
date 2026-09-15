@@ -13,6 +13,13 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  Dialog,
+  DialogBody,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogTitle,
+  DialogTrigger,
   EmptyState,
   Input,
   Label,
@@ -39,8 +46,11 @@ import {
   useClientPagination,
   useCampaigns,
   useCreateCampaign,
+  useCreateQualificationCriteriaPreset,
+  useDeleteQualificationCriteriaPreset,
   useOrgNumbers,
   usePauseCampaign,
+  useQualificationCriteriaPresets,
   useResumeCampaign,
   useScheduleCampaign,
   useScripts,
@@ -58,16 +68,32 @@ const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
 const campaignSchema = z.object({
   name: z.string().trim().min(1, "Campaign name is required"),
-  criteria: z
+  criteriaPresetId: z.string().trim().min(1, "Pick a qualification criteria preset"),
+});
+
+const presetSchema = z.object({
+  name: z.string().trim().min(1, "Preset name is required"),
+  criteria_text: z
     .string()
     .trim()
-    .min(1, "Qualification criteria is required")
-    .max(5000, "Qualification criteria must be under 5000 characters"),
+    .min(1, "Criteria text is required")
+    .max(5000, "Criteria text must be under 5000 characters"),
 });
 
 type CampaignFieldErrors = Partial<
-  Record<"name" | "criteria" | "file" | "scheduledAt" | "templateParams" | "maxAttempts", string>
+  Record<
+    | "name"
+    | "criteriaPresetId"
+    | "file"
+    | "scheduledAt"
+    | "templateParams"
+    | "templateHeaderParam"
+    | "maxAttempts",
+    string
+  >
 >;
+
+type PresetFieldErrors = Partial<Record<"name" | "criteria_text", string>>;
 
 function validateContactFile(file: File | null): string | null {
   if (!file) return "A contact list file is required";
@@ -108,13 +134,16 @@ export function CampaignsView() {
   const showCreator = campaigns.some((c) => c.created_by_name);
 
   const [name, setName] = useState("");
-  const [criteria, setCriteria] = useState("");
+  const [criteriaPresetId, setCriteriaPresetId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [startMode, setStartMode] = useState<CampaignStartMode>("draft");
   const [scheduledAt, setScheduledAt] = useState("");
   const [templateId, setTemplateId] = useState("");
   const [paramSources, setParamSources] = useState<TemplateParamSource[]>([]);
   const [paramCustomValues, setParamCustomValues] = useState<string[]>([]);
+  const [headerSource, setHeaderSource] = useState<TemplateParamSource>("custom");
+  const [headerCustomValue, setHeaderCustomValue] = useState("");
+  const [headerMediaValue, setHeaderMediaValue] = useState("");
   const [customMessage, setCustomMessage] = useState("");
   const [scriptId, setScriptId] = useState("");
   const [phoneNumberId, setPhoneNumberId] = useState("");
@@ -130,6 +159,16 @@ export function CampaignsView() {
   const { data: orgNumbersData } = useOrgNumbers();
   const phoneNumbers = orgNumbersData?.phone_numbers ?? [];
 
+  const { data: presetsData } = useQualificationCriteriaPresets();
+  const criteriaPresets = presetsData ?? [];
+  const selectedPreset = criteriaPresets.find((p) => p.id === criteriaPresetId);
+  const [managePresetsOpen, setManagePresetsOpen] = useState(false);
+  const [presetName, setPresetName] = useState("");
+  const [presetText, setPresetText] = useState("");
+  const [presetFieldErrors, setPresetFieldErrors] = useState<PresetFieldErrors>({});
+  const createPreset = useCreateQualificationCriteriaPreset();
+  const deletePreset = useDeleteQualificationCriteriaPreset();
+
   const { data: templatesData } = useTemplates({ active: true });
   // Every Meta-approved template — including ones with {{1}}/{{2}} params,
   // which are mapped below (contact name from the file, the send date/time,
@@ -143,10 +182,56 @@ export function CampaignsView() {
     if (!template) {
       setParamSources([]);
       setParamCustomValues([]);
+      setHeaderSource("custom");
+      setHeaderCustomValue("");
+      setHeaderMediaValue("");
       return;
     }
     setParamSources(template.param_labels.map(guessTemplateParamSource));
     setParamCustomValues(template.param_labels.map(() => ""));
+    const isMediaHeader = ["IMAGE", "VIDEO", "DOCUMENT"].includes(template.header_type ?? "");
+    setHeaderMediaValue(isMediaHeader ? template.header_example ?? "" : "");
+    setHeaderSource("custom");
+    setHeaderCustomValue("");
+  }
+
+  const isMediaHeaderTemplate = ["IMAGE", "VIDEO", "DOCUMENT"].includes(
+    selectedTemplate?.header_type ?? ""
+  );
+  const hasTextHeaderParam = (selectedTemplate?.header_text ?? "").includes("{{1}}");
+
+  function handleAddPreset() {
+    const parsed = presetSchema.safeParse({ name: presetName, criteria_text: presetText });
+    if (!parsed.success) {
+      const errors: PresetFieldErrors = {};
+      for (const issue of parsed.error.issues) {
+        const key = issue.path[0] as keyof PresetFieldErrors;
+        if (!errors[key]) errors[key] = issue.message;
+      }
+      setPresetFieldErrors(errors);
+      return;
+    }
+    setPresetFieldErrors({});
+    createPreset.mutate(parsed.data, {
+      onSuccess: (preset) => {
+        setPresetName("");
+        setPresetText("");
+        setCriteriaPresetId(preset.id);
+        toast({ title: "Preset saved", variant: "success" });
+      },
+      onError: (err) =>
+        toast({ title: "Couldn't save preset", description: err.message, variant: "error" }),
+    });
+  }
+
+  function handleDeletePreset(id: string) {
+    deletePreset.mutate(id, {
+      onSuccess: () => {
+        if (criteriaPresetId === id) setCriteriaPresetId("");
+      },
+      onError: (err) =>
+        toast({ title: "Couldn't delete preset", description: err.message, variant: "error" }),
+    });
   }
 
   const createCampaign = useCreateCampaign();
@@ -170,7 +255,7 @@ export function CampaignsView() {
     e.preventDefault();
 
     const errors: CampaignFieldErrors = {};
-    const parsed = campaignSchema.safeParse({ name, criteria });
+    const parsed = campaignSchema.safeParse({ name, criteriaPresetId });
     if (!parsed.success) {
       for (const issue of parsed.error.issues) {
         const key = issue.path[0] as keyof CampaignFieldErrors;
@@ -189,6 +274,17 @@ export function CampaignsView() {
     if (hasEmptyCustomParam) {
       errors.templateParams = "Fill in every custom placeholder value, or pick a different source";
     }
+    if (isMediaHeaderTemplate && !headerMediaValue.trim()) {
+      errors.templateHeaderParam = "Required — this template's header is media, not text";
+    }
+    if (
+      !isMediaHeaderTemplate &&
+      hasTextHeaderParam &&
+      headerSource === "custom" &&
+      !headerCustomValue.trim()
+    ) {
+      errors.templateHeaderParam = "Fill in the header value, or pick a different source";
+    }
     const attempts = Number(maxAttempts);
     if (!Number.isInteger(attempts) || attempts < 1) {
       errors.maxAttempts = "Enter a whole number of 1 or more";
@@ -198,23 +294,29 @@ export function CampaignsView() {
       setFieldErrors(errors);
       return;
     }
-    if (!file) return;
+    if (!file || !selectedPreset) return;
     setFieldErrors({});
 
     const templateParams = selectedTemplate
       ? resolveTemplateParams(selectedTemplate.param_labels, paramSources, paramCustomValues)
       : undefined;
+    const templateHeaderParams = isMediaHeaderTemplate
+      ? [headerMediaValue.trim()]
+      : hasTextHeaderParam
+        ? resolveTemplateParams(["Header"], [headerSource], [headerCustomValue])
+        : undefined;
 
     createCampaign.mutate(
       {
         name,
-        criteria,
+        criteria: selectedPreset.criteria_text,
         file,
         startMode,
         scheduledStartAt: startMode === "scheduled" ? new Date(scheduledAt).toISOString() : undefined,
         templateName: selectedTemplate?.name,
         templateLanguage: selectedTemplate?.language,
         templateParams,
+        templateHeaderParams,
         customMessage: customMessage.trim() || undefined,
         scriptId: scriptId || undefined,
         phoneNumberId: phoneNumberId || undefined,
@@ -237,13 +339,16 @@ export function CampaignsView() {
             variant: result.skipped > 0 ? "info" : "success",
           });
           setName("");
-          setCriteria("");
+          setCriteriaPresetId("");
           setFile(null);
           setStartMode("draft");
           setScheduledAt("");
           setTemplateId("");
           setParamSources([]);
           setParamCustomValues([]);
+          setHeaderSource("custom");
+          setHeaderCustomValue("");
+          setHeaderMediaValue("");
           setCustomMessage("");
           setScriptId("");
           setPhoneNumberId("");
@@ -412,22 +517,126 @@ export function CampaignsView() {
               </div>
             </div>
             <div>
-              <Label htmlFor="campaign-criteria" required>
-                Qualification criteria
-              </Label>
-              <Textarea
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="campaign-criteria" required>
+                  Qualification criteria
+                </Label>
+                <Dialog open={managePresetsOpen} onOpenChange={setManagePresetsOpen}>
+                  <DialogTrigger>
+                    <button
+                      type="button"
+                      className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
+                    >
+                      Manage presets
+                    </button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogTitle>Qualification criteria presets</DialogTitle>
+                    <DialogBody>
+                      <div className="space-y-2">
+                        {criteriaPresets.length === 0 && (
+                          <p className="text-xs text-slate-400">No presets saved yet.</p>
+                        )}
+                        {criteriaPresets.map((p) => (
+                          <div
+                            key={p.id}
+                            className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-800"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                                {p.name}
+                              </p>
+                              <p className="mt-0.5 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">
+                                {p.criteria_text}
+                              </p>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeletePreset(p.id)}
+                            >
+                              Delete
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-4 space-y-3 border-t border-slate-100 pt-4 dark:border-slate-800">
+                        <div>
+                          <Label htmlFor="preset-name" required>
+                            New preset name
+                          </Label>
+                          <Input
+                            id="preset-name"
+                            value={presetName}
+                            onChange={(e) => setPresetName(e.target.value)}
+                            placeholder="e.g. Demo interest + budget"
+                            className="w-full"
+                            aria-invalid={presetFieldErrors.name ? true : undefined}
+                          />
+                          {presetFieldErrors.name && (
+                            <p className="mt-1.5 text-xs text-red-600">{presetFieldErrors.name}</p>
+                          )}
+                        </div>
+                        <div>
+                          <Label htmlFor="preset-text" required>
+                            Criteria text
+                          </Label>
+                          <Textarea
+                            id="preset-text"
+                            value={presetText}
+                            onChange={(e) => setPresetText(e.target.value)}
+                            placeholder="e.g. Prospect must confirm interest in a demo and have a budget above $5,000."
+                            aria-invalid={presetFieldErrors.criteria_text ? true : undefined}
+                          />
+                          {presetFieldErrors.criteria_text && (
+                            <p className="mt-1.5 text-xs text-red-600">
+                              {presetFieldErrors.criteria_text}
+                            </p>
+                          )}
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={createPreset.isPending}
+                          onClick={handleAddPreset}
+                        >
+                          {createPreset.isPending ? "Saving..." : "Save preset"}
+                        </Button>
+                      </div>
+                    </DialogBody>
+                    <DialogFooter>
+                      <DialogClose>
+                        <Button type="button" variant="ghost">
+                          Done
+                        </Button>
+                      </DialogClose>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
+              <Select
                 id="campaign-criteria"
-                value={criteria}
-                onChange={(e) => setCriteria(e.target.value)}
-                placeholder="e.g. Prospect must confirm interest in a demo and have a budget above $5,000."
-                required
-                aria-invalid={fieldErrors.criteria ? true : undefined}
-                aria-describedby={fieldErrors.criteria ? "campaign-criteria-error" : undefined}
-              />
-              {fieldErrors.criteria && (
+                value={criteriaPresetId}
+                onChange={setCriteriaPresetId}
+                className="w-full"
+              >
+                <option value="">
+                  {criteriaPresets.length === 0 ? "No presets saved — add one" : "Select a preset..."}
+                </option>
+                {criteriaPresets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </Select>
+              {fieldErrors.criteriaPresetId && (
                 <p id="campaign-criteria-error" className="mt-1.5 text-xs text-red-600">
-                  {fieldErrors.criteria}
+                  {fieldErrors.criteriaPresetId}
                 </p>
+              )}
+              {selectedPreset && (
+                <p className="mt-1.5 line-clamp-2 text-xs text-slate-400">{selectedPreset.criteria_text}</p>
               )}
               <p className="mt-1.5 text-xs text-slate-400">
                 The AI agent asks questions to judge each prospect against this bar, then records its
@@ -532,6 +741,49 @@ export function CampaignsView() {
                 />
               </div>
             </div>
+            {selectedTemplate?.header_type &&
+              (isMediaHeaderTemplate ? (
+                <div>
+                  <Label htmlFor="campaign-template-header" required>
+                    Header {selectedTemplate.header_type.toLowerCase()}
+                  </Label>
+                  <Input
+                    id="campaign-template-header"
+                    value={headerMediaValue}
+                    onChange={(e) => setHeaderMediaValue(e.target.value)}
+                    placeholder="Saved WhatsApp file name, or a direct https:// URL"
+                    className="w-full"
+                    aria-invalid={fieldErrors.templateHeaderParam ? true : undefined}
+                  />
+                  {fieldErrors.templateHeaderParam && (
+                    <p className="mt-1.5 text-xs text-red-600">{fieldErrors.templateHeaderParam}</p>
+                  )}
+                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                    Required — this template&apos;s header is a {selectedTemplate.header_type.toLowerCase()},
+                    not text. Name a file already saved under WhatsApp Files, or paste a public URL. Sent
+                    to every WhatsApp contact in this upload.
+                    {selectedTemplate.header_example && (
+                      <> Pre-filled from this template&apos;s saved default — edit it to send a different one.</>
+                    )}
+                  </p>
+                </div>
+              ) : (
+                hasTextHeaderParam && (
+                  <div>
+                    <TemplateParamMapper
+                      paramLabels={["Header value"]}
+                      sources={[headerSource]}
+                      customValues={[headerCustomValue]}
+                      onSourceChange={(_, source) => setHeaderSource(source)}
+                      onCustomValueChange={(_, value) => setHeaderCustomValue(value)}
+                      nameSourceLabel="Contact name (from file)"
+                    />
+                    {fieldErrors.templateHeaderParam && (
+                      <p className="mt-1.5 text-xs text-red-600">{fieldErrors.templateHeaderParam}</p>
+                    )}
+                  </div>
+                )
+              ))}
             {selectedTemplate && selectedTemplate.param_labels.length > 0 && (
               <div>
                 <TemplateParamMapper

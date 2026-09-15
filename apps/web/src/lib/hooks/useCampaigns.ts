@@ -50,6 +50,10 @@ export interface CreateCampaignInput {
   templateLanguage?: string;
   /** Ordered per-{{1}}/{{2}}/... values — see template-param-mapper.tsx. */
   templateParams?: string[];
+  /** Same convention as templateParams, but for the template's HEADER
+   * placeholder — a single-item array (a {{1}} value/token, or a saved
+   * WhatsApp file name / public URL for a media header). */
+  templateHeaderParams?: string[];
   customMessage?: string;
   /** Voice-only, optional — unset falls back to the org's default script /
    * auto-rotation across its numbers, same as before either field existed. */
@@ -85,6 +89,9 @@ async function createCampaign(input: CreateCampaignInput): Promise<CampaignCreat
   if (input.templateLanguage) form.append("template_language", input.templateLanguage);
   if (input.templateParams && input.templateParams.length > 0) {
     form.append("template_params", JSON.stringify(input.templateParams));
+  }
+  if (input.templateHeaderParams && input.templateHeaderParams.length > 0) {
+    form.append("template_header_params", JSON.stringify(input.templateHeaderParams));
   }
   if (input.customMessage) form.append("custom_message", input.customMessage);
   if (input.scriptId) form.append("script_id", input.scriptId);

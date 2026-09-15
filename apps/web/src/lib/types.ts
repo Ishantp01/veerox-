@@ -255,6 +255,19 @@ export interface ScriptLibraryItem {
   updated_at: string;
 }
 
+// GET/POST/PATCH/DELETE /admin/qualification-criteria-presets — one entry in
+// the org's reusable qualification-criteria library (see
+// apps/api/db/models/qualification_criteria_preset.py). Picked from a
+// dropdown when creating a campaign instead of retyping the bar every time;
+// campaigns already created from a preset keep their own copy of the text.
+export interface QualificationCriteriaPreset {
+  id: string;
+  name: string;
+  criteria_text: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // GET/POST/PATCH/DELETE /admin/whatsapp-assets — one file in the org's
 // WhatsApp media library. The AI agent sends the right one to a contact who
 // asks for that information (see apps/api/core/tools.py's send_whatsapp_file).
@@ -435,6 +448,10 @@ export interface Campaign {
   template_name: string | null;
   template_language: string | null;
   template_params: string[] | null;
+  /** Same convention as template_params, but for the template's HEADER
+   * placeholder (a {{1}} value, or the resolved URL of a media header) —
+   * see template-param-mapper.tsx. */
+  template_header_params: string[] | null;
   custom_message: string | null;
   // Voice-only overrides — null means "use the org default script" /
   // "auto-rotate across the org's numbers".

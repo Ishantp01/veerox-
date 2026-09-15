@@ -14,6 +14,7 @@ from apps.api.db.models.org_membership import OrgMembership
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.models.plan import Plan
 from apps.api.db.models.platform_settings import PlatformSettings
+from apps.api.db.models.qualification_criteria_preset import QualificationCriteriaPreset
 from apps.api.db.models.script import Script
 from apps.api.db.models.support_ticket import SupportTicket
 from apps.api.db.models.template import WhatsAppTemplate
@@ -39,6 +40,7 @@ __all__ = [
     "OrgPhoneNumber",
     "Plan",
     "PlatformSettings",
+    "QualificationCriteriaPreset",
     "Script",
     "SupportTicket",
     "UsageCounter",

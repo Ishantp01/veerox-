@@ -52,6 +52,7 @@ class CampaignOut(BaseModel):
     template_name: str | None = None
     template_language: str | None = None
     template_params: list[str] | None = None
+    template_header_params: list[str] | None = None
     custom_message: str | None = None
     # Voice-only overrides — NULL means "use the org default script" /
     # "auto-rotate across the org's numbers" (see channels/voice/

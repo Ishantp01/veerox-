@@ -46,6 +46,16 @@ class CallCampaign(Base):
     # used as-is. See workers/whatsapp_dispatcher.py's
     # _resolve_template_body_params.
     template_params: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Same convention as template_params, but for the template's HEADER
+    # component (see WhatsAppTemplate.header_type). A single-item list:
+    # for a TEXT header with a {{1}}, one of the same dynamic tokens or a
+    # literal; for a media (IMAGE/VIDEO/DOCUMENT) header, a public https://
+    # URL or the name of a saved WhatsApp file (see
+    # core/whatsapp_assets.resolve_asset). None for a template with no
+    # header, or a static (no-{{1}}) TEXT header. Resolved fresh at send
+    # time by workers/whatsapp_dispatcher.py's _send_one, same as
+    # template_params.
+    template_header_params: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     # Optional free-text follow-up sent right after the template (or after
     # the default opening message, if no template is set).
     custom_message: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -44,6 +44,14 @@ export {
   type ScriptCreateInput,
   type ScriptLibraryUpdateInput,
 } from "./useScripts";
+export {
+  useQualificationCriteriaPresets,
+  useCreateQualificationCriteriaPreset,
+  useUpdateQualificationCriteriaPreset,
+  useDeleteQualificationCriteriaPreset,
+  type QualificationCriteriaPresetCreateInput,
+  type QualificationCriteriaPresetUpdateInput,
+} from "./useQualificationCriteriaPresets";
 export { useOrgNumbers, useUpdateOrgNumbers } from "./useOrgNumbers";
 export {
   useOutboundCall,

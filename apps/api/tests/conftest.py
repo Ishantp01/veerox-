@@ -125,6 +125,38 @@ async def fake_redis() -> FakeRedis:
     return FakeRedis()
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_shared_http_clients() -> AsyncGenerator[None, None]:
+    """Several channel clients (WhatsApp/Plivo/Twilio/Brevo) each keep one
+    module-level ``httpx.AsyncClient`` built at import time, reused across
+    every call for connection pooling in production. Pytest-asyncio hands
+    every async test its own fresh event loop (function-scoped, the
+    default), so a client's connection pool opened under one test's loop
+    can outlive that loop — its finalizer then runs during a LATER,
+    unrelated test's loop and raises "RuntimeError: Event loop is closed"
+    from whatever happens to be running at the time (e.g. flaky failures
+    surfacing in test_tools.py with no relation to HTTP at all).
+
+    Rebinding each module's client to a fresh instance before every test,
+    and explicitly closing it afterward while its own loop is still open,
+    keeps every client's lifetime inside a single test's event loop and
+    removes the cross-test GC race entirely.
+    """
+    from apps.api.channels.email import brevo_client
+    from apps.api.channels.voice import plivo_client, twilio_client
+    from apps.api.channels.whatsapp import client as wa_client
+
+    modules = [brevo_client, plivo_client, twilio_client, wa_client]
+    for mod in modules:
+        mod._http = AsyncClient(timeout=10.0)
+    yield
+    for mod in modules:
+        try:
+            await mod._http.aclose()
+        except Exception:  # noqa: BLE001 - best-effort cleanup, never fail a test on it
+            pass
+
+
 @pytest_asyncio.fixture
 async def client(
     db_session: AsyncSession, fake_redis: FakeRedis, test_engine, monkeypatch: pytest.MonkeyPatch
