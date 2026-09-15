@@ -16,25 +16,49 @@ export interface PhoneNumberListFieldProps {
   label: string;
   value: PhoneNumberEntry[];
   onChange: (next: PhoneNumberEntry[]) => void;
+  /** Input placeholder — defaults to an E.164 example. */
+  placeholder?: string;
+  /** Validates one trimmed entry before it's added; returns an error message
+   * or undefined. Defaults to the E.164 check used for Plivo/Twilio numbers —
+   * override for a provider like WhatsApp whose "number" is actually Meta's
+   * numeric phone_number_id, not a dialable E.164 number. */
+  validate?: (trimmed: string) => string | undefined;
+  /** Shown under the label when there's more than one entry. Defaults to
+   * the round-robin explanation (accurate for Plivo/Twilio); pass a
+   * provider-appropriate string, or "" to show nothing. */
+  multipleHint?: string;
+  /** Label on the default entry's badge/button — "Primary" for Plivo/Twilio
+   * (a display-only label), "Default" for WhatsApp (load-bearing: the
+   * fallback number for any send with no more specific choice). */
+  defaultLabel?: string;
 }
+
+const DEFAULT_MULTIPLE_HINT =
+  "Outbound calls round-robin across all {count} numbers below, in order — Primary is just a display label.";
 
 /**
  * One provider's list of dedicated numbers — add/remove entries, mark one
- * "Primary" (display only; see apps/api/channels/voice/org_numbers.py::
- * get_default_numbers). Outbound calls round-robin across every number in
- * this list, in the order shown, regardless of which is Primary — see
- * get_rotating_numbers. The first number added becomes Primary
- * automatically; removing the Primary entry promotes whichever is left at
- * the top of the list.
+ * default. The first number added becomes default automatically; removing
+ * the default entry promotes whichever is left at the top of the list.
  */
-export function PhoneNumberListField({ id, label, value, onChange }: PhoneNumberListFieldProps) {
+export function PhoneNumberListField({
+  id,
+  label,
+  value,
+  onChange,
+  placeholder = "+91XXXXXXXXXX",
+  validate = (trimmed) => (E164_REGEX.test(trimmed) ? undefined : E164_MESSAGE),
+  multipleHint = DEFAULT_MULTIPLE_HINT.replace("{count}", String(value.length)),
+  defaultLabel = "Primary",
+}: PhoneNumberListFieldProps) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | undefined>();
 
   function handleAdd() {
     const trimmed = draft.trim();
-    if (!E164_REGEX.test(trimmed)) {
-      setError(E164_MESSAGE);
+    const validationError = validate(trimmed);
+    if (validationError) {
+      setError(validationError);
       return;
     }
     if (value.some((entry) => entry.phone_number === trimmed)) {
@@ -62,11 +86,8 @@ export function PhoneNumberListField({ id, label, value, onChange }: PhoneNumber
   return (
     <div>
       <Label htmlFor={id}>{label}</Label>
-      {value.length > 1 && (
-        <p className="mb-1.5 text-xs text-slate-500 dark:text-slate-400">
-          Outbound calls round-robin across all {value.length} numbers below, in order — Primary is
-          just a display label.
-        </p>
+      {value.length > 1 && multipleHint && (
+        <p className="mb-1.5 text-xs text-slate-500 dark:text-slate-400">{multipleHint}</p>
       )}
       {value.length > 0 && (
         <div className="mb-2 flex flex-col gap-1.5">
@@ -80,7 +101,7 @@ export function PhoneNumberListField({ id, label, value, onChange }: PhoneNumber
               </span>
               {entry.is_default ? (
                 <Badge variant="success" icon={null}>
-                  Primary
+                  {defaultLabel}
                 </Badge>
               ) : (
                 value.length > 1 && (
@@ -89,7 +110,7 @@ export function PhoneNumberListField({ id, label, value, onChange }: PhoneNumber
                     onClick={() => handleSetPrimary(i)}
                     className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
                   >
-                    Set primary
+                    Set {defaultLabel.toLowerCase()}
                   </button>
                 )
               )}
@@ -122,7 +143,7 @@ export function PhoneNumberListField({ id, label, value, onChange }: PhoneNumber
               handleAdd();
             }
           }}
-          placeholder="+91XXXXXXXXXX"
+          placeholder={placeholder}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `${id}-error` : undefined}
         />

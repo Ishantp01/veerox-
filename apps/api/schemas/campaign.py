@@ -59,6 +59,12 @@ class CampaignOut(BaseModel):
     # realtime_bridge.py and workers/campaign_dialer.py).
     script_id: UUID | None = None
     phone_number_id: UUID | None = None
+    # WhatsApp-only siblings of the two above — NULL means "use the org
+    # default WhatsApp script" / "send from the org's default WhatsApp
+    # number" (see core/agent.py::_system_prompt_for and
+    # workers/whatsapp_dispatcher.py).
+    whatsapp_script_id: UUID | None = None
+    whatsapp_number_id: UUID | None = None
     # Voice-only: dial-attempt cap for targets that never connect (any
     # integer >= 1, default 3). See workers/campaign_dialer.py.
     max_attempts: int = 3
@@ -101,4 +107,6 @@ class CampaignUpdateIn(BaseModel):
 
     script_id: UUID | None = None
     phone_number_id: UUID | None = None
+    whatsapp_script_id: UUID | None = None
+    whatsapp_number_id: UUID | None = None
     max_attempts: int | None = None

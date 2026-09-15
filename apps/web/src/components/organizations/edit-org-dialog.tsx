@@ -32,7 +32,6 @@ const editOrgSchema = z.object({
     .trim()
     .optional()
     .refine((v) => !v || E164_REGEX.test(v), E164_MESSAGE),
-  whatsappNumberId: z.string().trim().optional(),
 });
 
 type EditOrgForm = z.infer<typeof editOrgSchema>;
@@ -44,7 +43,6 @@ function formFromOrg(org: AdminOrg): EditOrgForm {
     adminEmail: org.admin_email ?? "",
     adminName: org.admin_name ?? "",
     adminMobile: org.admin_mobile ?? "",
-    whatsappNumberId: org.whatsapp_phone_number_id ?? "",
   };
 }
 
@@ -55,6 +53,13 @@ function numbersFromOrg(org: AdminOrg, provider: "plivo" | "twilio"): PhoneNumbe
   return org.phone_numbers
     .filter((n) => n.provider === provider)
     .map((n) => ({ phone_number: `+${n.phone_number}`, is_default: n.is_default }));
+}
+
+function whatsappNumbersFromOrg(org: AdminOrg): PhoneNumberEntry[] {
+  // Meta's phone_number_id, not an E.164 number — no "+" re-added.
+  return org.phone_numbers
+    .filter((n) => n.provider === "whatsapp")
+    .map((n) => ({ phone_number: n.phone_number, is_default: n.is_default }));
 }
 
 /**
@@ -73,6 +78,9 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
   const [plivoNumbers, setPlivoNumbers] = useState<PhoneNumberEntry[]>(() => numbersFromOrg(org, "plivo"));
   const [twilioNumbers, setTwilioNumbers] = useState<PhoneNumberEntry[]>(() =>
     numbersFromOrg(org, "twilio"),
+  );
+  const [whatsappNumbers, setWhatsappNumbers] = useState<PhoneNumberEntry[]>(() =>
+    whatsappNumbersFromOrg(org),
   );
   const updateOrg = useUpdateOrgAdmin();
   const { toast } = useToast();
@@ -116,8 +124,8 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
         phone_numbers: [
           ...plivoNumbers.map((n) => ({ provider: "plivo" as const, ...n })),
           ...twilioNumbers.map((n) => ({ provider: "twilio" as const, ...n })),
+          ...whatsappNumbers.map((n) => ({ provider: "whatsapp" as const, ...n })),
         ],
-        whatsapp_phone_number_id: parsed.data.whatsappNumberId?.trim() || null,
       },
       {
         onSuccess: () => {
@@ -136,6 +144,7 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
       setForm(formFromOrg(org));
       setPlivoNumbers(numbersFromOrg(org, "plivo"));
       setTwilioNumbers(numbersFromOrg(org, "twilio"));
+      setWhatsappNumbers(whatsappNumbersFromOrg(org));
     } else {
       setFieldErrors({});
       updateOrg.reset();
@@ -233,24 +242,16 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
               value={twilioNumbers}
               onChange={setTwilioNumbers}
             />
-            <div>
-              <Label htmlFor="edit-org-whatsapp-number">Dedicated WhatsApp number ID</Label>
-              <Input
-                id="edit-org-whatsapp-number"
-                value={form.whatsappNumberId}
-                onChange={(e) => updateField("whatsappNumberId", e.target.value)}
-                placeholder="Leave blank to use the default number"
-                aria-invalid={fieldErrors.whatsappNumberId ? true : undefined}
-                aria-describedby={
-                  fieldErrors.whatsappNumberId ? "edit-org-whatsapp-number-error" : undefined
-                }
-              />
-              {fieldErrors.whatsappNumberId && (
-                <p id="edit-org-whatsapp-number-error" className="mt-1.5 text-xs text-red-600">
-                  {fieldErrors.whatsappNumberId}
-                </p>
-              )}
-            </div>
+            <PhoneNumberListField
+              id="edit-org-whatsapp-number"
+              label="Dedicated WhatsApp numbers"
+              value={whatsappNumbers}
+              onChange={setWhatsappNumbers}
+              placeholder="phone_number_id from the Meta dashboard"
+              validate={(trimmed) => (trimmed ? undefined : "Enter a phone_number_id")}
+              multipleHint="Sends use the Default number unless a campaign pins a specific one."
+              defaultLabel="Default"
+            />
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => handleClose(false)}>

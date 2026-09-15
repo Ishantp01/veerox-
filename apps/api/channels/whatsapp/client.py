@@ -33,8 +33,8 @@ def _graph_url(path: str, phone_number_id: str | None = None) -> str:
     ``path`` is anything that follows the phone-number id (e.g. ``"/messages"``
     or ``""``). Pass ``path=""`` for endpoints that *are* the phone-number id
     itself. ``phone_number_id`` overrides the platform-default
-    ``settings.meta_phone_number_id`` — used to send from an org's own
-    dedicated WhatsApp number (see ``Org.whatsapp_phone_number_id``).
+    ``settings.meta_phone_number_id`` — used to send from one of an org's own
+    dedicated WhatsApp numbers (see ``db/models/org_phone_number.py``).
     """
     return (
         f"{_GRAPH_BASE}/{settings.meta_graph_api_version}"
@@ -111,9 +111,9 @@ def friendly_error_message(meta_error: dict[str, Any] | None) -> str:
 async def send_text(to_e164: str, body: str, phone_number_id: str | None = None) -> dict[str, Any]:
     """Send a plain-text WhatsApp message via the Graph API.
 
-    ``phone_number_id``, when given, sends from an org's own dedicated
-    WhatsApp number instead of the platform default (see
-    ``Org.whatsapp_phone_number_id``).
+    ``phone_number_id``, when given, sends from one of an org's own
+    dedicated WhatsApp numbers instead of the platform default (see
+    ``db/models/org_phone_number.py``).
 
     Returns the raw JSON response (which contains the outbound message id).
     Raises ``httpx.HTTPStatusError`` on a non-2xx response.

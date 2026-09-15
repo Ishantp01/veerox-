@@ -35,9 +35,12 @@ from apps.api.core.whatsapp_assets import asset_catalog_prompt_block
 from apps.api.core.whatsapp_template_catalog import (
     template_catalog_prompt_block as wa_template_catalog_prompt_block,
 )
+from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.org import Org
+from apps.api.db.models.org_phone_number import OrgPhoneNumber
+from apps.api.db.models.script import Script
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.redis_client import get_redis_pool
 
@@ -89,7 +92,57 @@ def appointment_booked_this_turn() -> bool:
     return _appointment_booked_ctx.get()
 
 
-async def _system_prompt_for(db: AsyncSession, org_id: UUID, channel: Channel) -> str:
+async def _resolve_whatsapp_script_content(
+    db: AsyncSession,
+    org_id: UUID,
+    whatsapp_script_id: UUID | None,
+    whatsapp_phone_number_id: str | None = None,
+) -> str | None:
+    """This org's WhatsApp base prompt from its Script library, or None to
+    fall back further to Org.script / OUTBOUND_CALL_PROMPT (see
+    ``_system_prompt_for``). Resolution order mirrors
+    ``channels/voice/realtime_bridge.py``'s voice-side equivalent, with one
+    extra step: the campaign's own pinned script
+    (``CallCampaign.whatsapp_script_id``) when it has one and it's still a
+    valid whatsapp script for this org, else whichever Script is paired (via
+    ``Script.phone_number_id``, set from the settings page's script library)
+    with the number this message came in on, else the org's default WhatsApp
+    script (``Script.channel == "whatsapp"``, ``is_default=True``).
+    """
+    if whatsapp_script_id is not None:
+        script = await db.get(Script, whatsapp_script_id)
+        if script is not None and script.org_id == org_id and script.channel == "whatsapp":
+            return script.content
+    if whatsapp_phone_number_id is not None:
+        stmt = (
+            select(Script.content)
+            .join(OrgPhoneNumber, OrgPhoneNumber.id == Script.phone_number_id)
+            .where(
+                Script.org_id == org_id,
+                Script.channel == "whatsapp",
+                OrgPhoneNumber.provider == "whatsapp",
+                OrgPhoneNumber.phone_number == whatsapp_phone_number_id,
+            )
+            .limit(1)
+        )
+        content = (await db.execute(stmt)).scalar_one_or_none()
+        if content is not None:
+            return content
+    stmt = (
+        select(Script.content)
+        .where(Script.org_id == org_id, Script.channel == "whatsapp", Script.is_default.is_(True))
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def _system_prompt_for(
+    db: AsyncSession,
+    org_id: UUID,
+    channel: Channel,
+    whatsapp_script_id: UUID | None = None,
+    whatsapp_phone_number_id: str | None = None,
+) -> str:
     """Compose the org's script (or the platform default) with the
     per-channel append block and the current-date/time grounding block.
 
@@ -98,8 +151,14 @@ async def _system_prompt_for(db: AsyncSession, org_id: UUID, channel: Channel) -
     ends up with stray blank lines that nudge the model toward overly formal
     output.
     """
-    org = await db.get(Org, org_id)
-    base = org.script if org is not None and org.script else OUTBOUND_CALL_PROMPT
+    base: str | None = None
+    if channel == "whatsapp":
+        base = await _resolve_whatsapp_script_content(
+            db, org_id, whatsapp_script_id, whatsapp_phone_number_id
+        )
+    if base is None:
+        org = await db.get(Org, org_id)
+        base = org.script if org is not None and org.script else OUTBOUND_CALL_PROMPT
     append = VOICE_APPEND if channel == "voice" else WHATSAPP_APPEND
     prompt = f"{base.strip()}\n\n{current_datetime_block()}\n\n{append.strip()}"
     catalog = await asset_catalog_prompt_block(db, org_id)
@@ -270,6 +329,7 @@ class AgentCore:
         input_text: str,
         campaign_target_id: UUID | None = None,
         org_id: UUID | None = None,
+        whatsapp_phone_number_id: str | None = None,
     ) -> str:
         """Process one conversational turn and return the assistant reply.
 
@@ -289,6 +349,12 @@ class AgentCore:
                 inbound message's WABA phone_number_id). Falls back to the
                 platform default org when the caller doesn't have one to
                 give — the CLI and older callers rely on this default.
+            whatsapp_phone_number_id: Meta's WABA phone_number_id this
+                message arrived on (channels/whatsapp/adapter.py's
+                `_extract_phone_number_id`) — used only to pick a Script
+                paired with that number from the settings page, when no
+                campaign has already pinned a more specific script (see
+                `_resolve_whatsapp_script_content`). None for voice/CLI.
 
         Returns:
             The assistant's reply as a plain string. The caller is responsible
@@ -309,15 +375,24 @@ class AgentCore:
         # conversation this target's reply landed in (idempotent: only ever
         # set once). Later turns in the same conversation keep resolving
         # campaign_target_id via the adapter's lookup until qualify_lead runs.
+        # Also resolves the owning campaign's pinned WhatsApp script (if any)
+        # for _system_prompt_for below — same one query, no extra round-trip.
+        whatsapp_script_id: UUID | None = None
         if campaign_target_id is not None:
             target = await db.get(CampaignTarget, campaign_target_id)
-            if target is not None and target.conversation_id is None:
-                target.conversation_id = conversation.id
-                await db.commit()
+            if target is not None:
+                if target.conversation_id is None:
+                    target.conversation_id = conversation.id
+                    await db.commit()
+                if channel == "whatsapp":
+                    campaign = await db.get(CallCampaign, target.campaign_id)
+                    whatsapp_script_id = campaign.whatsapp_script_id if campaign else None
 
         history = await load_last_n(db, user_id)
 
-        system_prompt = await _system_prompt_for(db, org_id, channel)
+        system_prompt = await _system_prompt_for(
+            db, org_id, channel, whatsapp_script_id, whatsapp_phone_number_id
+        )
         if history:
             # We already have this user's history loaded — skip the redundant
             # lookup_customer round-trip the model would otherwise make on

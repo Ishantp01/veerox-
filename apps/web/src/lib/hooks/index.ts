@@ -34,13 +34,13 @@ export {
   useCallingSettings,
   useUpdateCallingSettings,
 } from "./useConfig";
-export { useScript, useUpdateScript } from "./useScript";
 export {
   useScripts,
   useCreateScript,
   useUpdateScriptLibraryItem,
   useSetDefaultScript,
   useDeleteScript,
+  type ScriptChannel,
   type ScriptCreateInput,
   type ScriptLibraryUpdateInput,
 } from "./useScripts";

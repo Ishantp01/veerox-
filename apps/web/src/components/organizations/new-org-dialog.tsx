@@ -24,7 +24,6 @@ const EMPTY = {
   email: "",
   fullName: "",
   mobile: "",
-  whatsappNumberId: "",
 };
 
 const orgSchema = z.object({
@@ -36,11 +35,6 @@ const orgSchema = z.object({
     .regex(/^[A-Za-z\s'.-]*$/, "Name should only contain letters")
     .optional(),
   mobile: z.string().trim().regex(E164_REGEX, E164_MESSAGE),
-  whatsappNumberId: z
-    .string()
-    .trim()
-    .optional()
-    .refine((v) => !v || E164_REGEX.test(v), E164_MESSAGE),
 });
 
 type OrgFieldErrors = Partial<Record<keyof typeof EMPTY, string>>;
@@ -59,6 +53,7 @@ export function NewOrgDialog() {
   const [fieldErrors, setFieldErrors] = useState<OrgFieldErrors>({});
   const [plivoNumbers, setPlivoNumbers] = useState<PhoneNumberEntry[]>([]);
   const [twilioNumbers, setTwilioNumbers] = useState<PhoneNumberEntry[]>([]);
+  const [whatsappNumbers, setWhatsappNumbers] = useState<PhoneNumberEntry[]>([]);
   const [result, setResult] = useState<ProvisionOrgResult | null>(null);
   const provisionOrg = useProvisionOrg();
   const { toast } = useToast();
@@ -101,8 +96,8 @@ export function NewOrgDialog() {
         phone_numbers: [
           ...plivoNumbers.map((n) => ({ provider: "plivo" as const, ...n })),
           ...twilioNumbers.map((n) => ({ provider: "twilio" as const, ...n })),
+          ...whatsappNumbers.map((n) => ({ provider: "whatsapp" as const, ...n })),
         ],
-        whatsapp_phone_number_id: form.whatsappNumberId.trim() || undefined,
       },
       {
         onSuccess: (res) => {
@@ -122,6 +117,7 @@ export function NewOrgDialog() {
       setFieldErrors({});
       setPlivoNumbers([]);
       setTwilioNumbers([]);
+      setWhatsappNumbers([]);
       setResult(null);
       provisionOrg.reset();
     }
@@ -259,22 +255,16 @@ export function NewOrgDialog() {
                   calling page then lets them choose which one to dial from.
                 </p>
               </div>
-              <div>
-                <Label htmlFor="org-whatsapp-number">Dedicated WhatsApp number ID</Label>
-                <Input
-                  id="org-whatsapp-number"
-                  value={form.whatsappNumberId}
-                  onChange={(e) => updateField("whatsappNumberId", e.target.value)}
-                  placeholder="Optional — leave blank to use the default number"
-                  aria-invalid={fieldErrors.whatsappNumberId ? true : undefined}
-                  aria-describedby={fieldErrors.whatsappNumberId ? "org-whatsapp-number-error" : undefined}
-                />
-                {fieldErrors.whatsappNumberId && (
-                  <p id="org-whatsapp-number-error" className="mt-1.5 text-xs text-red-600">
-                    {fieldErrors.whatsappNumberId}
-                  </p>
-                )}
-              </div>
+              <PhoneNumberListField
+                id="org-whatsapp-number"
+                label="Dedicated WhatsApp numbers"
+                value={whatsappNumbers}
+                onChange={setWhatsappNumbers}
+                placeholder="phone_number_id from the Meta dashboard"
+                validate={(trimmed) => (trimmed ? undefined : "Enter a phone_number_id")}
+                multipleHint="Sends use the Default number unless a campaign pins a specific one."
+                defaultLabel="Default"
+              />
             </DialogBody>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => handleClose(false)}>

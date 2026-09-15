@@ -14,23 +14,29 @@ from pydantic import BaseModel, Field
 
 
 class OrgPhoneNumberIn(BaseModel):
-    provider: Literal["plivo", "twilio"]
-    phone_number: str = Field(..., description="E.164, e.g. +14155551234.")
+    provider: Literal["plivo", "twilio", "whatsapp"]
+    phone_number: str = Field(
+        ...,
+        description="E.164 (e.g. +14155551234) for plivo/twilio. For "
+        "whatsapp, Meta's phone_number_id from the WhatsApp Manager "
+        "dashboard instead — not the displayed phone number.",
+    )
     is_default: bool = Field(
         False,
-        description="The 'Primary' badge for this provider — display only, "
-        "doesn't affect which number outbound calls use (calls round-robin "
-        "across every number for the provider; see "
-        "channels/voice/org_numbers.py::get_rotating_numbers). If a "
-        "provider has entries but none marked default, the first one "
-        "becomes it; if more than one is marked, all but the first are "
-        "demoted. Numbers otherwise dial in the order submitted here.",
+        description="The 'Primary' badge for this provider — display only "
+        "for plivo/twilio, which round-robin across every number instead "
+        "(see channels/voice/org_numbers.py::get_rotating_numbers). For "
+        "whatsapp it's load-bearing: the fallback number for any send with "
+        "no more specific (campaign-pinned) choice. If a provider has "
+        "entries but none marked default, the first one becomes it; if "
+        "more than one is marked, all but the first are demoted. Numbers "
+        "otherwise dial/list in the order submitted here.",
     )
 
 
 class OrgPhoneNumberOut(BaseModel):
     id: UUID
-    provider: Literal["plivo", "twilio"]
+    provider: Literal["plivo", "twilio", "whatsapp"]
     phone_number: str
     is_default: bool
     created_at: datetime

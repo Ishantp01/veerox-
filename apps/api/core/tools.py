@@ -28,7 +28,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.voice import failover as voice_failover
-from apps.api.channels.voice.org_numbers import get_rotating_numbers
+from apps.api.channels.voice.org_numbers import get_default_whatsapp_number_id, get_rotating_numbers
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.whatsapp_assets import asset_public_url, load_org_assets, resolve_asset
@@ -949,7 +949,7 @@ async def transfer_to_human(
                 phone or "not provided",
             ]
 
-        phone_number_id = org.whatsapp_phone_number_id if org else None
+        phone_number_id = await get_default_whatsapp_number_id(db, org_id)
         try:
             await wa_client.send_template(
                 _normalize_phone(notify_phone),
@@ -1257,8 +1257,7 @@ async def send_appointment_confirmation(
         )
         return
 
-    org = await db.get(Org, org_id)
-    phone_number_id = org.whatsapp_phone_number_id if org else None
+    phone_number_id = await get_default_whatsapp_number_id(db, org_id)
     try:
         await wa_client.send_template(
             _normalize_phone(phone),
@@ -1317,8 +1316,7 @@ async def send_whatsapp_message(
         return {"status": "error", "reason": "no_phone_number_available"}
 
     normalized = _normalize_phone(target_phone)
-    org = await db.get(Org, org_id)
-    phone_number_id = org.whatsapp_phone_number_id if org else None
+    phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
     try:
         await wa_client.send_text(normalized, message, phone_number_id=phone_number_id)
@@ -1414,8 +1412,7 @@ async def send_whatsapp_file(
         return {"status": "error", "reason": "ambiguous_file_name", "matches": resolved}
 
     normalized = _normalize_phone(target_phone)
-    org = await db.get(Org, org_id)
-    phone_number_id = org.whatsapp_phone_number_id if org else None
+    phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
     try:
         await wa_client.send_media(
@@ -1492,8 +1489,7 @@ async def send_whatsapp_template(
         return {"status": "error", "reason": "ambiguous_template_name", "matches": resolved}
 
     normalized = _normalize_phone(target_phone)
-    org = await db.get(Org, org_id)
-    phone_number_id = org.whatsapp_phone_number_id if org else None
+    phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
     # A media header (IMAGE/VIDEO/DOCUMENT) has no {{1}} — the header IS the
     # parameter, and Meta rejects the send outright if it's missing ("Format

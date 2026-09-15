@@ -1290,9 +1290,9 @@ async def test_update_whatsapp_settings_sets_and_clears_handoff_template(
 async def test_update_org_numbers_sets_both_providers_independently(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """An org can now have a dedicated number on BOTH Plivo and Twilio at
-    once — setting one must never clear the other (the old behavior, back
-    when a single auto-detected field only ever populated one column)."""
+    """An org can now have a dedicated number on Plivo, Twilio, AND
+    WhatsApp at once — all three live in the same `phone_numbers` list,
+    distinguished by `provider`."""
     await _seed_org(db_session)
 
     response = await client.put(
@@ -1301,6 +1301,7 @@ async def test_update_org_numbers_sets_both_providers_independently(
             "phone_numbers": [
                 {"provider": "plivo", "phone_number": "+15550001111"},
                 {"provider": "twilio", "phone_number": "+15550002222"},
+                {"provider": "whatsapp", "phone_number": "109876543210"},
             ]
         },
         headers=ADMIN_HEADERS,
@@ -1308,21 +1309,21 @@ async def test_update_org_numbers_sets_both_providers_independently(
     assert response.status_code == 200
     body = response.json()
     numbers = {n["provider"]: n["phone_number"] for n in body["phone_numbers"]}
-    assert numbers == {"plivo": "15550001111", "twilio": "15550002222"}
+    assert numbers == {
+        "plivo": "15550001111",
+        "twilio": "15550002222",
+        "whatsapp": "109876543210",
+    }
 
     # `phone_numbers` omitted entirely leaves the org's numbers untouched.
-    response2 = await client.put(
-        "/admin/org-numbers",
-        json={"whatsapp_phone_number_id": "wa-123"},
-        headers=ADMIN_HEADERS,
-    )
+    response2 = await client.put("/admin/org-numbers", json={}, headers=ADMIN_HEADERS)
     assert response2.status_code == 200
     body2 = response2.json()
     numbers2 = {n["provider"]: n["phone_number"] for n in body2["phone_numbers"]}
-    assert numbers2 == {"plivo": "15550001111", "twilio": "15550002222"}
+    assert numbers2 == numbers
 
     # Sending phone_numbers again REPLACES the full set — e.g. two Plivo
-    # numbers now, Twilio dropped.
+    # numbers now, Twilio and WhatsApp dropped.
     response3 = await client.put(
         "/admin/org-numbers",
         json={
@@ -1338,6 +1339,7 @@ async def test_update_org_numbers_sets_both_providers_independently(
     plivo_numbers = [n for n in body3["phone_numbers"] if n["provider"] == "plivo"]
     assert {n["phone_number"] for n in plivo_numbers} == {"15550003333", "15550004444"}
     assert not any(n["provider"] == "twilio" for n in body3["phone_numbers"])
+    assert not any(n["provider"] == "whatsapp" for n in body3["phone_numbers"])
     assert next(n for n in plivo_numbers if n["phone_number"] == "15550003333")["is_default"] is True
 
 

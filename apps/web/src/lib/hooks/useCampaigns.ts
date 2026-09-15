@@ -59,6 +59,10 @@ export interface CreateCampaignInput {
    * auto-rotation across its numbers, same as before either field existed. */
   scriptId?: string;
   phoneNumberId?: string;
+  /** WhatsApp-only siblings of the two above — unset falls back to the
+   * org's default WhatsApp script / default WhatsApp number. */
+  whatsappScriptId?: string;
+  whatsappNumberId?: string;
   /** Voice-only, any integer >= 1 — how many times the dialer re-calls a
    * contact who never picks up before marking them failed. Omitted → backend
    * default 3. */
@@ -96,6 +100,8 @@ async function createCampaign(input: CreateCampaignInput): Promise<CampaignCreat
   if (input.customMessage) form.append("custom_message", input.customMessage);
   if (input.scriptId) form.append("script_id", input.scriptId);
   if (input.phoneNumberId) form.append("phone_number_id", input.phoneNumberId);
+  if (input.whatsappScriptId) form.append("whatsapp_script_id", input.whatsappScriptId);
+  if (input.whatsappNumberId) form.append("whatsapp_number_id", input.whatsappNumberId);
   if (input.maxAttempts) form.append("max_attempts", String(input.maxAttempts));
 
   const res = await fetch(`${base}/admin/campaigns`, {
@@ -151,11 +157,11 @@ export function useResumeCampaign() {
 }
 
 /**
- * Change a campaign's voice overrides after creation — most usefully its
- * ``script_id``, which is otherwise pinned forever at creation time and
- * does NOT follow edits made later in the script library (see
- * routers/admin.py's update_campaign). Pass `null` for a field to clear it
- * back to the org-default fallback.
+ * Change a campaign's voice/WhatsApp overrides after creation — most
+ * usefully ``script_id``/``whatsapp_script_id``, otherwise pinned forever at
+ * creation time and does NOT follow edits made later in the script library
+ * (see routers/admin.py's update_campaign). Pass `null` for a field to
+ * clear it back to the org-default fallback.
  *
  * PATCH /admin/campaigns/{id} → Campaign
  */
@@ -165,7 +171,14 @@ export function useUpdateCampaign() {
   return useMutation<
     Campaign,
     Error,
-    { id: string; scriptId?: string | null; phoneNumberId?: string | null; maxAttempts?: number }
+    {
+      id: string;
+      scriptId?: string | null;
+      phoneNumberId?: string | null;
+      whatsappScriptId?: string | null;
+      whatsappNumberId?: string | null;
+      maxAttempts?: number;
+    }
   >({
     mutationFn: ({ id, ...body }) =>
       apiFetch<Campaign>(`/admin/campaigns/${id}`, {
@@ -173,6 +186,8 @@ export function useUpdateCampaign() {
         body: JSON.stringify({
           script_id: body.scriptId,
           phone_number_id: body.phoneNumberId,
+          whatsapp_script_id: body.whatsappScriptId,
+          whatsapp_number_id: body.whatsappNumberId,
           max_attempts: body.maxAttempts,
         }),
       }),

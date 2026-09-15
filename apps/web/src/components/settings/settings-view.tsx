@@ -1,27 +1,15 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Bot, ChevronRight, Phone, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
-import {
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  Label,
-  Select,
-  Skeleton,
-  Textarea,
-  useToast,
-} from "@/components/ui";
+import { Button, Card, CardContent, CardHeader, Label, Select, Skeleton, useToast } from "@/components/ui";
 import {
   useCallingSettings,
-  useScript,
   useTemplates,
   useUpdateCallingSettings,
-  useUpdateScript,
   useUpdateWhatsAppSettings,
   useWhatsAppSettings,
 } from "@/lib/hooks";
@@ -70,92 +58,6 @@ function CollapsibleSection({
       </CardHeader>
       {open && <CardContent id={contentId}>{children}</CardContent>}
     </Card>
-  );
-}
-
-function ScriptEditor() {
-  const script = useScript();
-  const updateScript = useUpdateScript();
-  const [draft, setDraft] = useState("");
-  const [editing, setEditing] = useState(false);
-
-  useEffect(() => {
-    if (script.data) setDraft(script.data.script);
-  }, [script.data]);
-
-  const dirty = script.data !== undefined && draft !== script.data.script;
-
-  return (
-    <QueryBoundary
-      isLoading={script.isLoading}
-      isError={script.isError}
-      error={script.error}
-      onRetry={() => script.refetch()}
-      loadingFallback={<Skeleton className="h-48 w-full rounded-xl" />}
-    >
-      {script.data && (
-        <div className="flex flex-col gap-3">
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            This is what the AI follows on both WhatsApp and calls. It can still answer
-            questions outside this script — this just sets the flow it returns to.
-            {script.data.is_default && " Currently using the platform default shown below."}
-          </p>
-          <Textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            readOnly={!editing}
-            rows={18}
-            className={`font-mono text-xs ${!editing ? "cursor-default bg-slate-50 dark:bg-slate-800/50" : ""}`}
-          />
-          <div className="flex items-center gap-2">
-            {!editing ? (
-              <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-                Edit
-              </Button>
-            ) : (
-              <>
-                <Button
-                  size="sm"
-                  disabled={!dirty}
-                  loading={updateScript.isPending}
-                  onClick={() => {
-                    updateScript.mutate(draft);
-                    setEditing(false);
-                  }}
-                >
-                  Save script
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={script.data.is_default || updateScript.isPending}
-                  onClick={() => {
-                    updateScript.mutate(null);
-                    setEditing(false);
-                  }}
-                >
-                  Reset to default
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={updateScript.isPending}
-                  onClick={() => {
-                    setDraft(script.data!.script);
-                    setEditing(false);
-                  }}
-                >
-                  Cancel
-                </Button>
-              </>
-            )}
-            {updateScript.isError && (
-              <span className="text-xs text-red-500">{updateScript.error.message}</span>
-            )}
-          </div>
-        </div>
-      )}
-    </QueryBoundary>
   );
 }
 
@@ -311,12 +213,12 @@ export interface SettingsViewProps {
 
 /**
  * Editable script + number view for the per-channel /whatsapp/settings and
- * /calling/settings pages. WhatsApp still shares the single ScriptEditor
- * override (see core/agent.py::_system_prompt_for); calling instead manages
- * a full script library (see ./script-library.tsx and
- * channels/voice/realtime_bridge.py::_system_instructions). The number is
- * channel-specific either way and determines which org an inbound message/
- * call on it resolves to (channels/whatsapp/adapter.py, channels/voice/webhook.py).
+ * /calling/settings pages. Both now manage a full per-channel script
+ * library (see ./script-library.tsx, core/agent.py::_system_prompt_for for
+ * WhatsApp and channels/voice/realtime_bridge.py::_system_instructions for
+ * calling). The number is channel-specific either way and determines which
+ * org an inbound message/call on it resolves to
+ * (channels/whatsapp/adapter.py, channels/voice/webhook.py).
  */
 export function SettingsView({ title, description, channel }: SettingsViewProps) {
   const { user } = useAuth();
@@ -334,9 +236,9 @@ export function SettingsView({ title, description, channel }: SettingsViewProps)
           title="Script"
           icon={<Bot size={15} aria-hidden className="text-slate-400" />}
           defaultOpen
-          maxWidthClassName={channel === "calling" ? "max-w-5xl" : "max-w-3xl"}
+          maxWidthClassName="max-w-5xl"
         >
-          {channel === "calling" ? <ScriptLibrary /> : <ScriptEditor />}
+          <ScriptLibrary channel={channel === "calling" ? "voice" : "whatsapp"} />
         </CollapsibleSection>
 
         {channel === "whatsapp" && (

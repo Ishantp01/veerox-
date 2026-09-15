@@ -46,15 +46,12 @@ class ProvisionOrgIn(BaseModel):
     # E.164 mobile number the login token is SMS'd to (see
     # routers/auth.py's provision_org).
     mobile: str
-    # Optional dedicated numbers for this org — any mix of Plivo/Twilio
-    # entries, several per provider allowed. Left empty, inbound calls on the
-    # platform default numbers keep resolving to this org until an admin
-    # sets these later via PATCH /billing/orgs/{id} or PUT /admin/org-numbers
-    # (see db/models/org_phone_number.py).
+    # Optional dedicated numbers for this org — any mix of Plivo/Twilio/
+    # WhatsApp entries, several per provider allowed. Left empty, inbound
+    # calls/messages on the platform default numbers keep resolving to this
+    # org until an admin sets these later via PATCH /billing/orgs/{id} or
+    # PUT /admin/org-numbers (see db/models/org_phone_number.py).
     phone_numbers: list[OrgPhoneNumberIn] = Field(default_factory=list)
-    whatsapp_phone_number_id: str | None = Field(
-        None, description="Dedicated WhatsApp Business phone_number_id for this org, from the Meta dashboard. Optional — falls back to the platform default."
-    )
 
 
 class ForgotTokenIn(BaseModel):

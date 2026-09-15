@@ -4,24 +4,29 @@ import { apiFetch } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
 import type { ScriptLibraryItem } from "@/lib/types";
 
+export type ScriptChannel = "voice" | "whatsapp";
+
 /**
- * This org's voice-only AI-calling script library — pick one per campaign,
- * or leave the is_default one as the fallback every campaign without its
- * own pick uses. Distinct from useScript.ts's singular WhatsApp override.
+ * This org's AI script library for one channel — pick one per campaign, or
+ * leave the is_default one (for that channel) as the fallback every
+ * campaign without its own pick uses.
  *
- * GET /admin/scripts → ScriptLibraryItem[]
+ * GET /admin/scripts?channel= → ScriptLibraryItem[]
  */
-export function useScripts() {
+export function useScripts(channel: ScriptChannel = "voice") {
   return useQuery<ScriptLibraryItem[]>({
-    queryKey: queryKeys.scripts(),
-    queryFn: () => apiFetch<ScriptLibraryItem[]>("/admin/scripts"),
+    queryKey: queryKeys.scripts(channel),
+    queryFn: () => apiFetch<ScriptLibraryItem[]>(`/admin/scripts?channel=${channel}`),
   });
 }
 
 export interface ScriptCreateInput {
   name: string;
   content: string;
+  channel?: ScriptChannel;
   is_default?: boolean;
+  /** Pair this script with one of the org's WhatsApp numbers (label only). */
+  phone_number_id?: string | null;
 }
 
 /** POST /admin/scripts → ScriptLibraryItem */
@@ -34,8 +39,8 @@ export function useCreateScript() {
         method: "POST",
         body: JSON.stringify(body),
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.scripts() });
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.scripts(data.channel) });
     },
   });
 }
@@ -44,6 +49,8 @@ export interface ScriptLibraryUpdateInput {
   id: string;
   name?: string;
   content?: string;
+  /** Pair this script with one of the org's WhatsApp numbers, or null to unpair it. */
+  phone_number_id?: string | null;
 }
 
 /** PATCH /admin/scripts/{id} → ScriptLibraryItem */
@@ -56,8 +63,8 @@ export function useUpdateScriptLibraryItem() {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.scripts() });
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.scripts(data.channel) });
     },
   });
 }
@@ -69,8 +76,8 @@ export function useSetDefaultScript() {
   return useMutation<ScriptLibraryItem, Error, string>({
     mutationFn: (id) =>
       apiFetch<ScriptLibraryItem>(`/admin/scripts/${id}/set-default`, { method: "POST" }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.scripts() });
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.scripts(data.channel) });
     },
   });
 }
@@ -79,10 +86,10 @@ export function useSetDefaultScript() {
 export function useDeleteScript() {
   const queryClient = useQueryClient();
 
-  return useMutation<{ ok: boolean }, Error, string>({
-    mutationFn: (id) => apiFetch<{ ok: boolean }>(`/admin/scripts/${id}`, { method: "DELETE" }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.scripts() });
+  return useMutation<{ ok: boolean }, Error, { id: string; channel: ScriptChannel }>({
+    mutationFn: ({ id }) => apiFetch<{ ok: boolean }>(`/admin/scripts/${id}`, { method: "DELETE" }),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.scripts(variables.channel) });
     },
   });
 }

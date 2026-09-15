@@ -17,6 +17,14 @@ class TemplateButtonSendParam(BaseModel):
 
 class OutboundWhatsappIn(BaseModel):
     phone: str = Field(..., description="Recipient phone number in E.164 format.")
+    phone_number_id: str | None = Field(
+        None,
+        description=(
+            "Which of the org's dedicated WhatsApp numbers to send from "
+            "(an org_phone_numbers id, provider='whatsapp'). Omit to use "
+            "the org's default WhatsApp number."
+        ),
+    )
     text: str | None = Field(
         None,
         min_length=1,
@@ -96,24 +104,22 @@ class ScriptIn(BaseModel):
 
 
 class OrgNumbersOut(BaseModel):
-    whatsapp_phone_number_id: str | None
-    # An org can have several dedicated numbers per provider — see
+    # An org can have several dedicated numbers per provider, including
+    # several WhatsApp numbers (provider="whatsapp") — see
     # db/models/org_phone_number.py.
     phone_numbers: list[OrgPhoneNumberOut] = []
 
 
 class OrgNumbersIn(BaseModel):
-    # Empty/omit clears the WhatsApp number, falling back to the platform
-    # default org for messages on it (see
+    # Omitted = the org's numbers are left untouched; present (including
+    # []) = its full number set (Plivo, Twilio, and WhatsApp alike) is
+    # replaced with this one (see
+    # channels/voice/org_numbers.py::replace_org_phone_numbers). Clearing
+    # all "whatsapp" entries falls back to the platform default org for
+    # messages on any number no longer listed (see
     # channels/whatsapp/adapter.py::_resolve_org_id).
-    whatsapp_phone_number_id: str | None = Field(
-        None, description="This org's WhatsApp Business phone_number_id, from the Meta dashboard."
-    )
-    # Omitted = the org's calling numbers are left untouched; present
-    # (including []) = its full number set is replaced with this one (see
-    # channels/voice/org_numbers.py::replace_org_phone_numbers).
     phone_numbers: list[OrgPhoneNumberIn] | None = Field(
-        None, description="This org's full set of dedicated Plivo/Twilio calling numbers."
+        None, description="This org's full set of dedicated Plivo/Twilio/WhatsApp numbers."
     )
 
 

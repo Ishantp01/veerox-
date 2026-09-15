@@ -24,7 +24,7 @@ from apps.api.config import settings
 from apps.api.core.agent import agent_core, appointment_booked_this_turn
 from apps.api.core.transcribe import transcribe
 from apps.api.db.models.campaign_target import CampaignTarget
-from apps.api.db.models.org import Org
+from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.models.user import User
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.redis_client import get_redis_pool, record_error
@@ -130,15 +130,41 @@ def _extract_phone_number_id(payload: dict[str, Any]) -> str | None:
 async def _resolve_org_id(db: AsyncSession, phone_number_id: str | None) -> UUID:
     """The org that owns this WABA number, else the platform default.
 
-    A number with no matching org (not yet provisioned, or Meta test number
-    on the platform's own default WABA) is expected during onboarding — logs
-    rather than raises so the message still gets a reply.
+    An org can have several dedicated WhatsApp numbers (see
+    db/models/org_phone_number.py) — any of them resolves to that org, not
+    just its "default" one. A number with no matching org (not yet
+    provisioned, or Meta test number on the platform's own default WABA) is
+    expected during onboarding — logs rather than raises so the message
+    still gets a reply.
+
+    Since the same WhatsApp number is now allowed to be registered under
+    more than one org (see db/models/org_phone_number.py's partial unique
+    index), more than one row can match here — genuinely ambiguous, since
+    Meta gives no other signal to disambiguate. Deterministically picks
+    whichever org registered it first (``created_at``) rather than crashing
+    (``.scalar_one_or_none()`` raises ``MultipleResultsFound``), and warns so
+    it's visible this number needs to be un-shared.
     """
     if phone_number_id:
-        stmt = select(Org.id).where(Org.whatsapp_phone_number_id == phone_number_id)
-        org_id = (await db.execute(stmt)).scalar_one_or_none()
-        if org_id is not None:
-            return org_id
+        stmt = (
+            select(OrgPhoneNumber.org_id)
+            .where(
+                OrgPhoneNumber.provider == "whatsapp",
+                OrgPhoneNumber.phone_number == phone_number_id,
+            )
+            .order_by(OrgPhoneNumber.created_at)
+            .limit(2)
+        )
+        org_ids = (await db.execute(stmt)).scalars().all()
+        if len(org_ids) > 1:
+            logger.warning(
+                "whatsapp_number_ambiguous_org",
+                phone_number_id=phone_number_id,
+                resolved_org_id=str(org_ids[0]),
+                other_org_ids=[str(o) for o in org_ids[1:]],
+            )
+        if org_ids:
+            return org_ids[0]
         logger.info("whatsapp_org_lookup_miss", phone_number_id=phone_number_id)
     return UUID(settings.default_org_id)
 
@@ -279,6 +305,7 @@ async def process_inbound(payload: dict[str, Any]) -> None:
                 input_text=text,
                 campaign_target_id=campaign_target_id,
                 org_id=org_id,
+                whatsapp_phone_number_id=phone_number_id,
             )
             agent_done = time.monotonic()
 

@@ -120,6 +120,7 @@ async def test_text_message_triggers_agent_and_send(
         input_text: str,
         campaign_target_id: uuid.UUID | None = None,
         org_id: uuid.UUID | None = None,
+        whatsapp_phone_number_id: str | None = None,
     ) -> str:
         handle_calls.append({"user_id": user_id, "channel": channel, "text": input_text})
         return "hello back"
@@ -167,6 +168,7 @@ async def test_duplicate_message_id_is_skipped_on_second_delivery(
         input_text: str,
         campaign_target_id: uuid.UUID | None = None,
         org_id: uuid.UUID | None = None,
+        whatsapp_phone_number_id: str | None = None,
     ) -> str:
         handle_calls.append(input_text)
         return "echo: " + input_text

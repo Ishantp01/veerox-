@@ -25,7 +25,7 @@ async def test_startup_seed_creates_default_org_owner_and_env_numbers(
     org_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     monkeypatch.setattr("apps.api.db.startup_seed.settings.default_org_id", str(org_id))
     monkeypatch.setattr("apps.api.db.startup_seed.settings.admin_token", "startup-token")
-    monkeypatch.setattr("apps.api.db.startup_seed.settings.meta_phone_number_id", "wa-phone-id")
+    monkeypatch.setattr("apps.api.db.startup_seed.settings.meta_phone_number_id", "109876543210987")
     monkeypatch.setattr("apps.api.db.startup_seed.settings.plivo_phone_number", "+91 2269986006")
     monkeypatch.setattr(
         "apps.api.db.startup_seed.settings.twilio_phone_number",
@@ -36,7 +36,6 @@ async def test_startup_seed_creates_default_org_owner_and_env_numbers(
 
     org = await db_session.get(Org, org_id)
     assert org is not None
-    assert org.whatsapp_phone_number_id == "wa-phone-id"
 
     owner = await db_session.get(AccountUser, DEFAULT_OWNER_ID)
     assert owner is not None
@@ -62,7 +61,11 @@ async def test_startup_seed_creates_default_org_owner_and_env_numbers(
             .order_by(OrgPhoneNumber.provider)
         )
     ).all()
-    assert rows == [("plivo", "912269986006", True), ("twilio", "19803722373", True)]
+    assert rows == [
+        ("plivo", "912269986006", True),
+        ("twilio", "19803722373", True),
+        ("whatsapp", "109876543210987", True),
+    ]
 
 
 @pytest.mark.asyncio
@@ -71,20 +74,35 @@ async def test_startup_seed_does_not_overwrite_existing_org_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     org_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-    db_session.add(Org(id=org_id, name="Existing", whatsapp_phone_number_id="existing-wa"))
+    db_session.add(Org(id=org_id, name="Existing"))
+    db_session.add(
+        OrgPhoneNumber(
+            org_id=org_id, provider="whatsapp", phone_number="existingwa", is_default=True
+        )
+    )
     await db_session.commit()
 
     monkeypatch.setattr("apps.api.db.startup_seed.settings.default_org_id", str(org_id))
     monkeypatch.setattr("apps.api.db.startup_seed.settings.admin_token", "startup-token")
-    monkeypatch.setattr("apps.api.db.startup_seed.settings.meta_phone_number_id", "env-wa")
+    monkeypatch.setattr("apps.api.db.startup_seed.settings.meta_phone_number_id", "222333444555")
     monkeypatch.setattr("apps.api.db.startup_seed.settings.plivo_phone_number", None)
     monkeypatch.setattr("apps.api.db.startup_seed.settings.twilio_phone_number", None)
 
     await ensure_env_seed_data(db_session)
 
-    org = await db_session.get(Org, org_id)
-    assert org is not None
-    assert org.whatsapp_phone_number_id == "existing-wa"
+    rows = (
+        await db_session.execute(
+            select(OrgPhoneNumber.phone_number).where(
+                OrgPhoneNumber.org_id == org_id, OrgPhoneNumber.provider == "whatsapp"
+            )
+        )
+    ).scalars().all()
+    # The org already had a WhatsApp number — the env value is a *different*
+    # phone_number_id, so _seed_env_phone_number (keyed on the number itself,
+    # not "does this org have one yet") adds it as a second row rather than
+    # overwriting the existing one. Matches plivo/twilio's existing seeding
+    # behavior, not a whatsapp-specific rule.
+    assert set(rows) == {"existingwa", "222333444555"}
 
 
 class _BrokenStartupSession:

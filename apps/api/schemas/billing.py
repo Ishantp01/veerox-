@@ -71,8 +71,9 @@ class OrgAdminOut(BaseModel):
     admin_name: str | None = None
     admin_mobile: str | None = None
     created_at: str
+    # Includes plivo/twilio/whatsapp entries alike — see
+    # db/models/org_phone_number.py.
     phone_numbers: list[OrgPhoneNumberOut] = []
-    whatsapp_phone_number_id: str | None = None
 
 
 class OrgUpdateIn(BaseModel):
@@ -81,8 +82,9 @@ class OrgUpdateIn(BaseModel):
     checkout/payment flow (see POST /billing/checkout-session), not a direct
     admin edit, to keep them consistent with BillingPayment records.
 
-    `phone_numbers` omitted = the org's numbers are left untouched; present
-    (including `[]`) = its full number set is replaced with this one (see
+    `phone_numbers` omitted = the org's numbers (Plivo, Twilio, and WhatsApp
+    alike) are left untouched; present (including `[]`) = its full number
+    set is replaced with this one (see
     channels/voice/org_numbers.py::replace_org_phone_numbers).
 
     `admin_email`/`admin_name`/`admin_mobile` edit the org's own admin
@@ -97,7 +99,6 @@ class OrgUpdateIn(BaseModel):
     admin_name: str | None = None
     admin_mobile: str | None = None
     phone_numbers: list[OrgPhoneNumberIn] | None = None
-    whatsapp_phone_number_id: str | None = None
 
 
 class PlanCreateIn(BaseModel):

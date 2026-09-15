@@ -12,14 +12,14 @@ export interface AdminOrg {
   admin_name: string | null;
   admin_mobile: string | null;
   created_at: string;
+  // Plivo/Twilio/WhatsApp entries alike — see apps/api/db/models/org_phone_number.py.
   phone_numbers: OrgPhoneNumber[];
-  whatsapp_phone_number_id: string | null;
 }
 
 // Input shape for one number in ProvisionOrgInput/UpdateOrgInput's
 // phone_numbers array — no `id`/`created_at` since the server assigns those.
 export interface OrgPhoneNumberInput {
-  provider: "plivo" | "twilio";
+  provider: "plivo" | "twilio" | "whatsapp";
   phone_number: string;
   is_default?: boolean;
 }
@@ -37,12 +37,11 @@ export interface ProvisionOrgInput {
   email: string;
   full_name?: string;
   mobile: string;
-  // Optional dedicated numbers for this org — any mix of Plivo/Twilio
-  // entries, several per provider allowed. Omit/empty to use the platform
-  // default calling numbers (see apps/api/schemas/auth.py's ProvisionOrgIn)
+  // Optional dedicated numbers for this org — any mix of Plivo/Twilio/
+  // WhatsApp entries, several per provider allowed. Omit/empty to use the
+  // platform default numbers (see apps/api/schemas/auth.py's ProvisionOrgIn)
   // — can be set later from the Edit dialog.
   phone_numbers?: OrgPhoneNumberInput[];
-  whatsapp_phone_number_id?: string;
 }
 
 export interface ProvisionOrgResult {
@@ -116,10 +115,10 @@ export interface UpdateOrgInput {
   admin_email?: string;
   admin_name?: string;
   admin_mobile?: string;
-  // Omitted = the org's numbers are left untouched; present (including [])
-  // = its full number set is replaced with this one.
+  // Omitted = the org's numbers (Plivo, Twilio, and WhatsApp alike) are
+  // left untouched; present (including []) = its full number set is
+  // replaced with this one.
   phone_numbers?: OrgPhoneNumberInput[];
-  whatsapp_phone_number_id?: string | null;
 }
 
 /**

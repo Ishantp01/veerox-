@@ -46,7 +46,7 @@ export const queryKeys = {
   prompts: () => ["prompts"] as const,
   tools: () => ["tools"] as const,
   script: () => ["script"] as const,
-  scripts: () => ["scripts"] as const,
+  scripts: (channel: "voice" | "whatsapp" = "voice") => ["scripts", channel] as const,
   qualificationCriteriaPresets: () => ["qualification-criteria-presets"] as const,
   orgNumbers: () => ["org-numbers"] as const,
   settings: () => ["settings"] as const,

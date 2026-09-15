@@ -49,6 +49,8 @@ export function useOutboundCall() {
 
 export interface OutboundWhatsAppInput {
   phone: string;
+  /** Which org WhatsApp number to send from — omit to use the org default (see useOrgNumbers()). */
+  phone_number_id?: string;
   /** Free-form body. Deliverable only inside the 24-hour customer-service window. */
   text?: string;
   /** Approved template name — required to message a user outside the window. */

@@ -54,33 +54,35 @@ class Org(Base):
     )
     # Org-authored replacement for the built-in OUTBOUND_CALL_PROMPT (see
     # core/prompts.py) — NULL means "use the platform default script".
-    # WhatsApp-only these days (core/agent.py::_system_prompt_for) — voice
-    # calling now picks from the `scripts` relationship below instead (see
-    # channels/voice/realtime_bridge.py::_system_instructions), one org-wide
-    # default plus per-campaign overrides (db/models/call_campaign.py's
-    # script_id). Kept here, unmigrated, purely for WhatsApp.
+    # WhatsApp's last-resort fallback these days (core/agent.py::
+    # _system_prompt_for), used only when the org has no WhatsApp `Script`
+    # row of its own either — both channels otherwise pick from the
+    # `scripts` relationship below (see channels/voice/realtime_bridge.py::
+    # _system_instructions for voice), one org-wide default per channel plus
+    # per-campaign overrides (db/models/call_campaign.py's script_id /
+    # whatsapp_script_id). Kept here, unmigrated, purely as that final
+    # WhatsApp fallback.
     script: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Meta's `metadata.phone_number_id` for this org's WhatsApp Business
-    # number — every inbound webhook payload carries it, so it's how
-    # channels/whatsapp/adapter.py tells which org a message belongs to
-    # instead of hardcoding settings.default_org_id. NULL = not yet
-    # provisioned with a dedicated number.
-    whatsapp_phone_number_id: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, unique=True
-    )
-    # This org's dedicated Plivo/Twilio numbers — an org can have several of
-    # each (see db/models/org_phone_number.py). Plivo/Twilio's answer webhook
-    # passes the dialed number as `To`, letting channels/voice/webhook.py
-    # resolve the org for an *inbound* call on any of them; outbound calls
-    # round-robin across every row per provider, in `position` order (see
-    # channels/voice/org_numbers.py::get_rotating_numbers) — ordered the same
-    # way here so the settings page lists numbers in the order they dial.
+    # This org's dedicated Plivo/Twilio/WhatsApp numbers — an org can have
+    # several of each (see db/models/org_phone_number.py). Plivo/Twilio's
+    # answer webhook passes the dialed number as `To`, letting
+    # channels/voice/webhook.py resolve the org for an *inbound* call on any
+    # of them; outbound calls round-robin across every row per provider, in
+    # `position` order (see channels/voice/org_numbers.py::
+    # get_rotating_numbers) — ordered the same way here so the settings page
+    # lists numbers in the order they dial. WhatsApp rows instead carry
+    # Meta's `phone_number_id`: every inbound webhook payload carries it, so
+    # it's how channels/whatsapp/adapter.py tells which org a message
+    # belongs to instead of hardcoding settings.default_org_id — no
+    # matching row means "not yet provisioned with a dedicated number",
+    # falling back to settings.default_org_id.
     phone_numbers: Mapped[list["OrgPhoneNumber"]] = relationship(
         cascade="all, delete-orphan", passive_deletes=True, order_by="OrgPhoneNumber.position"
     )
-    # This org's AI-calling script library (see db/models/script.py) — voice
-    # only. Exactly one row is expected to carry is_default=True; that's the
-    # base a campaign call falls back to when it has no script_id of its own.
+    # This org's AI script library (see db/models/script.py), split by
+    # channel. Exactly one row per channel is expected to carry
+    # is_default=True; that's the base a campaign falls back to when it has
+    # no script_id/whatsapp_script_id of its own.
     scripts: Mapped[list["Script"]] = relationship(cascade="all, delete-orphan", passive_deletes=True)
     # Explicit override of failover.py's automatic Plivo-first/Twilio-
     # fallback ordering — "plivo", "twilio", or NULL (automatic, the

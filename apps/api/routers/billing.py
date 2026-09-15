@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import re
 import time
 from datetime import UTC, datetime
 from typing import Annotated, Any, cast
@@ -57,6 +58,7 @@ from apps.api.db.models.billing_event import BillingEvent
 from apps.api.db.models.billing_payment import BillingPayment
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
+from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.models.plan import RESOURCE_TYPE_LIMIT_KEY, Plan
 from apps.api.db.models.platform_settings import PlatformSettings
 from apps.api.deps import (
@@ -157,6 +159,19 @@ def _plan_admin_out(plan: Plan) -> PlanAdminOut:
     )
 
 
+def _update_org_integrity_detail(exc: IntegrityError) -> str:
+    message = str(exc.orig).lower()
+    if (
+        "uq_org_phone_numbers_provider_number" in message
+        or "org_phone_numbers.provider" in message
+        or "org_phone_numbers.phone_number" in message
+    ):
+        return "That number is already assigned to another organization"
+    if "account_users.email" in message:
+        return "That email is already used by another account"
+    return "Could not update organization"
+
+
 @router.get("/orgs", response_model=list[OrgAdminOut])
 async def list_orgs(db: DbDep, _admin: PlatformAdminDep) -> list[OrgAdminOut]:
     """Platform-wide org directory — every org on the platform, not just the
@@ -223,7 +238,6 @@ async def list_orgs(db: DbDep, _admin: PlatformAdminDep) -> list[OrgAdminOut]:
                 phone_numbers=[
                     OrgPhoneNumberOut.model_validate(n, from_attributes=True) for n in org.phone_numbers
                 ],
-                whatsapp_phone_number_id=org.whatsapp_phone_number_id,
             )
         )
     return out
@@ -254,42 +268,62 @@ async def update_org(
         if not name:
             raise HTTPException(status_code=400, detail="Organization name cannot be empty")
         fields["name"] = name
-    if "whatsapp_phone_number_id" in fields and fields["whatsapp_phone_number_id"] is not None:
-        fields["whatsapp_phone_number_id"] = fields["whatsapp_phone_number_id"].strip() or None
-
     for field, value in fields.items():
         setattr(org_row, field, value)
     if phone_numbers is not None:
+        for entry in payload.phone_numbers or []:
+            if entry.provider == "whatsapp":
+                # WhatsApp numbers are allowed to repeat across orgs (see
+                # db/models/org_phone_number.py's partial unique index).
+                continue
+            phone_number = re.sub(r"\D", "", entry.phone_number)
+            number_owner_result = await db.execute(
+                select(OrgPhoneNumber.id).where(
+                    OrgPhoneNumber.provider == entry.provider,
+                    OrgPhoneNumber.phone_number == phone_number,
+                    OrgPhoneNumber.org_id != org_row.id,
+                )
+            )
+            if number_owner_result.scalar_one_or_none() is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="That number is already assigned to another organization",
+                )
         await replace_org_phone_numbers(db, org_row.id, payload.phone_numbers or [])
 
     if admin_fields:
-        admin_user_result = await db.execute(
-            select(AccountUser)
-            .join(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
-            .where(OrgMembership.org_id == org_row.id, OrgMembership.role == "admin")
-            .order_by(OrgMembership.created_at)
-            .limit(1)
-        )
-        admin_user = admin_user_result.scalar_one_or_none()
-        if admin_user is None:
-            raise HTTPException(status_code=404, detail="This organization has no admin account to edit")
-        if "admin_email" in admin_fields:
-            admin_user.email = admin_fields["admin_email"].strip()
-        if "admin_name" in admin_fields:
-            admin_user.full_name = (admin_fields["admin_name"] or "").strip() or None
-        if "admin_mobile" in admin_fields:
-            admin_user.mobile = (admin_fields["admin_mobile"] or "").strip() or None
+        with db.no_autoflush:
+            admin_user_result = await db.execute(
+                select(AccountUser)
+                .join(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
+                .where(OrgMembership.org_id == org_row.id, OrgMembership.role == "admin")
+                .order_by(OrgMembership.created_at)
+                .limit(1)
+            )
+            admin_user = admin_user_result.scalar_one_or_none()
+            if admin_user is None:
+                raise HTTPException(status_code=404, detail="This organization has no admin account to edit")
+            if "admin_email" in admin_fields:
+                admin_email = admin_fields["admin_email"].strip()
+                email_owner_result = await db.execute(
+                    select(AccountUser.id).where(
+                        AccountUser.email == admin_email,
+                        AccountUser.id != admin_user.id,
+                    )
+                )
+                if email_owner_result.scalar_one_or_none() is not None:
+                    raise HTTPException(status_code=409, detail="That email is already used by another account")
+                admin_user.email = admin_email
+            if "admin_name" in admin_fields:
+                admin_user.full_name = (admin_fields["admin_name"] or "").strip() or None
+            if "admin_mobile" in admin_fields:
+                admin_user.mobile = (admin_fields["admin_mobile"] or "").strip() or None
 
     try:
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
-        detail = (
-            "That email is already used by another account"
-            if "admin_email" in admin_fields
-            else "That number is already assigned to another organization"
-        )
-        raise HTTPException(status_code=409, detail=detail) from exc
+        raise HTTPException(status_code=409, detail=_update_org_integrity_detail(exc)) from exc
 
     result = await db.execute(
         select(Org).options(selectinload(Org.phone_numbers)).where(Org.id == org_row.id)
@@ -329,7 +363,6 @@ async def update_org(
         phone_numbers=[
             OrgPhoneNumberOut.model_validate(n, from_attributes=True) for n in org_row.phone_numbers
         ],
-        whatsapp_phone_number_id=org_row.whatsapp_phone_number_id,
     )
 
 
@@ -337,19 +370,23 @@ _CALLING_NUMBERS_CELL_LIMIT = 5
 
 
 def _format_calling_numbers(phone_numbers: list[OrgPhoneNumberOut]) -> str:
-    """Render an org's calling numbers for one Excel cell, capped so an org
-    with a large pool (bulk-purchased campaign numbers can run into the
-    dozens or more) doesn't produce one unreadable comma-joined wall of
-    text. Each provider's default (the number outbound calls actually dial
-    from — the only one that's operationally load-bearing day to day) is
-    always shown; everything else fills the remaining slots up to the cap,
-    with a "+N more" tail for whatever didn't fit. The full list is still
-    available in the dashboard's Edit Org dialog.
+    """Render an org's dedicated Plivo/Twilio calling numbers for one Excel
+    cell, capped so an org with a large pool (bulk-purchased campaign
+    numbers can run into the dozens or more) doesn't produce one unreadable
+    comma-joined wall of text. Excludes provider="whatsapp" rows — those get
+    their own column (see _format_whatsapp_numbers) since they're a
+    different kind of number (Meta's phone_number_id, not E.164). Each
+    provider's default (the number outbound calls actually dial from — the
+    only one that's operationally load-bearing day to day) is always shown;
+    everything else fills the remaining slots up to the cap, with a "+N
+    more" tail for whatever didn't fit. The full list is still available in
+    the dashboard's Edit Org dialog.
     """
-    if not phone_numbers:
+    calling_numbers = [n for n in phone_numbers if n.provider != "whatsapp"]
+    if not calling_numbers:
         return ""
-    defaults = [n for n in phone_numbers if n.is_default]
-    rest = [n for n in phone_numbers if not n.is_default]
+    defaults = [n for n in calling_numbers if n.is_default]
+    rest = [n for n in calling_numbers if not n.is_default]
     ordered = defaults + rest
     shown = ordered[:_CALLING_NUMBERS_CELL_LIMIT]
     text = ", ".join(
@@ -359,6 +396,20 @@ def _format_calling_numbers(phone_numbers: list[OrgPhoneNumberOut]) -> str:
     if remaining > 0:
         text += f", +{remaining} more"
     return text
+
+
+def _format_whatsapp_numbers(phone_numbers: list[OrgPhoneNumberOut]) -> str:
+    """Render an org's dedicated WhatsApp phone_number_id(s) for one Excel
+    cell — usually just one or two, so no cap/truncation like
+    _format_calling_numbers needs."""
+    whatsapp_numbers = [n for n in phone_numbers if n.provider == "whatsapp"]
+    if not whatsapp_numbers:
+        return ""
+    defaults = [n for n in whatsapp_numbers if n.is_default]
+    rest = [n for n in whatsapp_numbers if not n.is_default]
+    return ", ".join(
+        f"{n.phone_number}{' (default)' if n.is_default else ''}" for n in defaults + rest
+    )
 
 
 @router.get("/orgs.xlsx")
@@ -379,7 +430,7 @@ async def export_orgs_xlsx(db: DbDep, _admin: PlatformAdminDep) -> StreamingResp
             "team_members",
             "created_at",
             "calling_numbers",
-            "whatsapp_phone_number_id",
+            "whatsapp_numbers",
         ]
     )
     # Default column width is ~8.4 chars — too narrow for the formatted
@@ -400,11 +451,12 @@ async def export_orgs_xlsx(db: DbDep, _admin: PlatformAdminDep) -> StreamingResp
         # An org's dedicated Plivo/Twilio calling numbers weren't in this
         # export at all before — OrgAdminOut carries them (phone-number-list-
         # field.tsx in the Edit Org dialog is the only place they were
-        # otherwise visible), just never rendered here. Also surfaces
-        # whatsapp_phone_number_id so a misconfigured value (e.g. a phone
-        # number typed in instead of Meta's numeric phone_number_id) is
-        # visible across every org at a glance instead of only on inspection.
+        # otherwise visible), just never rendered here. Also surfaces its
+        # WhatsApp number(s) so a misconfigured value (e.g. a phone number
+        # typed in instead of Meta's numeric phone_number_id) is visible
+        # across every org at a glance instead of only on inspection.
         calling_numbers = _format_calling_numbers(org.phone_numbers)
+        whatsapp_numbers = _format_whatsapp_numbers(org.phone_numbers)
         sheet.append(
             [
                 org.name,
@@ -414,7 +466,7 @@ async def export_orgs_xlsx(db: DbDep, _admin: PlatformAdminDep) -> StreamingResp
                 org.seat_count,
                 created_at,
                 calling_numbers,
-                org.whatsapp_phone_number_id or "",
+                whatsapp_numbers,
             ]
         )
         sheet.cell(row=sheet.max_row, column=6).number_format = "yyyy-mm-dd hh:mm"

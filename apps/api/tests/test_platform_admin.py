@@ -410,3 +410,47 @@ async def test_update_org_admin_email_conflict_returns_409(
         headers=ADMIN_HEADERS,
     )
     assert response.status_code == 409
+    assert response.json()["detail"] == "That email is already used by another account"
+
+
+async def test_update_org_phone_number_conflict_is_not_reported_as_email_conflict(
+    client: AsyncClient,
+) -> None:
+    first = await client.post(
+        "/auth/provision-org",
+        json={
+            "org_name": "Number Owner Co",
+            "email": "number-owner@example.com",
+            "mobile": "+919876500006",
+            "phone_numbers": [
+                {"provider": "plivo", "phone_number": "+15550001000", "is_default": True}
+            ],
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert first.status_code == 201
+
+    second = await client.post(
+        "/auth/provision-org",
+        json={
+            "org_name": "Number Edit Co",
+            "email": "number-edit@example.com",
+            "mobile": "+919876500007",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert second.status_code == 201
+    second_org_id = second.json()["org_id"]
+
+    response = await client.patch(
+        f"/billing/orgs/{second_org_id}",
+        json={
+            "admin_email": "number-edit@example.com",
+            "phone_numbers": [
+                {"provider": "plivo", "phone_number": "+15550001000", "is_default": True}
+            ],
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "That number is already assigned to another organization"

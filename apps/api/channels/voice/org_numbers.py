@@ -34,6 +34,24 @@ from apps.api.schemas.org_numbers import OrgPhoneNumberIn
 _PHONE_ROUND_ROBIN_PREFIX = "veerox:phone_round_robin:"
 
 
+async def get_default_whatsapp_number_id(db: AsyncSession, org_id: UUID | str) -> str | None:
+    """This org's default WhatsApp `phone_number_id` (Meta's dashboard id,
+    not an E.164 number), or None if it has none configured — the fallback
+    used by every outbound WhatsApp send that isn't a campaign with its own
+    pinned `whatsapp_number_id` (see db/models/call_campaign.py). Replaces
+    the old direct `Org.whatsapp_phone_number_id` reads now that an org can
+    have several WhatsApp numbers (see db/models/org_phone_number.py)."""
+    return (
+        await db.execute(
+            select(OrgPhoneNumber.phone_number).where(
+                OrgPhoneNumber.org_id == org_id,
+                OrgPhoneNumber.provider == "whatsapp",
+                OrgPhoneNumber.is_default.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+
+
 async def get_default_numbers(db: AsyncSession, org_id: UUID | str) -> tuple[str | None, str | None]:
     """(plivo_from_e164, twilio_from_e164) — this org's *default* ("Primary")
     number per provider, or None if it has none on that provider. Purely a

@@ -32,7 +32,11 @@ from sqlalchemy.orm import selectinload
 
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice import plivo_client as voice_plivo
-from apps.api.channels.voice.org_numbers import get_rotating_numbers, replace_org_phone_numbers
+from apps.api.channels.voice.org_numbers import (
+    get_default_whatsapp_number_id,
+    get_rotating_numbers,
+    replace_org_phone_numbers,
+)
 from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
@@ -1516,6 +1520,8 @@ def _campaign_out(
         custom_message=campaign.custom_message,
         script_id=campaign.script_id,
         phone_number_id=campaign.phone_number_id,
+        whatsapp_script_id=campaign.whatsapp_script_id,
+        whatsapp_number_id=campaign.whatsapp_number_id,
         max_attempts=campaign.max_attempts,
         created_by_account_user_id=campaign.created_by_account_user_id,
         created_by_name=created_by_name,
@@ -1541,6 +1547,8 @@ async def _create_campaign_from_rows(
     custom_message: str | None = None,
     script_id: UUID | None = None,
     phone_number_id: UUID | None = None,
+    whatsapp_script_id: UUID | None = None,
+    whatsapp_number_id: UUID | None = None,
     max_attempts: int = 3,
     created_by_account_user_id: UUID | None = None,
 ) -> CampaignCreateResult:
@@ -1589,6 +1597,8 @@ async def _create_campaign_from_rows(
         custom_message=custom_message,
         script_id=script_id,
         phone_number_id=phone_number_id,
+        whatsapp_script_id=whatsapp_script_id,
+        whatsapp_number_id=whatsapp_number_id,
         max_attempts=max_attempts,
         created_by_account_user_id=created_by_account_user_id,
         created_at=datetime.now(UTC),
@@ -1720,6 +1730,8 @@ async def _create_campaigns_from_rows(
     custom_message: str | None = None,
     script_id: UUID | None = None,
     phone_number_id: UUID | None = None,
+    whatsapp_script_id: UUID | None = None,
+    whatsapp_number_id: UUID | None = None,
     max_attempts: int = 3,
     created_by_account_user_id: UUID | None = None,
 ) -> CampaignCreateResult:
@@ -1785,6 +1797,8 @@ async def _create_campaigns_from_rows(
         custom_message=custom_message,
         script_id=script_id,
         phone_number_id=phone_number_id,
+        whatsapp_script_id=whatsapp_script_id,
+        whatsapp_number_id=whatsapp_number_id,
         max_attempts=max_attempts,
         created_by_account_user_id=created_by_account_user_id,
     )
@@ -1811,6 +1825,8 @@ async def create_campaign(
     custom_message: str | None = Form(None),
     script_id: UUID | None = Form(None),
     phone_number_id: UUID | None = Form(None),
+    whatsapp_script_id: UUID | None = Form(None),
+    whatsapp_number_id: UUID | None = Form(None),
     max_attempts: int = Form(3),
     x_admin_token: str | None = Header(None),
 ) -> CampaignCreateResult:
@@ -1830,6 +1846,9 @@ async def create_campaign(
     ``script_id``/``phone_number_id`` are voice-only, optional overrides —
     left unset, calls use the org's default script and auto-rotate across
     its numbers, same as before either field existed.
+    ``whatsapp_script_id``/``whatsapp_number_id`` are their WhatsApp-only
+    siblings — left unset, WhatsApp sends use the org's default WhatsApp
+    script and its default WhatsApp number.
 
     ``max_attempts`` (voice-only, any integer >= 1, default 3) is the absolute
     cap on how many calls the dialer will ever place to one target — enforced
@@ -1868,6 +1887,18 @@ async def create_campaign(
         number = await db.get(OrgPhoneNumber, phone_number_id)
         if number is None or number.org_id != org_id:
             raise HTTPException(status_code=400, detail="phone_number_id does not belong to this org")
+    if whatsapp_script_id is not None:
+        wa_script = await db.get(Script, whatsapp_script_id)
+        if wa_script is None or wa_script.org_id != org_id or wa_script.channel != "whatsapp":
+            raise HTTPException(
+                status_code=400, detail="whatsapp_script_id does not belong to this org"
+            )
+    if whatsapp_number_id is not None:
+        wa_number = await db.get(OrgPhoneNumber, whatsapp_number_id)
+        if wa_number is None or wa_number.org_id != org_id or wa_number.provider != "whatsapp":
+            raise HTTPException(
+                status_code=400, detail="whatsapp_number_id does not belong to this org"
+            )
 
     # A media (IMAGE/VIDEO/DOCUMENT) header is itself the header parameter —
     # resolve a saved-file name to its public URL once, here, rather than on
@@ -1907,6 +1938,8 @@ async def create_campaign(
         custom_message=custom_message,
         script_id=script_id,
         phone_number_id=phone_number_id,
+        whatsapp_script_id=whatsapp_script_id,
+        whatsapp_number_id=whatsapp_number_id,
         max_attempts=max_attempts,
         created_by_account_user_id=account_user_id,
     )
@@ -2077,13 +2110,15 @@ async def update_campaign(
     payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> CampaignOut:
-    """Change a campaign's voice overrides after creation.
+    """Change a campaign's voice/WhatsApp overrides after creation.
 
-    ``script_id``/``phone_number_id``/``max_attempts`` are otherwise fixed
-    forever once a campaign is created — editing (or replacing) a script in
-    the library does NOT retroactively reach a campaign that already pinned
-    a specific ``script_id`` at creation time (see channels/voice/
-    realtime_bridge.py's ``_system_instructions``, which resolves the
+    ``script_id``/``phone_number_id``/``whatsapp_script_id``/
+    ``whatsapp_number_id``/``max_attempts`` are otherwise fixed forever once
+    a campaign is created — editing (or replacing) a script in the library
+    does NOT retroactively reach a campaign that already pinned a specific
+    ``script_id``/``whatsapp_script_id`` at creation time (see
+    channels/voice/realtime_bridge.py's ``_system_instructions`` for voice,
+    core/agent.py's ``_system_prompt_for`` for WhatsApp — both resolve the
     campaign's own pinned script ahead of the org default). This is how you
     point an already-running/paused campaign at a different or newly edited
     script without recreating it. Pass a field as ``null`` to clear it back
@@ -2106,6 +2141,22 @@ async def update_campaign(
             if number is None or number.org_id != campaign.org_id:
                 raise HTTPException(status_code=400, detail="phone_number_id does not belong to this org")
         campaign.phone_number_id = fields["phone_number_id"]
+    if "whatsapp_script_id" in fields:
+        if fields["whatsapp_script_id"] is not None:
+            wa_script = await db.get(Script, fields["whatsapp_script_id"])
+            if wa_script is None or wa_script.org_id != campaign.org_id or wa_script.channel != "whatsapp":
+                raise HTTPException(
+                    status_code=400, detail="whatsapp_script_id does not belong to this org"
+                )
+        campaign.whatsapp_script_id = fields["whatsapp_script_id"]
+    if "whatsapp_number_id" in fields:
+        if fields["whatsapp_number_id"] is not None:
+            wa_number = await db.get(OrgPhoneNumber, fields["whatsapp_number_id"])
+            if wa_number is None or wa_number.org_id != campaign.org_id or wa_number.provider != "whatsapp":
+                raise HTTPException(
+                    status_code=400, detail="whatsapp_number_id does not belong to this org"
+                )
+        campaign.whatsapp_number_id = fields["whatsapp_number_id"]
     if "max_attempts" in fields:
         if fields["max_attempts"] is None or fields["max_attempts"] < 1:
             raise HTTPException(status_code=400, detail="max_attempts must be at least 1")
@@ -2366,14 +2417,18 @@ async def update_script(
 async def list_scripts(
     db: DbDep,
     org: RequestOrgDep,
+    channel: str = Query("voice", pattern="^(voice|whatsapp)$"),
     x_admin_token: str | None = Header(None),
 ) -> list[ScriptLibraryOut]:
-    """This org's voice-calling script library — see db/models/script.py.
-    Pick one per campaign (POST /admin/campaigns' script_id) or leave the
-    org's is_default one as the fallback every campaign without its own
-    pick uses."""
+    """This org's script library for one channel — see db/models/script.py.
+    Pick one per campaign (POST /admin/campaigns' script_id/
+    whatsapp_script_id) or leave the org's is_default one (for that channel)
+    as the fallback every campaign without its own pick uses. Defaults to
+    "voice" so existing callers that never sent `channel` keep working."""
     result = await db.execute(
-        select(Script).where(Script.org_id == org).order_by(Script.created_at)
+        select(Script)
+        .where(Script.org_id == org, Script.channel == channel)
+        .order_by(Script.created_at)
     )
     return [ScriptLibraryOut.model_validate(s) for s in result.scalars().all()]
 
@@ -2385,19 +2440,36 @@ async def create_script(
     org: RequestOrgDep,
     x_admin_token: str | None = Header(None),
 ) -> ScriptLibraryOut:
-    """Add a script to this org's library. An org's very first script always
-    becomes its default regardless of `is_default` — an org is never left
-    with zero default scripts once it has at least one. Otherwise, marking
-    this one default unsets whichever script previously held it."""
+    """Add a script to this org's library, under `body.channel` (default
+    "voice"). An org's very first script on that channel always becomes its
+    default regardless of `is_default` — an org is never left with zero
+    default scripts for a channel once it has at least one there.
+    Otherwise, marking this one default unsets whichever script on the same
+    channel previously held it."""
     has_any = (
-        await db.execute(select(Script.id).where(Script.org_id == org).limit(1))
+        await db.execute(
+            select(Script.id).where(Script.org_id == org, Script.channel == body.channel).limit(1)
+        )
     ).first() is not None
     make_default = body.is_default or not has_any
     if make_default:
         await db.execute(
-            update(Script).where(Script.org_id == org, Script.is_default.is_(True)).values(is_default=False)
+            update(Script)
+            .where(Script.org_id == org, Script.channel == body.channel, Script.is_default.is_(True))
+            .values(is_default=False)
         )
-    script = Script(org_id=org, name=body.name.strip(), content=body.content, is_default=make_default)
+    if body.phone_number_id is not None:
+        number = await db.get(OrgPhoneNumber, body.phone_number_id)
+        if number is None or number.org_id != org or number.provider != "whatsapp":
+            raise HTTPException(status_code=400, detail="phone_number_id does not belong to this org")
+    script = Script(
+        org_id=org,
+        name=body.name.strip(),
+        content=body.content,
+        channel=body.channel,
+        is_default=make_default,
+        phone_number_id=body.phone_number_id,
+    )
     db.add(script)
     await db.commit()
     await db.refresh(script)
@@ -2422,6 +2494,14 @@ async def update_script_library_item(
         script.name = fields["name"].strip()
     if "content" in fields:
         script.content = fields["content"]
+    if "phone_number_id" in fields:
+        if fields["phone_number_id"] is not None:
+            number = await db.get(OrgPhoneNumber, fields["phone_number_id"])
+            if number is None or number.org_id != org or number.provider != "whatsapp":
+                raise HTTPException(
+                    status_code=400, detail="phone_number_id does not belong to this org"
+                )
+        script.phone_number_id = fields["phone_number_id"]
     await db.commit()
     await db.refresh(script)
     return ScriptLibraryOut.model_validate(script)
@@ -2434,13 +2514,15 @@ async def set_default_script(
     org: RequestOrgDep,
     x_admin_token: str | None = Header(None),
 ) -> ScriptLibraryOut:
-    """Make this the org's default script, atomically unsetting whichever
-    one previously held that flag."""
+    """Make this the org's default script for its channel, atomically
+    unsetting whichever one previously held that flag on the same channel."""
     script = await db.get(Script, script_id)
     if script is None or script.org_id != org:
         raise HTTPException(status_code=404, detail="Script not found")
     await db.execute(
-        update(Script).where(Script.org_id == org, Script.is_default.is_(True)).values(is_default=False)
+        update(Script)
+        .where(Script.org_id == org, Script.channel == script.channel, Script.is_default.is_(True))
+        .values(is_default=False)
     )
     script.is_default = True
     await db.commit()
@@ -2666,7 +2748,6 @@ async def get_org_numbers(
     if record is None:
         raise HTTPException(status_code=404, detail="Org not found")
     return OrgNumbersOut(
-        whatsapp_phone_number_id=record.whatsapp_phone_number_id,
         phone_numbers=[
             OrgPhoneNumberOut.model_validate(n, from_attributes=True) for n in record.phone_numbers
         ],
@@ -2680,24 +2761,17 @@ async def update_org_numbers(
     org: RequestOrgDep,
     x_admin_token: str | None = Header(None),
 ) -> OrgNumbersOut:
-    """Set (or, with an empty string, clear) this org's WhatsApp number, and/or
-    replace its full set of dedicated calling numbers. Each field is
-    independently optional — a field omitted from the request body (as
-    opposed to sent as `null`/`[]`) is left untouched, so the calling/
-    WhatsApp settings pages can each save just their own number without
-    clobbering the other.
-
-    `phone_numbers`, when present, REPLACES this org's entire number set
-    (see channels/voice/org_numbers.py::replace_org_phone_numbers) — an org
-    can have several dedicated numbers per provider.
+    """Replace this org's full set of dedicated numbers — Plivo, Twilio, and
+    WhatsApp alike (see channels/voice/org_numbers.py::
+    replace_org_phone_numbers) — an org can have several per provider.
+    `phone_numbers` omitted leaves the org's numbers untouched entirely;
+    present (including `[]`) replaces the whole set in one shot, so the
+    caller must resubmit every provider's numbers together, not just the
+    ones it's changing.
     """
     record = await db.get(Org, org)
     if record is None:
         raise HTTPException(status_code=404, detail="Org not found")
-    fields = body.model_dump(exclude_unset=True)
-    if "whatsapp_phone_number_id" in fields:
-        value = fields["whatsapp_phone_number_id"]
-        record.whatsapp_phone_number_id = value.strip() if value else None
     if body.phone_numbers is not None:
         await replace_org_phone_numbers(db, record.id, body.phone_numbers)
     try:
@@ -2712,7 +2786,6 @@ async def update_org_numbers(
     )
     record = result.scalar_one()
     return OrgNumbersOut(
-        whatsapp_phone_number_id=record.whatsapp_phone_number_id,
         phone_numbers=[
             OrgPhoneNumberOut.model_validate(n, from_attributes=True) for n in record.phone_numbers
         ],
@@ -2909,10 +2982,21 @@ async def outbound_whatsapp(
     # customer-service window (free-form text raises Meta error 131047); inside
     # the window, plain text is fine. The caller chooses by supplying
     # template_name (template) or text (free-form) — enforced by the schema.
-    # Send from this org's own dedicated WhatsApp number when it has one
-    # (see Org.whatsapp_phone_number_id), falling back to the platform default.
-    org_record = await db.get(Org, org_id)
-    phone_number_id = org_record.whatsapp_phone_number_id if org_record else None
+    # Send from the caller's chosen dedicated WhatsApp number, else this
+    # org's default one (see channels/voice/org_numbers.py::
+    # get_default_whatsapp_number_id), else the platform default.
+    phone_number_id = None
+    if payload.phone_number_id:
+        chosen_number = await db.get(OrgPhoneNumber, payload.phone_number_id)
+        if (
+            chosen_number is None
+            or chosen_number.org_id != org_id
+            or chosen_number.provider != "whatsapp"
+        ):
+            raise HTTPException(status_code=400, detail="Invalid WhatsApp number")
+        phone_number_id = chosen_number.phone_number
+    else:
+        phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
     try:
         if payload.template_name:

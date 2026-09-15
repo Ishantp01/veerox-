@@ -19,7 +19,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { useOutboundWhatsApp, useTemplates } from "@/lib/hooks";
+import { useOutboundWhatsApp, useOrgNumbers, useTemplates } from "@/lib/hooks";
 import { ContactPicker } from "@/components/crm/contact-picker";
 import type { Contact, Template } from "@/lib/types";
 
@@ -29,6 +29,7 @@ const whatsappSchema = z
       .string()
       .trim()
       .regex(/^\+\d{8,15}$/, "Enter a valid E.164 number, e.g. +919876543210"),
+    phoneNumberId: z.string().optional(),
     mode: z.enum(["text", "template"]),
     text: z.string().trim().optional(),
     templateName: z.string().trim().optional(),
@@ -86,6 +87,10 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
     );
   const outboundWhatsApp = useOutboundWhatsApp();
   const templates = useTemplates({ active: true });
+  const orgNumbers = useOrgNumbers();
+  const whatsappNumbers = (orgNumbers.data?.phone_numbers ?? []).filter(
+    (n) => n.provider === "whatsapp",
+  );
 
   const {
     register,
@@ -101,6 +106,7 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
     mode: "onChange",
     defaultValues: {
       phone: defaultPhone || "+91",
+      phoneNumberId: "",
       mode: "text",
       text: "",
       templateName: "",
@@ -152,6 +158,7 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
       values.mode === "template"
         ? {
             phone: values.phone,
+            phone_number_id: values.phoneNumberId || undefined,
             template_name: values.templateName,
             template_lang: values.templateLang || "en_US",
             template_params: values.templateParams
@@ -169,7 +176,11 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
                   }))
                 : undefined,
           }
-        : { phone: values.phone, text: values.text },
+        : {
+            phone: values.phone,
+            phone_number_id: values.phoneNumberId || undefined,
+            text: values.text,
+          },
       {
         onSuccess: (res) => {
           setLastMessageId(res.wa_message_id);
@@ -177,6 +188,7 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
           // template) for follow-ups.
           reset({
             phone: getValues("phone"),
+            phoneNumberId: values.phoneNumberId,
             mode: values.mode,
             text: "",
             templateName: values.mode === "template" ? values.templateName : "",
@@ -259,6 +271,26 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
               </p>
             )}
           </div>
+
+          {whatsappNumbers.length > 1 && (
+            <div>
+              <Label htmlFor="phoneNumberId">Send from</Label>
+              <Select
+                id="phoneNumberId"
+                value={watch("phoneNumberId") ?? ""}
+                onChange={(v) => setValue("phoneNumberId", v)}
+                className="w-full"
+              >
+                <option value="">Use org default WhatsApp number</option>
+                {whatsappNumbers.map((n) => (
+                  <option key={n.id} value={n.id}>
+                    {n.phone_number}
+                    {n.is_default ? ", default" : ""}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          )}
 
           <div>
             <Label>Mode</Label>

@@ -71,6 +71,18 @@ class CallCampaign(Base):
     phone_number_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("org_phone_numbers.id", ondelete="SET NULL"), nullable=True
     )
+    # WhatsApp-only siblings of the two above, same NULL-falls-back-to-org-
+    # default contract — see core/agent.py::_system_prompt_for (script) and
+    # workers/whatsapp_dispatcher.py::_claim_targets (number). Kept separate
+    # from script_id/phone_number_id rather than reused across channels
+    # since a "mixed" campaign (see `channel` above) can need both a voice
+    # and a WhatsApp override at once.
+    whatsapp_script_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("scripts.id", ondelete="SET NULL"), nullable=True
+    )
+    whatsapp_number_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("org_phone_numbers.id", ondelete="SET NULL"), nullable=True
+    )
     # Voice-only: how many times the dialer (workers/campaign_dialer.py) will
     # place a call to a target that never connects before giving up and
     # marking it "failed". Selectable per campaign at creation (any integer

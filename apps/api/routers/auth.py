@@ -128,12 +128,7 @@ async def provision_org(
     # signal the frontend's dashboard layout gates on to force new orgs
     # through /billing (choose-a-plan, even the free one) before anything
     # else in the app becomes reachable. See DashboardLayout in apps/web.
-    org = Org(
-        name=payload.org_name,
-        whatsapp_phone_number_id=payload.whatsapp_phone_number_id.strip()
-        if payload.whatsapp_phone_number_id
-        else None,
-    )
+    org = Org(name=payload.org_name)
     db.add(org)
     try:
         await db.flush()

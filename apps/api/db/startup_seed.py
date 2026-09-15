@@ -34,6 +34,13 @@ async def _seed_env_phone_number(
     provider: str,
     raw_phone_number: str | None,
 ) -> bool:
+    """Add one OrgPhoneNumber row for this env-configured number, unless a
+    row for it already exists anywhere (idempotent across restarts) — for
+    provider="whatsapp", `raw_phone_number` is actually Meta's numeric
+    `phone_number_id` (settings.meta_phone_number_id), not a dialable number,
+    but it's digits-only same as a stripped E.164 number so `_digits_only`
+    still applies cleanly.
+    """
     phone_number = _digits_only(raw_phone_number)
     if not phone_number:
         return False
@@ -101,32 +108,9 @@ async def ensure_env_seed_data(db: AsyncSession) -> None:
     org = await db.get(Org, org_id)
     created_org = False
     if org is None:
-        org = Org(
-            id=org_id,
-            name="Demo Org",
-            whatsapp_phone_number_id=(settings.meta_phone_number_id or "").strip() or None,
-        )
+        org = Org(id=org_id, name="Demo Org")
         db.add(org)
         created_org = True
-    elif not org.whatsapp_phone_number_id and settings.meta_phone_number_id:
-        env_phone_number_id = settings.meta_phone_number_id.strip()
-        owner = (
-            await db.execute(
-                select(Org.id).where(
-                    Org.whatsapp_phone_number_id == env_phone_number_id,
-                    Org.id != org_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if owner is None:
-            org.whatsapp_phone_number_id = env_phone_number_id
-        else:
-            logger.warning(
-                "startup_seed_whatsapp_phone_number_owned_by_other_org",
-                whatsapp_phone_number_id=env_phone_number_id,
-                owning_org_id=str(owner),
-                default_org_id=str(org_id),
-            )
 
     account_user = await db.get(AccountUser, DEFAULT_OWNER_ID)
     created_owner = False
@@ -180,6 +164,12 @@ async def ensure_env_seed_data(db: AsyncSession) -> None:
         provider="twilio",
         raw_phone_number=settings.twilio_phone_number,
     )
+    seeded_whatsapp = await _seed_env_phone_number(
+        db,
+        org_id=org_id,
+        provider="whatsapp",
+        raw_phone_number=settings.meta_phone_number_id,
+    )
 
     await db.commit()
     logger.info(
@@ -188,9 +178,9 @@ async def ensure_env_seed_data(db: AsyncSession) -> None:
         created_org=created_org,
         created_owner=created_owner,
         created_membership=created_membership,
-        has_whatsapp_phone_number_id=bool(org.whatsapp_phone_number_id),
         seeded_plivo_phone_number=seeded_plivo,
         seeded_twilio_phone_number=seeded_twilio,
+        seeded_whatsapp_phone_number_id=seeded_whatsapp,
     )
 
 

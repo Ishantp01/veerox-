@@ -234,23 +234,18 @@ export interface Prompts {
   whatsapp_append: string;
 }
 
-// GET/PUT /admin/script — the org's editable script (or the platform
-// default when the org hasn't overridden it). WhatsApp-only these days —
-// see ScriptLibraryItem for the voice-calling script library.
-export interface Script {
-  script: string;
-  is_default: boolean;
-}
-
-// GET/POST/PATCH/DELETE /admin/scripts — one entry in the org's voice-only
-// AI-calling script library (see apps/api/db/models/script.py). Pick one
-// per campaign, or leave is_default as the fallback every campaign without
-// its own pick uses.
+// GET/POST/PATCH/DELETE /admin/scripts — one entry in the org's per-channel
+// AI script library (see apps/api/db/models/script.py). Pick one per
+// campaign, or leave is_default as the fallback (for that channel) every
+// campaign without its own pick uses.
 export interface ScriptLibraryItem {
   id: string;
   name: string;
   content: string;
+  channel: "voice" | "whatsapp";
   is_default: boolean;
+  /** Settings-page label only — which org WhatsApp number this script is paired with. */
+  phone_number_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -285,12 +280,15 @@ export interface WhatsAppAsset {
   updated_at: string;
 }
 
-// One of an org's dedicated Plivo/Twilio numbers — an org can have several
-// per provider (see apps/api/db/models/org_phone_number.py). Outbound calls
-// dial from whichever row per provider has is_default true.
+// One of an org's dedicated Plivo/Twilio/WhatsApp numbers — an org can have
+// several per provider (see apps/api/db/models/org_phone_number.py).
+// Outbound calls dial from whichever row per provider has is_default true;
+// for "whatsapp", `phone_number` is Meta's phone_number_id, not an E.164
+// number, and is_default picks the fallback number for any send with no
+// more specific (campaign-pinned) choice.
 export interface OrgPhoneNumber {
   id: string;
-  provider: "plivo" | "twilio";
+  provider: "plivo" | "twilio" | "whatsapp";
   phone_number: string;
   is_default: boolean;
   created_at: string;
@@ -298,7 +296,6 @@ export interface OrgPhoneNumber {
 
 // GET/PUT /admin/org-numbers — the org's dedicated WhatsApp/calling numbers.
 export interface OrgNumbers {
-  whatsapp_phone_number_id: string | null;
   phone_numbers: OrgPhoneNumber[];
 }
 
@@ -457,6 +454,10 @@ export interface Campaign {
   // "auto-rotate across the org's numbers".
   script_id: string | null;
   phone_number_id: string | null;
+  // WhatsApp-only siblings of the two above — null means "use the org
+  // default WhatsApp script" / "send from the org's default WhatsApp number".
+  whatsapp_script_id: string | null;
+  whatsapp_number_id: string | null;
   // Voice-only: how many times the dialer re-calls a target that never
   // connects before marking it failed (any integer >= 1, default 3).
   max_attempts: number;

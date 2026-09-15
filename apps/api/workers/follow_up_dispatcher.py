@@ -32,7 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.voice import failover as voice_failover
-from apps.api.channels.voice.org_numbers import get_rotating_numbers
+from apps.api.channels.voice.org_numbers import get_default_whatsapp_number_id, get_rotating_numbers
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.agent import _is_kill_switch_active
@@ -346,9 +346,10 @@ async def _execute_task(task_id: UUID) -> None:
             rule = await db.get(FollowUpRule, task.rule_id) if task.rule_id else None
             message = rule.message_template if rule else (lead.follow_up_note or _DEFAULT_FOLLOW_UP_MESSAGE)
 
-        # Send from this org's own dedicated WhatsApp number when it has one
-        # (see Org.whatsapp_phone_number_id), falling back to the platform default.
-        phone_number_id = org_record.whatsapp_phone_number_id if org_record else None
+        # Send from this org's own default dedicated WhatsApp number when it
+        # has one (see channels/voice/org_numbers.py::
+        # get_default_whatsapp_number_id), falling back to the platform default.
+        phone_number_id = await get_default_whatsapp_number_id(db, lead.org_id)
 
     try:
         if task.template_name:

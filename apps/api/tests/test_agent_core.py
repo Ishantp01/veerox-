@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.core import agent as agent_module
 from apps.api.core.agent import agent_core
 from apps.api.core.llm import ChatResult, ToolCall
-from apps.api.db.models import Conversation, Lead, Message, Org, User
+from apps.api.db.models import CallCampaign, CampaignTarget, Conversation, Lead, Message, Org, Script, User
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000ccc")
@@ -127,6 +127,52 @@ async def test_handle_turn_plain_text_reply_persists_both_rows(
     convs = (await db_session.execute(select(Conversation))).scalars().all()
     assert len(convs) == 1
     assert convs[0].channel == "whatsapp"
+
+
+async def test_handle_turn_whatsapp_uses_campaigns_pinned_script(
+    db_session: AsyncSession,
+    fake_redis: _FakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A WhatsApp turn belonging to an open campaign target picks up that
+    campaign's pinned whatsapp_script_id ahead of the org default/platform
+    prompt — mirrors voice's realtime_bridge script resolution."""
+    await _seed_org_and_user(db_session)
+    wa_script = Script(
+        org_id=ORG_ID, name="WA", content="PINNED_SCRIPT_MARKER", channel="whatsapp", is_default=False
+    )
+    db_session.add(wa_script)
+    await db_session.flush()
+
+    campaign = CallCampaign(
+        org_id=ORG_ID, name="C", criteria="n/a", channel="whatsapp", whatsapp_script_id=wa_script.id
+    )
+    db_session.add(campaign)
+    await db_session.flush()
+
+    target = CampaignTarget(
+        campaign_id=campaign.id,
+        org_id=ORG_ID,
+        name="Asha",
+        phone="+910000000001",
+        channel="whatsapp",
+        status="completed",
+    )
+    db_session.add(target)
+    await db_session.commit()
+
+    calls = _patch_llm_sequence(monkeypatch, [ChatResult(content="ok", tokens_in=1, tokens_out=1)])
+
+    await agent_core.handle_turn(
+        db=db_session,
+        user_id=USER_ID,
+        channel="whatsapp",
+        input_text="hi",
+        campaign_target_id=target.id,
+    )
+
+    system_message = calls[0][0]["content"]
+    assert "PINNED_SCRIPT_MARKER" in system_message
 
 
 async def test_handle_turn_kill_switch_short_circuits(

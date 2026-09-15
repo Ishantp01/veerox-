@@ -16,6 +16,7 @@ import {
   EmptyState,
   Input,
   Label,
+  Select,
   SkeletonRows,
   Table,
   TableCell,
@@ -28,11 +29,47 @@ import {
 import {
   useCreateScript,
   useDeleteScript,
+  useOrgNumbers,
   useScripts,
   useSetDefaultScript,
   useUpdateScriptLibraryItem,
+  type ScriptChannel,
 } from "@/lib/hooks";
 import type { ScriptLibraryItem } from "@/lib/types";
+
+/** This script's paired number, e.g. "Send from" — settings-page label only, see ScriptLibraryItem. */
+function PhoneNumberField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const orgNumbers = useOrgNumbers();
+  const whatsappNumbers = (orgNumbers.data?.phone_numbers ?? []).filter(
+    (n) => n.provider === "whatsapp",
+  );
+  if (whatsappNumbers.length === 0) return null;
+  return (
+    <div>
+      <Label htmlFor="script-phone-number">Send from (optional)</Label>
+      <Select id="script-phone-number" value={value} onChange={onChange} className="w-full">
+        <option value="">No number assigned</option>
+        {whatsappNumbers.map((n) => (
+          <option key={n.id} value={n.id}>
+            {n.phone_number}
+            {n.is_default ? ", default" : ""}
+          </option>
+        ))}
+      </Select>
+      <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+        Messages that arrive on this number use this script as the reply, unless a campaign
+        pins a different one. Doesn&apos;t change which number a campaign sends FROM (still
+        chosen per campaign).
+      </p>
+    </div>
+  );
+}
 
 function ScriptFormFields({
   name,
@@ -77,11 +114,12 @@ function ScriptFormFields({
   );
 }
 
-function NewScriptDialog() {
+function NewScriptDialog({ channel }: { channel: ScriptChannel }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [content, setContent] = useState("");
   const [makeDefault, setMakeDefault] = useState(false);
+  const [phoneNumberId, setPhoneNumberId] = useState("");
   const createScript = useCreateScript();
   const { toast } = useToast();
 
@@ -89,13 +127,20 @@ function NewScriptDialog() {
     setName("");
     setContent("");
     setMakeDefault(false);
+    setPhoneNumberId("");
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim() || !content.trim()) return;
     createScript.mutate(
-      { name: name.trim(), content, is_default: makeDefault },
+      {
+        name: name.trim(),
+        content,
+        channel,
+        is_default: makeDefault,
+        phone_number_id: channel === "whatsapp" ? phoneNumberId || null : null,
+      },
       {
         onSuccess: () => {
           toast({ title: "Script added", variant: "success" });
@@ -117,7 +162,7 @@ function NewScriptDialog() {
         </Button>
       </DialogTrigger>
       <DialogContent>
-        <DialogTitle>New calling script</DialogTitle>
+        <DialogTitle>New {channel === "whatsapp" ? "WhatsApp" : "calling"} script</DialogTitle>
         <form onSubmit={handleSubmit} noValidate>
           <DialogBody className="flex flex-col gap-4">
             <ScriptFormFields
@@ -126,6 +171,9 @@ function NewScriptDialog() {
               content={content}
               onContentChange={setContent}
             />
+            {channel === "whatsapp" && (
+              <PhoneNumberField value={phoneNumberId} onChange={setPhoneNumberId} />
+            )}
             <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
               <input
                 type="checkbox"
@@ -154,6 +202,7 @@ function EditScriptDialog({ script }: { script: ScriptLibraryItem }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(script.name);
   const [content, setContent] = useState(script.content);
+  const [phoneNumberId, setPhoneNumberId] = useState(script.phone_number_id ?? "");
   const updateScript = useUpdateScriptLibraryItem();
   const { toast } = useToast();
 
@@ -161,7 +210,12 @@ function EditScriptDialog({ script }: { script: ScriptLibraryItem }) {
     e.preventDefault();
     if (!name.trim() || !content.trim()) return;
     updateScript.mutate(
-      { id: script.id, name: name.trim(), content },
+      {
+        id: script.id,
+        name: name.trim(),
+        content,
+        phone_number_id: script.channel === "whatsapp" ? phoneNumberId || null : undefined,
+      },
       {
         onSuccess: () => {
           toast({ title: "Script updated", variant: "success" });
@@ -181,6 +235,7 @@ function EditScriptDialog({ script }: { script: ScriptLibraryItem }) {
         if (next) {
           setName(script.name);
           setContent(script.content);
+          setPhoneNumberId(script.phone_number_id ?? "");
         }
       }}
     >
@@ -192,13 +247,16 @@ function EditScriptDialog({ script }: { script: ScriptLibraryItem }) {
       <DialogContent>
         <DialogTitle>Edit script</DialogTitle>
         <form onSubmit={handleSubmit} noValidate>
-          <DialogBody>
+          <DialogBody className="flex flex-col gap-4">
             <ScriptFormFields
               name={name}
               onNameChange={setName}
               content={content}
               onContentChange={setContent}
             />
+            {script.channel === "whatsapp" && (
+              <PhoneNumberField value={phoneNumberId} onChange={setPhoneNumberId} />
+            )}
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
@@ -219,19 +277,26 @@ function ScriptRow({ script }: { script: ScriptLibraryItem }) {
   const deleteScript = useDeleteScript();
   const confirm = useConfirm();
   const { toast } = useToast();
+  const orgNumbers = useOrgNumbers();
+  const assignedNumber = (orgNumbers.data?.phone_numbers ?? []).find(
+    (n) => n.id === script.phone_number_id,
+  );
 
   async function handleDelete() {
     const confirmed = await confirm({
       title: "Delete this script?",
-      description: `"${script.name}" will be removed from the library. Campaigns using it fall back to the org default at their next call.`,
+      description: `"${script.name}" will be removed from the library. Campaigns using it fall back to the org default at their next call/send.`,
       confirmLabel: "Delete",
       variant: "danger",
     });
     if (!confirmed) return;
-    deleteScript.mutate(script.id, {
-      onError: (err) =>
-        toast({ title: "Could not delete script", description: err.message, variant: "error" }),
-    });
+    deleteScript.mutate(
+      { id: script.id, channel: script.channel },
+      {
+        onError: (err) =>
+          toast({ title: "Could not delete script", description: err.message, variant: "error" }),
+      }
+    );
   }
 
   return (
@@ -242,6 +307,11 @@ function ScriptRow({ script }: { script: ScriptLibraryItem }) {
       <TableCell className="max-w-md truncate text-xs text-slate-500 dark:text-slate-400">
         {script.content}
       </TableCell>
+      {script.channel === "whatsapp" && (
+        <TableCell className="text-xs text-slate-500 dark:text-slate-400">
+          {assignedNumber?.phone_number ?? "—"}
+        </TableCell>
+      )}
       <TableCell>
         {script.is_default ? (
           <Badge variant="success" icon={null}>
@@ -285,13 +355,14 @@ function ScriptRow({ script }: { script: ScriptLibraryItem }) {
 }
 
 /**
- * Voice-only AI-calling script library — replaces the single shared
- * ScriptEditor textarea on the calling settings tab. Multiple named scripts
- * can be picked per campaign (see campaigns-view.tsx); the one marked
- * default is the fallback every campaign without its own pick uses.
+ * Per-channel AI script library — replaces the single shared ScriptEditor
+ * textarea previously used on both the calling and WhatsApp settings tabs.
+ * Multiple named scripts can be picked per campaign (see campaigns-view.tsx);
+ * the one marked default is the fallback every campaign without its own
+ * pick uses, for that channel.
  */
-export function ScriptLibrary() {
-  const scripts = useScripts();
+export function ScriptLibrary({ channel = "voice" }: { channel?: ScriptChannel }) {
+  const scripts = useScripts(channel);
   const data = scripts.data ?? [];
 
   return (
@@ -302,7 +373,7 @@ export function ScriptLibrary() {
           place as the fallback.
         </p>
         <div className="shrink-0">
-          <NewScriptDialog />
+          <NewScriptDialog channel={channel} />
         </div>
       </div>
       <QueryBoundary
@@ -333,6 +404,7 @@ export function ScriptLibrary() {
               <TableRow isHeader>
                 <TableHeader>Name</TableHeader>
                 <TableHeader>Preview</TableHeader>
+                {channel === "whatsapp" && <TableHeader>Number</TableHeader>}
                 <TableHeader>Default</TableHeader>
                 <TableHeader>Actions</TableHeader>
               </TableRow>

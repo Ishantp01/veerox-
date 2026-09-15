@@ -255,6 +255,71 @@ async def test_create_campaign_with_script_and_phone_number_ids(
     assert body["phone_number_id"] == str(number.id)
 
 
+async def test_create_campaign_with_whatsapp_script_and_number_ids(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """whatsapp_script_id/whatsapp_number_id are the WhatsApp-only siblings
+    of script_id/phone_number_id — same pin-at-creation contract, just
+    scoped to a Script row with channel="whatsapp" and an OrgPhoneNumber row
+    with provider="whatsapp"."""
+    await _seed_org(db_session)
+    wa_script = Script(
+        org_id=ORG_ID, name="WA Custom", content="Say hi on WhatsApp.", channel="whatsapp", is_default=True
+    )
+    db_session.add(wa_script)
+    await replace_org_phone_numbers(
+        db_session, ORG_ID, [OrgPhoneNumberIn(provider="whatsapp", phone_number="109876543210")]
+    )
+    await db_session.commit()
+    wa_number = (await db_session.execute(select(OrgPhoneNumber))).scalar_one()
+    csv_body = "name,phone\nAsha,+910000000050\n"
+
+    response = await client.post(
+        "/admin/campaigns",
+        data={
+            "name": "WA pinned campaign",
+            "criteria": "n/a",
+            "channel": "whatsapp",
+            "whatsapp_script_id": str(wa_script.id),
+            "whatsapp_number_id": str(wa_number.id),
+        },
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()["campaign"]
+    assert body["whatsapp_script_id"] == str(wa_script.id)
+    assert body["whatsapp_number_id"] == str(wa_number.id)
+
+
+async def test_create_campaign_rejects_voice_script_as_whatsapp_script(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A voice-channel Script can't be pinned as a campaign's
+    whatsapp_script_id — the two libraries are disjoint by channel."""
+    await _seed_org(db_session)
+    voice_script = Script(org_id=ORG_ID, name="Voice", content="Say hi.", is_default=True)
+    db_session.add(voice_script)
+    await db_session.commit()
+    csv_body = "name,phone\nAsha,+910000000050\n"
+
+    response = await client.post(
+        "/admin/campaigns",
+        data={
+            "name": "Bad campaign",
+            "criteria": "n/a",
+            "channel": "whatsapp",
+            "whatsapp_script_id": str(voice_script.id),
+        },
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "whatsapp_script_id" in response.json()["detail"]
+
+
 async def test_create_campaign_persists_max_attempts(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

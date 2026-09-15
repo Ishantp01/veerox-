@@ -27,12 +27,13 @@ import httpx
 import structlog
 from sqlalchemy import select, update
 
+from apps.api.channels.voice.org_numbers import get_default_whatsapp_number_id
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.core.agent import _is_kill_switch_active
 from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
-from apps.api.db.models.org import Org
+from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.models.template import WhatsAppTemplate
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
@@ -105,12 +106,14 @@ async def _claim_targets() -> list[_ClaimedTarget]:
     phone_number_id, org_id, template_name, template_language,
     template_params, template_header_params, custom_message), ...]`` so the
     caller can send outside this short-lived session. ``phone_number_id`` is
-    the owning org's dedicated WhatsApp number (see
-    ``Org.whatsapp_phone_number_id``), or ``None`` to fall back to the
-    platform default. ``template_name``/``template_language``/
-    ``template_params``/``template_header_params``/``custom_message`` come
-    from the owning campaign — see ``CallCampaign.template_name`` and
-    ``_send_one`` below.
+    the campaign's pinned WhatsApp number
+    (``CallCampaign.whatsapp_number_id``) when it has one, else the owning
+    org's default WhatsApp number (see
+    ``channels/voice/org_numbers.py::get_default_whatsapp_number_id``), or
+    ``None`` to fall back to the platform default. ``template_name``/
+    ``template_language``/``template_params``/``template_header_params``/
+    ``custom_message`` come from the owning campaign — see
+    ``CallCampaign.template_name`` and ``_send_one`` below.
 
     Targets belonging to an org that's over its plan's
     ``max_whatsapp_messages`` are skipped (left ``pending``, not
@@ -128,7 +131,9 @@ async def _claim_targets() -> list[_ClaimedTarget]:
                 CampaignTarget,
                 CallCampaign.criteria,
                 CallCampaign.org_id,
-                Org.whatsapp_phone_number_id,
+                # The campaign's own pinned number, if any — NULL when it
+                # has none (outerjoin) or when whatsapp_number_id is unset.
+                OrgPhoneNumber.phone_number,
                 CallCampaign.template_name,
                 CallCampaign.template_language,
                 CallCampaign.template_params,
@@ -136,7 +141,7 @@ async def _claim_targets() -> list[_ClaimedTarget]:
                 CallCampaign.custom_message,
             )
             .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
-            .join(Org, Org.id == CallCampaign.org_id)
+            .outerjoin(OrgPhoneNumber, OrgPhoneNumber.id == CallCampaign.whatsapp_number_id)
             .where(
                 CampaignTarget.status == "pending",
                 CallCampaign.status == "running",
@@ -148,13 +153,17 @@ async def _claim_targets() -> list[_ClaimedTarget]:
         rows = (await db.execute(stmt)).all()
 
         org_over_limit: dict[UUID, bool] = {}
+        # Org-wide default WhatsApp number, looked up once per distinct org
+        # and only for rows that actually need it (no campaign-pinned
+        # number) — same lazy-cache shape as org_over_limit below.
+        default_whatsapp_by_org: dict[UUID, str | None] = {}
         claimed: list[_ClaimedTarget] = []
         for row in rows:
             (
                 target,
                 criteria,
                 org_id,
-                phone_number_id,
+                pinned_phone_number_id,
                 template_name,
                 template_language,
                 template_params,
@@ -170,6 +179,11 @@ async def _claim_targets() -> list[_ClaimedTarget]:
                 )
             if org_over_limit[org_id]:
                 continue
+            phone_number_id = pinned_phone_number_id
+            if phone_number_id is None:
+                if org_id not in default_whatsapp_by_org:
+                    default_whatsapp_by_org[org_id] = await get_default_whatsapp_number_id(db, org_id)
+                phone_number_id = default_whatsapp_by_org[org_id]
             target.status = "calling"
             target.attempt_count += 1
             target.called_at = datetime.now(UTC)
