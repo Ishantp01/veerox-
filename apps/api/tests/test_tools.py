@@ -84,9 +84,32 @@ def fake_redis(monkeypatch: pytest.MonkeyPatch) -> _FakeRedis:
     return fake
 
 
-async def _seed_org(db: AsyncSession, *, preferred_voice_provider: str | None = None) -> None:
-    db.add(Org(id=ORG_ID, name="Test Org", preferred_voice_provider=preferred_voice_provider))
+async def _seed_org(
+    db: AsyncSession,
+    *,
+    preferred_voice_provider: str | None = None,
+    configure_credentials: bool = True,
+) -> Org:
+    """Creates the test Org — by default with its own Plivo/Twilio/Meta
+    credentials configured (encrypted, see core/crypto.py) so every existing
+    test that expects a real send/call attempt keeps working the same way
+    it did back when a platform-wide settings.plivo_*/meta_* fallback
+    existed. Pass ``configure_credentials=False`` for a test that wants an
+    unconfigured org on purpose."""
+    from apps.api.core.crypto import encrypt_secret
+
+    org = Org(id=ORG_ID, name="Test Org", preferred_voice_provider=preferred_voice_provider)
+    if configure_credentials:
+        org.plivo_auth_id = "test-plivo-auth-id"
+        org.plivo_auth_token_encrypted = encrypt_secret("test-plivo-auth-token")
+        org.twilio_account_sid = "test-twilio-account-sid"
+        org.twilio_auth_token_encrypted = encrypt_secret("test-twilio-auth-token")
+        org.meta_app_id = "test-meta-app-id"
+        org.meta_app_secret_encrypted = encrypt_secret("test-meta-app-secret")
+        org.meta_access_token_encrypted = encrypt_secret("test-meta-access-token")
+    db.add(org)
     await db.commit()
+    return org
 
 
 async def test_capture_lead_persists_row_and_returns_ok(
@@ -526,7 +549,9 @@ async def test_transfer_to_human_notifies_org_owner_via_whatsapp(
     name/number filling the (name, date, time) slots."""
     sent: list[dict[str, object]] = []
 
-    async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
+    async def _fake_send_template(
+        access_token: str, to: str, template_name: str, **kwargs: object
+    ) -> None:
         sent.append({"to": to, "template_name": template_name, **kwargs})
 
     monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
@@ -566,7 +591,9 @@ async def test_transfer_to_human_uses_org_chosen_handoff_template(
     is sent with [caller number, reason] body params."""
     sent: list[dict[str, object]] = []
 
-    async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
+    async def _fake_send_template(
+        access_token: str, to: str, template_name: str, **kwargs: object
+    ) -> None:
         sent.append({"to": to, "template_name": template_name, **kwargs})
 
     monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
@@ -602,7 +629,9 @@ async def test_transfer_to_human_sizes_body_params_to_chosen_template(
 
     sent: list[dict[str, object]] = []
 
-    async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
+    async def _fake_send_template(
+        access_token: str, to: str, template_name: str, **kwargs: object
+    ) -> None:
         sent.append({"to": to, "template_name": template_name, **kwargs})
 
     monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
@@ -700,7 +729,9 @@ async def test_transfer_to_human_falls_back_to_any_teammate_when_owner_has_no_mo
     (and therefore every-turn) pick."""
     sent: list[dict[str, object]] = []
 
-    async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
+    async def _fake_send_template(
+        access_token: str, to: str, template_name: str, **kwargs: object
+    ) -> None:
         sent.append({"to": to, "template_name": template_name, **kwargs})
 
     monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
@@ -756,7 +787,9 @@ async def test_transfer_to_human_campaign_escalation_routes_to_campaign_creator(
     Lead assignment + WhatsApp notify — not the team round robin."""
     sent: list[dict[str, object]] = []
 
-    async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
+    async def _fake_send_template(
+        access_token: str, to: str, template_name: str, **kwargs: object
+    ) -> None:
         sent.append({"to": to})
 
     monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
@@ -793,7 +826,9 @@ async def test_transfer_to_human_campaign_with_no_creator_falls_back_to_round_ro
 ) -> None:
     sent: list[dict[str, object]] = []
 
-    async def _fake_send_template(to: str, template_name: str, **kwargs: object) -> None:
+    async def _fake_send_template(
+        access_token: str, to: str, template_name: str, **kwargs: object
+    ) -> None:
         sent.append({"to": to})
 
     monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
@@ -880,7 +915,7 @@ async def test_initiate_ai_call_blocked_when_message_asks_for_human(
     async def _unexpected_initiate_call(*args: object, **kwargs: object) -> None:
         raise AssertionError("must not place a call for an explicit human-handoff request")
 
-    monkeypatch.setattr(tools.voice_failover, "is_configured", lambda: True)
+    monkeypatch.setattr(tools.voice_failover, "is_configured", lambda *a, **k: True)
     monkeypatch.setattr(tools.voice_failover, "initiate_call", _unexpected_initiate_call)
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000099", name="Caller")
@@ -907,7 +942,7 @@ async def test_initiate_ai_call_proceeds_for_genuine_callback_request(
     async def _fake_initiate_call(*args: object, **kwargs: object) -> tuple[dict, str]:
         return {}, "plivo"
 
-    monkeypatch.setattr(tools.voice_failover, "is_configured", lambda: True)
+    monkeypatch.setattr(tools.voice_failover, "is_configured", lambda *a, **k: True)
     monkeypatch.setattr(tools.voice_failover, "initiate_call", _fake_initiate_call)
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000099", name="Caller")
@@ -937,7 +972,7 @@ async def test_initiate_ai_call_passes_org_preferred_provider(
         captured.update(kwargs)
         return {}, "twilio"
 
-    monkeypatch.setattr(tools.voice_failover, "is_configured", lambda: True)
+    monkeypatch.setattr(tools.voice_failover, "is_configured", lambda *a, **k: True)
     monkeypatch.setattr(tools.voice_failover, "initiate_call", _fake_initiate_call)
     await _seed_org(db_session, preferred_voice_provider="twilio")
     user = User(org_id=ORG_ID, phone="+910000000099", name="Caller")

@@ -5,6 +5,12 @@ and ``channels/voice/realtime_bridge.py`` are provider-aware so a Twilio call
 reaches the same AI voice bridge Plivo calls do — see those modules for the
 TwiML / Twilio Media Streams side of this.
 
+Every function takes an explicit ``creds: TwilioCredentials`` — this org's
+own Twilio account (see ``core/org_credentials.py::resolve_twilio_credentials``).
+There is no platform-wide fallback: a caller with ``creds is None`` should
+treat this provider as unconfigured (``is_configured(None)`` is False)
+rather than call any of these.
+
 CAVEAT: written against Twilio's documented REST + Media Streams API with no
 real Twilio account to place a test call against (none was configured when
 this was built). Verify end-to-end with a real Twilio number before relying
@@ -19,7 +25,7 @@ from typing import Any
 import httpx
 import structlog
 
-from apps.api.config import settings
+from apps.api.core.org_credentials import TwilioCredentials
 
 logger = structlog.get_logger(__name__)
 
@@ -28,36 +34,38 @@ _http: httpx.AsyncClient = httpx.AsyncClient(timeout=10.0)
 _TWILIO_BASE = "https://api.twilio.com/2010-04-01"
 
 
-def is_configured() -> bool:
-    return bool(
-        settings.twilio_account_sid
-        and settings.twilio_auth_token
-        and settings.twilio_phone_number
-    )
+def is_configured(creds: TwilioCredentials | None) -> bool:
+    """True only when this org has its own Twilio account_sid + auth_token
+    on file. No platform-wide fallback — see module docstring."""
+    return creds is not None
+
+
+def _auth(creds: TwilioCredentials) -> tuple[str, str]:
+    return (creds.account_sid, creds.auth_token)
 
 
 async def initiate_call(
+    creds: TwilioCredentials,
     to_e164: str,
     answer_url: str,
+    from_number: str,
     hangup_url: str | None = None,
-    from_number: str | None = None,
 ) -> dict[str, Any]:
     """Place an outbound call via ``POST /Accounts/{sid}/Calls.json``.
 
     Mirrors ``plivo_client.initiate_call``'s signature (including
     ``hangup_url`` and ``from_number``) so ``channels/voice/failover.py`` can
-    call either provider interchangeably. ``from_number`` overrides the
-    platform-wide ``settings.twilio_phone_number`` — used to dial from an
-    org's own dedicated Twilio number (see ``Org.twilio_phone_number``).
-    Twilio has no separate "hangup webhook" concept like Plivo — the same
-    effect is a ``StatusCallback`` fired on terminal call-status events, so
-    ``hangup_url`` maps to that here. Raises ``httpx.HTTPStatusError`` on a
-    non-2xx response.
+    call either provider interchangeably. ``from_number`` must be one of this
+    org's own dedicated Twilio numbers (see ``db/models/org_phone_number.py``)
+    — no platform-wide default. Twilio has no separate "hangup webhook"
+    concept like Plivo — the same effect is a ``StatusCallback`` fired on
+    terminal call-status events, so ``hangup_url`` maps to that here. Raises
+    ``httpx.HTTPStatusError`` on a non-2xx response.
     """
-    url = f"{_TWILIO_BASE}/Accounts/{settings.twilio_account_sid}/Calls.json"
+    url = f"{_TWILIO_BASE}/Accounts/{creds.account_sid}/Calls.json"
     data: dict[str, str] = {
         "To": to_e164,
-        "From": from_number or settings.twilio_phone_number or "",
+        "From": from_number,
         "Url": answer_url,
         "Method": "POST",
     }
@@ -68,11 +76,7 @@ async def initiate_call(
         # cover the same "call is over" cases Plivo's hangup_url reports.
         data["StatusCallbackEvent"] = "completed"
     try:
-        r = await _http.post(
-            url,
-            data=data,
-            auth=(settings.twilio_account_sid or "", settings.twilio_auth_token or ""),
-        )
+        r = await _http.post(url, data=data, auth=_auth(creds))
         r.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning(
@@ -89,21 +93,17 @@ async def initiate_call(
     return result
 
 
-async def owns_number(e164: str) -> bool:
-    """True if ``e164`` is a number in this Twilio account — used by
+async def owns_number(creds: TwilioCredentials, e164: str) -> bool:
+    """True if ``e164`` is a number in this org's Twilio account — used by
     ``channels/voice/number_provider.py::detect_provider`` to figure out
     which provider an admin-entered calling number belongs to. Treats any
     request failure as "no".
     """
-    if not (settings.twilio_account_sid and settings.twilio_auth_token) or not e164:
+    if not e164:
         return False
-    url = f"{_TWILIO_BASE}/Accounts/{settings.twilio_account_sid}/IncomingPhoneNumbers.json"
+    url = f"{_TWILIO_BASE}/Accounts/{creds.account_sid}/IncomingPhoneNumbers.json"
     try:
-        r = await _http.get(
-            url,
-            params={"PhoneNumber": e164},
-            auth=(settings.twilio_account_sid or "", settings.twilio_auth_token or ""),
-        )
+        r = await _http.get(url, params={"PhoneNumber": e164}, auth=_auth(creds))
         r.raise_for_status()
         return bool(r.json().get("incoming_phone_numbers"))
     except httpx.HTTPError as exc:
@@ -111,7 +111,7 @@ async def owns_number(e164: str) -> bool:
         return False
 
 
-async def start_recording(call_sid: str, callback_url: str) -> None:
+async def start_recording(creds: TwilioCredentials, call_sid: str, callback_url: str) -> None:
     """Start server-side call recording via ``POST /Calls/{call_sid}/Recordings.json``.
 
     Mirrors ``plivo_client.start_recording``: best-effort, never raises,
@@ -120,10 +120,7 @@ async def start_recording(call_sid: str, callback_url: str) -> None:
     ``RecordingDuration`` (seconds, not ms — unlike Plivo's
     ``RecordingDurationMs``) to ``callback_url`` when ready.
     """
-    if not is_configured():
-        return
-
-    url = f"{_TWILIO_BASE}/Accounts/{settings.twilio_account_sid}/Calls/{call_sid}/Recordings.json"
+    url = f"{_TWILIO_BASE}/Accounts/{creds.account_sid}/Calls/{call_sid}/Recordings.json"
     try:
         r = await _http.post(
             url,
@@ -132,7 +129,7 @@ async def start_recording(call_sid: str, callback_url: str) -> None:
                 "RecordingStatusCallbackMethod": "POST",
                 "RecordingStatusCallbackEvent": "completed",
             },
-            auth=(settings.twilio_account_sid or "", settings.twilio_auth_token or ""),
+            auth=_auth(creds),
         )
         r.raise_for_status()
         logger.info("twilio_recording_started", call_sid=call_sid)
@@ -140,24 +137,23 @@ async def start_recording(call_sid: str, callback_url: str) -> None:
         logger.warning("twilio_recording_start_failed", call_sid=call_sid, error=str(exc))
 
 
-async def send_sms(to_e164: str, text: str) -> dict[str, Any]:
+async def send_sms(creds: TwilioCredentials, to_e164: str, text: str, from_number: str) -> dict[str, Any]:
     """Send an SMS via ``POST /Accounts/{sid}/Messages.json``.
 
     Backup for ``plivo_client.send_sms`` (see ``channels/voice/failover.py``'s
-    ``send_sms``) — same Twilio credentials as calling failover
-    (``settings.twilio_*``). Raises ``httpx.HTTPStatusError`` on a non-2xx
-    response.
+    ``send_sms``) — uses one of this org's own dedicated Twilio numbers.
+    Raises ``httpx.HTTPStatusError`` on a non-2xx response.
     """
-    url = f"{_TWILIO_BASE}/Accounts/{settings.twilio_account_sid}/Messages.json"
+    url = f"{_TWILIO_BASE}/Accounts/{creds.account_sid}/Messages.json"
     try:
         r = await _http.post(
             url,
             data={
                 "To": to_e164,
-                "From": settings.twilio_phone_number or "",
+                "From": from_number,
                 "Body": text,
             },
-            auth=(settings.twilio_account_sid or "", settings.twilio_auth_token or ""),
+            auth=_auth(creds),
         )
         r.raise_for_status()
     except httpx.HTTPError as exc:
@@ -174,22 +170,15 @@ async def send_sms(to_e164: str, text: str) -> dict[str, Any]:
     return result
 
 
-async def hangup_call(call_sid: str) -> None:
+async def hangup_call(creds: TwilioCredentials, call_sid: str) -> None:
     """Force-terminate a live call via ``POST /Calls/{call_sid}.json`` with
     ``Status=completed``. Best-effort: never raises, mirroring
     ``plivo_client.hangup_call`` (used when a plan's usage limit is hit
     mid-call — see realtime_bridge.py's ``_watch_usage_limit``).
     """
-    if not is_configured():
-        return
-
-    url = f"{_TWILIO_BASE}/Accounts/{settings.twilio_account_sid}/Calls/{call_sid}.json"
+    url = f"{_TWILIO_BASE}/Accounts/{creds.account_sid}/Calls/{call_sid}.json"
     try:
-        r = await _http.post(
-            url,
-            data={"Status": "completed"},
-            auth=(settings.twilio_account_sid or "", settings.twilio_auth_token or ""),
-        )
+        r = await _http.post(url, data={"Status": "completed"}, auth=_auth(creds))
         r.raise_for_status()
         logger.info("twilio_call_hungup", call_sid=call_sid)
     except httpx.HTTPError as exc:

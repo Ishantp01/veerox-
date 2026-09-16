@@ -22,8 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.agent import agent_core, appointment_booked_this_turn
+from apps.api.core.org_credentials import resolve_meta_credentials
+from apps.api.core.org_openai_key import resolve_openai_api_key
 from apps.api.core.transcribe import transcribe
 from apps.api.db.models.campaign_target import CampaignTarget
+from apps.api.db.models.org import Org
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.models.user import User
 from apps.api.db.session import AsyncSessionLocal
@@ -246,15 +249,17 @@ async def _get_or_create_user(db: AsyncSession, org_id: UUID, phone: str) -> Use
     return user
 
 
-async def _resolve_text(msg: InboundMessage) -> str:
+async def _resolve_text(
+    msg: InboundMessage, *, api_key: str | None = None, meta_access_token: str | None = None
+) -> str:
     """Convert an inbound message to plain text the agent can reason over."""
     if msg.type == "text":
         return (msg.text or "").strip() or _UNSUPPORTED_PLACEHOLDER
 
-    if msg.type in {"audio", "voice"} and msg.media_id:
-        audio_bytes = await wa_client.download_media(msg.media_id)
+    if msg.type in {"audio", "voice"} and msg.media_id and meta_access_token:
+        audio_bytes = await wa_client.download_media(meta_access_token, msg.media_id)
         mime = msg.media_mime or "audio/ogg"
-        transcript = await transcribe(audio_bytes, mime=mime)
+        transcript = await transcribe(audio_bytes, mime=mime, api_key=api_key)
         # Whisper occasionally returns an empty string for very short
         # blobs; let the agent see the placeholder so it can recover.
         return transcript or _UNSUPPORTED_PLACEHOLDER
@@ -278,16 +283,28 @@ async def process_inbound(payload: dict[str, Any]) -> None:
 
         phone_number_id = _extract_phone_number_id(payload)
 
-        # Read receipt + typing indicator straight away, off the critical
-        # path — the user sees "typing…" while the agent works. mark_read
-        # swallows its own errors, so fire-and-forget is safe. Sent from the
-        # same number the message arrived on, which is this org's own
-        # dedicated number when it has one (see _resolve_org_id below).
-        _fire_and_forget(wa_client.mark_read(msg.id, typing=True, phone_number_id=phone_number_id))
-
         started = time.monotonic()
         async with AsyncSessionLocal() as db:
             org_id = await _resolve_org_id(db, phone_number_id)
+            org_record = await db.get(Org, org_id)
+            meta_creds = resolve_meta_credentials(org_record)
+
+            # Read receipt + typing indicator, off the critical path — the
+            # user sees "typing…" while the agent works. mark_read swallows
+            # its own errors, so fire-and-forget is safe. Sent from the same
+            # number the message arrived on (this org's own dedicated
+            # number). Skipped outright when this org has no Meta
+            # credentials configured — there's nothing to send it with.
+            if meta_creds is not None:
+                _fire_and_forget(
+                    wa_client.mark_read(
+                        meta_creds.access_token,
+                        msg.id,
+                        typing=True,
+                        phone_number_id=phone_number_id,
+                    )
+                )
+
             user = await _get_or_create_user(db, org_id, msg.from_phone)
             campaign_target_id = await _find_open_campaign_target(db, msg.from_phone)
             # Commit the user row before the (potentially long) LLM call so a
@@ -295,7 +312,11 @@ async def process_inbound(payload: dict[str, Any]) -> None:
             await db.commit()
             db_done = time.monotonic()
 
-            text = await _resolve_text(msg)
+            text = await _resolve_text(
+                msg,
+                api_key=resolve_openai_api_key(org_record),
+                meta_access_token=meta_creds.access_token if meta_creds else None,
+            )
             resolve_done = time.monotonic()
 
             reply = await agent_core.handle_turn(
@@ -319,7 +340,16 @@ async def process_inbound(payload: dict[str, Any]) -> None:
         # confirmation, so sending the model's own text reply too would
         # double-confirm the same booking with two back-to-back messages.
         if not appointment_booked_this_turn():
-            await wa_client.send_text(msg.from_phone, reply, phone_number_id=phone_number_id)
+            if meta_creds is None:
+                logger.warning(
+                    "whatsapp_reply_skipped_not_configured",
+                    org_id=str(org_id),
+                    wa_message_id=msg.id,
+                )
+            else:
+                await wa_client.send_text(
+                    meta_creds.access_token, msg.from_phone, reply, phone_number_id=phone_number_id
+                )
         send_done = time.monotonic()
 
         timings = {

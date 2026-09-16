@@ -53,6 +53,21 @@ class ProvisionOrgIn(BaseModel):
     # PUT /admin/org-numbers (see db/models/org_phone_number.py).
     phone_numbers: list[OrgPhoneNumberIn] = Field(default_factory=list)
 
+    # Optional — this org's own Plivo/Twilio/Meta WhatsApp credentials, set
+    # at creation time instead of (or in addition to, if changed later)
+    # PUT /admin/settings/{plivo,twilio,meta}-credentials. There is no
+    # platform-wide fallback: an org with none of these set simply can't
+    # call/SMS/WhatsApp until an admin configures them, here or later.
+    plivo_auth_id: str | None = None
+    plivo_auth_token: str | None = None
+    twilio_account_sid: str | None = None
+    twilio_auth_token: str | None = None
+    meta_app_id: str | None = None
+    meta_app_secret: str | None = None
+    meta_access_token: str | None = None
+    meta_whatsapp_business_account_id: str | None = None
+    meta_verify_token: str | None = None
+
 
 class ForgotTokenIn(BaseModel):
     identifier: str  # email address or E.164 mobile number

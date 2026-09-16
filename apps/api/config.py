@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     openai_realtime_model: str = "gpt-4o-realtime-preview"
     openai_realtime_voice: str = "alloy"
 
+    # Symmetric key (Fernet, see core/crypto.py) used to encrypt/decrypt
+    # per-org secrets stored in the DB — currently just Org.
+    # openai_api_key_encrypted, letting an org bring its own OpenAI key
+    # instead of billing against the platform's. Generate with
+    # `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+    # and keep it in the environment only — never commit it, and never
+    # rotate it without a re-encryption migration (existing ciphertext
+    # becomes unreadable under a new key).
+    secret_encryption_key: str | None = None
+
     # ElevenLabs — optional TTS swap for voice calls (see
     # channels/voice/elevenlabs_client.py). "openai" (default) keeps calls on
     # OpenAI Realtime's native speech-to-speech, unchanged. "elevenlabs"

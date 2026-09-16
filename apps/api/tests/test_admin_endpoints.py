@@ -160,9 +160,16 @@ async def client(
     # conftest.py's own `client` fixture for the same redirect and why it's
     # needed (otherwise it hits the real configured database instead of this
     # test's in-memory engine).
-    monkeypatch.setattr(
-        auth_router, "AsyncSessionLocal", async_sessionmaker(bind=test_engine, expire_on_commit=False)
-    )
+    test_session_factory = async_sessionmaker(bind=test_engine, expire_on_commit=False)
+    monkeypatch.setattr(auth_router, "AsyncSessionLocal", test_session_factory)
+
+    # PUT /admin/org-numbers and PUT /admin/settings/plivo-credentials both
+    # fire a best-effort background Plivo-registration task
+    # (channels/voice/plivo_provisioning.py) that opens its own
+    # AsyncSessionLocal() — redirect it the same way as auth_router above.
+    from apps.api.channels.voice import plivo_provisioning as plivo_provisioning_module
+
+    monkeypatch.setattr(plivo_provisioning_module, "AsyncSessionLocal", test_session_factory)
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
@@ -177,9 +184,11 @@ async def client(
         yield ac
 
 
-async def _seed_org(db: AsyncSession) -> None:
-    db.add(Org(id=ORG_ID, name="Test Org"))
+async def _seed_org(db: AsyncSession) -> Org:
+    org = Org(id=ORG_ID, name="Test Org")
+    db.add(org)
     await db.commit()
+    return org
 
 
 async def test_list_conversations_filters_by_channel(
@@ -1225,15 +1234,9 @@ async def test_claim_escalation_not_found(client: AsyncClient, db_session: Async
 
 
 async def test_whatsapp_settings_reports_unconfigured_when_creds_unset(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    from apps.api import config as config_module
-
-    monkeypatch.setattr(config_module.settings, "meta_access_token", None)
-    monkeypatch.setattr(config_module.settings, "meta_phone_number_id", None)
-    monkeypatch.setattr(config_module.settings, "meta_app_id", None)
-    monkeypatch.setattr(config_module.settings, "meta_app_secret", None)
-    monkeypatch.setattr(config_module.settings, "meta_verify_token", None)
+    await _seed_org(db_session)
 
     response = await client.get("/admin/settings/whatsapp", headers=ADMIN_HEADERS)
 
@@ -1246,12 +1249,15 @@ async def test_whatsapp_settings_reports_unconfigured_when_creds_unset(
 
 
 async def test_whatsapp_settings_reports_configured_when_creds_set(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    from apps.api import config as config_module
+    from apps.api.core.crypto import encrypt_secret
 
-    monkeypatch.setattr(config_module.settings, "meta_access_token", "token-123")
-    monkeypatch.setattr(config_module.settings, "meta_phone_number_id", "1555000")
+    org = await _seed_org(db_session)
+    org.meta_app_id = "app-123"
+    org.meta_app_secret_encrypted = encrypt_secret("app-secret")
+    org.meta_access_token_encrypted = encrypt_secret("token-123")
+    await db_session.commit()
 
     response = await client.get("/admin/settings/whatsapp", headers=ADMIN_HEADERS)
 
@@ -1259,7 +1265,7 @@ async def test_whatsapp_settings_reports_configured_when_creds_set(
     body = response.json()
     assert body["configured"] is True
     assert body["access_token_configured"] is True
-    assert body["phone_number_id"] == "1555000"
+    assert body["app_id_configured"] is True
 
 
 async def test_update_whatsapp_settings_sets_and_clears_handoff_template(
@@ -1360,7 +1366,7 @@ async def test_outbound_call_passes_chosen_provider_through(
     )
     await db_session.commit()
 
-    monkeypatch.setattr(admin_module.voice_failover, "is_configured", lambda: True)
+    monkeypatch.setattr(admin_module.voice_failover, "is_configured", lambda *a, **k: True)
 
     captured: dict[str, object] = {}
 
@@ -1402,13 +1408,9 @@ async def test_update_calling_settings_persists_preferred_provider(
 
 
 async def test_calling_settings_reports_unconfigured_when_creds_unset(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    from apps.api import config as config_module
-
-    monkeypatch.setattr(config_module.settings, "plivo_auth_id", None)
-    monkeypatch.setattr(config_module.settings, "plivo_auth_token", None)
-    monkeypatch.setattr(config_module.settings, "plivo_phone_number", None)
+    await _seed_org(db_session)
 
     response = await client.get("/admin/settings/calling", headers=ADMIN_HEADERS)
 
@@ -1420,13 +1422,18 @@ async def test_calling_settings_reports_unconfigured_when_creds_unset(
 
 
 async def test_calling_settings_reports_configured_when_creds_set(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    from apps.api import config as config_module
+    from apps.api.core.crypto import encrypt_secret
 
-    monkeypatch.setattr(config_module.settings, "plivo_auth_id", "auth-id")
-    monkeypatch.setattr(config_module.settings, "plivo_auth_token", "auth-token")
-    monkeypatch.setattr(config_module.settings, "plivo_phone_number", "+15550001111")
+    org = await _seed_org(db_session)
+    org.plivo_auth_id = "auth-id"
+    org.plivo_auth_token_encrypted = encrypt_secret("auth-token")
+    await db_session.commit()
+    db_session.add(
+        OrgPhoneNumber(org_id=ORG_ID, provider="plivo", phone_number="15550001111", is_default=True)
+    )
+    await db_session.commit()
 
     response = await client.get("/admin/settings/calling", headers=ADMIN_HEADERS)
 
@@ -1434,6 +1441,338 @@ async def test_calling_settings_reports_configured_when_creds_set(
     body = response.json()
     assert body["configured"] is True
     assert body["phone_number"] == "+15550001111"
+
+
+async def test_openai_key_settings_defaults_to_unconfigured(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+
+    response = await client.get("/admin/settings/openai-key", headers=ADMIN_HEADERS)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["configured"] is False
+    assert body["key_preview"] is None
+
+
+async def test_update_openai_key_settings_persists_and_masks(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+
+    put_response = await client.put(
+        "/admin/settings/openai-key",
+        json={"api_key": "sk-test-1234567890abcd1234"},
+        headers=ADMIN_HEADERS,
+    )
+    assert put_response.status_code == 200
+    body = put_response.json()
+    assert body["configured"] is True
+    assert body["key_preview"] == "sk-...1234"
+    # The real key is never echoed back, only the masked preview.
+    assert "1234567890abcd" not in put_response.text
+
+    get_response = await client.get("/admin/settings/openai-key", headers=ADMIN_HEADERS)
+    assert get_response.json() == {"configured": True, "key_preview": "sk-...1234"}
+
+    # The org's row stores ciphertext, never the plaintext key.
+    record = await db_session.get(Org, ORG_ID)
+    assert record.openai_api_key_encrypted is not None
+    assert record.openai_api_key_encrypted != "sk-test-1234567890abcd1234"
+
+
+async def test_delete_openai_key_settings_clears_it(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    await client.put(
+        "/admin/settings/openai-key",
+        json={"api_key": "sk-test-1234567890abcd1234"},
+        headers=ADMIN_HEADERS,
+    )
+
+    delete_response = await client.delete("/admin/settings/openai-key", headers=ADMIN_HEADERS)
+
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"configured": False, "key_preview": None}
+    record = await db_session.get(Org, ORG_ID)
+    assert record.openai_api_key_encrypted is None
+
+
+async def test_openai_key_settings_forbidden_for_member_role(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    member_headers = await _login_as(client, db_session, email="member@test.com", role="member")
+
+    get_response = await client.get("/admin/settings/openai-key", headers=member_headers)
+    put_response = await client.put(
+        "/admin/settings/openai-key",
+        json={"api_key": "sk-test-1234567890abcd1234"},
+        headers=member_headers,
+    )
+
+    assert get_response.status_code == 403
+    assert put_response.status_code == 403
+
+
+async def test_plivo_credentials_settings_defaults_to_unconfigured(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+
+    response = await client.get("/admin/settings/plivo-credentials", headers=ADMIN_HEADERS)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["configured"] is False
+    assert body["auth_id"] is None
+    assert body["auth_token_preview"] is None
+
+
+async def test_update_plivo_credentials_settings_persists_and_masks(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+
+    put_response = await client.put(
+        "/admin/settings/plivo-credentials",
+        json={"auth_id": "MAXXXXXXXXXXXXXXXXXX", "auth_token": "super-secret-token-1234"},
+        headers=ADMIN_HEADERS,
+    )
+    assert put_response.status_code == 200
+    body = put_response.json()
+    assert body["configured"] is True
+    assert body["auth_id"] == "MAXXXXXXXXXXXXXXXXXX"
+    assert body["auth_token_preview"] == "sk-...1234"
+    assert "super-secret-token" not in put_response.text
+
+    record = await db_session.get(Org, ORG_ID)
+    assert record.plivo_auth_token_encrypted is not None
+    assert record.plivo_auth_token_encrypted != "super-secret-token-1234"
+
+
+async def test_delete_plivo_credentials_settings_clears_it(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    await client.put(
+        "/admin/settings/plivo-credentials",
+        json={"auth_id": "MAXXXXXXXXXXXXXXXXXX", "auth_token": "super-secret-token-1234"},
+        headers=ADMIN_HEADERS,
+    )
+
+    delete_response = await client.delete("/admin/settings/plivo-credentials", headers=ADMIN_HEADERS)
+
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"configured": False, "auth_id": None, "auth_token_preview": None}
+    record = await db_session.get(Org, ORG_ID)
+    assert record.plivo_auth_id is None
+    assert record.plivo_auth_token_encrypted is None
+
+
+async def test_plivo_credentials_settings_forbidden_for_member_role(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    member_headers = await _login_as(client, db_session, email="member-plivo@test.com", role="member")
+
+    get_response = await client.get("/admin/settings/plivo-credentials", headers=member_headers)
+    put_response = await client.put(
+        "/admin/settings/plivo-credentials",
+        json={"auth_id": "id", "auth_token": "token"},
+        headers=member_headers,
+    )
+
+    assert get_response.status_code == 403
+    assert put_response.status_code == 403
+
+
+async def test_twilio_credentials_settings_defaults_to_unconfigured(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+
+    response = await client.get("/admin/settings/twilio-credentials", headers=ADMIN_HEADERS)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["configured"] is False
+    assert body["account_sid"] is None
+    assert body["auth_token_preview"] is None
+
+
+async def test_update_twilio_credentials_settings_persists_and_masks(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+
+    put_response = await client.put(
+        "/admin/settings/twilio-credentials",
+        json={"account_sid": "ACXXXXXXXXXXXXXXXXXX", "auth_token": "super-secret-token-5678"},
+        headers=ADMIN_HEADERS,
+    )
+    assert put_response.status_code == 200
+    body = put_response.json()
+    assert body["configured"] is True
+    assert body["account_sid"] == "ACXXXXXXXXXXXXXXXXXX"
+    assert body["auth_token_preview"] == "sk-...5678"
+
+    record = await db_session.get(Org, ORG_ID)
+    assert record.twilio_auth_token_encrypted is not None
+
+
+async def test_delete_twilio_credentials_settings_clears_it(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    await client.put(
+        "/admin/settings/twilio-credentials",
+        json={"account_sid": "ACXXXXXXXXXXXXXXXXXX", "auth_token": "super-secret-token-5678"},
+        headers=ADMIN_HEADERS,
+    )
+
+    delete_response = await client.delete("/admin/settings/twilio-credentials", headers=ADMIN_HEADERS)
+
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {
+        "configured": False,
+        "account_sid": None,
+        "auth_token_preview": None,
+    }
+    record = await db_session.get(Org, ORG_ID)
+    assert record.twilio_account_sid is None
+    assert record.twilio_auth_token_encrypted is None
+
+
+async def test_twilio_credentials_settings_forbidden_for_member_role(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    member_headers = await _login_as(client, db_session, email="member-twilio@test.com", role="member")
+
+    get_response = await client.get("/admin/settings/twilio-credentials", headers=member_headers)
+    put_response = await client.put(
+        "/admin/settings/twilio-credentials",
+        json={"account_sid": "sid", "auth_token": "token"},
+        headers=member_headers,
+    )
+
+    assert get_response.status_code == 403
+    assert put_response.status_code == 403
+
+
+async def test_meta_credentials_settings_defaults_to_unconfigured(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+
+    response = await client.get("/admin/settings/meta-credentials", headers=ADMIN_HEADERS)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["configured"] is False
+    assert body["app_id"] is None
+    assert body["app_secret_configured"] is False
+    assert body["access_token_configured"] is False
+    assert body["verify_token_configured"] is False
+
+
+async def test_update_meta_credentials_settings_persists_and_masks(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+
+    put_response = await client.put(
+        "/admin/settings/meta-credentials",
+        json={
+            "app_id": "app-123",
+            "app_secret": "app-secret-abcd1234",
+            "access_token": "access-token-wxyz9876",
+            "business_account_id": "waba-456",
+            "verify_token": "verify-me-1111",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert put_response.status_code == 200
+    body = put_response.json()
+    assert body["configured"] is True
+    assert body["app_id"] == "app-123"
+    assert body["app_secret_configured"] is True
+    assert body["access_token_configured"] is True
+    assert body["business_account_id"] == "waba-456"
+    assert body["verify_token_configured"] is True
+    assert "app-secret-abcd1234" not in put_response.text
+    assert "access-token-wxyz9876" not in put_response.text
+
+    record = await db_session.get(Org, ORG_ID)
+    assert record.meta_app_secret_encrypted is not None
+    assert record.meta_access_token_encrypted is not None
+    assert record.meta_verify_token_encrypted is not None
+
+
+async def test_update_meta_credentials_settings_optional_fields_can_be_omitted(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+
+    put_response = await client.put(
+        "/admin/settings/meta-credentials",
+        json={
+            "app_id": "app-123",
+            "app_secret": "app-secret-abcd1234",
+            "access_token": "access-token-wxyz9876",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert put_response.status_code == 200
+    body = put_response.json()
+    assert body["configured"] is True
+    assert body["business_account_id"] is None
+    assert body["verify_token_configured"] is False
+
+
+async def test_delete_meta_credentials_settings_clears_it(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    await client.put(
+        "/admin/settings/meta-credentials",
+        json={
+            "app_id": "app-123",
+            "app_secret": "app-secret-abcd1234",
+            "access_token": "access-token-wxyz9876",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    delete_response = await client.delete("/admin/settings/meta-credentials", headers=ADMIN_HEADERS)
+
+    assert delete_response.status_code == 200
+    assert delete_response.json()["configured"] is False
+    record = await db_session.get(Org, ORG_ID)
+    assert record.meta_app_id is None
+    assert record.meta_app_secret_encrypted is None
+    assert record.meta_access_token_encrypted is None
+
+
+async def test_meta_credentials_settings_forbidden_for_member_role(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    member_headers = await _login_as(client, db_session, email="member-meta@test.com", role="member")
+
+    get_response = await client.get("/admin/settings/meta-credentials", headers=member_headers)
+    put_response = await client.put(
+        "/admin/settings/meta-credentials",
+        json={"app_id": "a", "app_secret": "b", "access_token": "c"},
+        headers=member_headers,
+    )
+
+    assert get_response.status_code == 403
+    assert put_response.status_code == 403
 
 
 # --- Per-team-member scoping: conversations & appointments ---------------------

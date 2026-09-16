@@ -21,7 +21,17 @@ ADMIN_HEADERS = {"X-Admin-Token": settings.admin_token}
 
 
 async def _seed_org(db: AsyncSession) -> None:
-    db.add(Org(id=ORG_ID, name="Test Org"))
+    from apps.api.core.crypto import encrypt_secret
+
+    db.add(
+        Org(
+            id=ORG_ID,
+            name="Test Org",
+            meta_app_id="test-meta-app-id",
+            meta_app_secret_encrypted=encrypt_secret("test-meta-app-secret"),
+            meta_access_token_encrypted=encrypt_secret("test-meta-access-token"),
+        )
+    )
     await db.commit()
 
 
@@ -113,7 +123,11 @@ async def test_create_appointment_with_contact_notifies_and_schedules_reminder(
     sent: list[tuple[str, str, list[str] | None]] = []
 
     async def _fake_send_template(
-        to_e164: str, template_name: str, body_params: list[str] | None = None, **kwargs: object
+        access_token: str,
+        to_e164: str,
+        template_name: str,
+        body_params: list[str] | None = None,
+        **kwargs: object,
     ) -> dict[str, object]:
         sent.append((to_e164, template_name, body_params))
         return {}

@@ -23,7 +23,7 @@ async def _stub_plivo_sms(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     from apps.api.routers import auth as auth_module
 
-    async def _fake_send_sms(to_e164: str, text: str) -> tuple[dict, str]:
+    async def _fake_send_sms(*args: object, **kwargs: object) -> tuple[dict, str]:
         return {"message_uuid": "fake"}, "plivo"
 
     monkeypatch.setattr(auth_module.voice_failover, "send_sms", _fake_send_sms)
@@ -222,7 +222,13 @@ async def test_forgot_token_by_mobile_rotates_token_and_sends_sms(
     account, old_token = account_with_mobile
     sent: list[tuple[str, str]] = []
 
-    async def _capture_send_sms(to_e164: str, text: str) -> tuple[dict, str]:
+    async def _capture_send_sms(
+        plivo_creds: object,
+        twilio_creds: object,
+        to_e164: str,
+        text: str,
+        **kwargs: object,
+    ) -> tuple[dict, str]:
         sent.append((to_e164, text))
         return {"message_uuid": "fake"}, "plivo"
 
@@ -255,7 +261,7 @@ async def test_forgot_token_unknown_identifier_returns_generic_message(
         calls["email"] += 1
         return {}
 
-    async def _send_sms(to_e164: str, text: str) -> tuple[dict, str]:
+    async def _send_sms(*args: object, **kwargs: object) -> tuple[dict, str]:
         calls["sms"] += 1
         return {}, "plivo"
 

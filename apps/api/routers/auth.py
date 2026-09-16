@@ -23,8 +23,15 @@ from sqlalchemy.exc import IntegrityError
 
 from apps.api.channels.email import brevo_client
 from apps.api.channels.voice import failover as voice_failover
-from apps.api.channels.voice.org_numbers import replace_org_phone_numbers
+from apps.api.channels.voice.org_numbers import get_default_numbers, replace_org_phone_numbers
+from apps.api.channels.voice.plivo_provisioning import fire_and_forget_register_org_plivo_numbers
+from apps.api.channels.whatsapp.webhook_registration import fire_and_forget_register_org_webhook
 from apps.api.config import settings
+from apps.api.core.crypto import encrypt_secret
+from apps.api.core.org_credentials import (
+    resolve_plivo_credentials,
+    resolve_twilio_credentials,
+)
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import create_session, delete_session, invalidate_user_sessions
 from apps.api.db.models.account_user import AccountUser
@@ -129,6 +136,24 @@ async def provision_org(
     # through /billing (choose-a-plan, even the free one) before anything
     # else in the app becomes reachable. See DashboardLayout in apps/web.
     org = Org(name=payload.org_name)
+    if payload.plivo_auth_id and payload.plivo_auth_token:
+        org.plivo_auth_id = payload.plivo_auth_id.strip()
+        org.plivo_auth_token_encrypted = encrypt_secret(payload.plivo_auth_token.strip())
+    if payload.twilio_account_sid and payload.twilio_auth_token:
+        org.twilio_account_sid = payload.twilio_account_sid.strip()
+        org.twilio_auth_token_encrypted = encrypt_secret(payload.twilio_auth_token.strip())
+    if payload.meta_app_id and payload.meta_app_secret and payload.meta_access_token:
+        org.meta_app_id = payload.meta_app_id.strip()
+        org.meta_app_secret_encrypted = encrypt_secret(payload.meta_app_secret.strip())
+        org.meta_access_token_encrypted = encrypt_secret(payload.meta_access_token.strip())
+        org.meta_whatsapp_business_account_id = (
+            payload.meta_whatsapp_business_account_id.strip()
+            if payload.meta_whatsapp_business_account_id
+            else None
+        )
+        org.meta_verify_token_encrypted = (
+            encrypt_secret(payload.meta_verify_token.strip()) if payload.meta_verify_token else None
+        )
     db.add(org)
     try:
         await db.flush()
@@ -161,16 +186,28 @@ async def provision_org(
     )
     await db.commit()
 
+    fire_and_forget_register_org_plivo_numbers(org.id)
+    fire_and_forget_register_org_webhook(org.id)
+
     sms_sent = False
+    plivo_creds = resolve_plivo_credentials(org)
+    twilio_creds = resolve_twilio_credentials(org)
+    plivo_from, twilio_from = await get_default_numbers(db, org.id)
     try:
         await voice_failover.send_sms(
+            plivo_creds,
+            twilio_creds,
             payload.mobile,
             f"Welcome to Veerox. Your login token: {login_token}",
+            plivo_from_number=plivo_from,
+            twilio_from_number=twilio_from,
         )
         sms_sent = True
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, RuntimeError) as exc:
         # Best-effort: the token is also shown once in the dashboard
-        # response, so a failed SMS doesn't block org creation.
+        # response, so a failed SMS doesn't block org creation. RuntimeError
+        # is expected/common here — a brand new org often has no calling
+        # credentials configured yet.
         logger.warning("provision_org_sms_failed", mobile=payload.mobile, error=str(exc))
 
     return ProvisionOrgOut(
@@ -290,10 +327,32 @@ async def forgot_token(
                     "<p>Your previous token no longer works.</p>",
                 )
             elif account_user.mobile:
-                await voice_failover.send_sms(
-                    account_user.mobile, f"Your new Veerox login token: {login_token}"
+                # This account_user has no org_id column of its own — resolve
+                # it via its (first-joined) OrgMembership, same ordering
+                # login() above uses, so the SMS goes out from THIS account's
+                # own org's Plivo/Twilio credentials/numbers.
+                org_result = await db.execute(
+                    select(Org)
+                    .join(OrgMembership, OrgMembership.org_id == Org.id)
+                    .where(OrgMembership.account_user_id == account_user.id)
+                    .order_by(OrgMembership.created_at)
+                    .limit(1)
                 )
-        except httpx.HTTPError as exc:
+                org_record = org_result.scalars().first()
+                plivo_creds = resolve_plivo_credentials(org_record)
+                twilio_creds = resolve_twilio_credentials(org_record)
+                plivo_from, twilio_from = (
+                    await get_default_numbers(db, org_record.id) if org_record else (None, None)
+                )
+                await voice_failover.send_sms(
+                    plivo_creds,
+                    twilio_creds,
+                    account_user.mobile,
+                    f"Your new Veerox login token: {login_token}",
+                    plivo_from_number=plivo_from,
+                    twilio_from_number=twilio_from,
+                )
+        except (httpx.HTTPError, RuntimeError) as exc:
             # Best-effort, same as provision_org's SMS send: the mutation
             # (rotate + invalidate) already happened, so a delivery failure
             # can't be surfaced without also leaking that a match was found.

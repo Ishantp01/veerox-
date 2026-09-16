@@ -49,6 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from apps.api.channels.voice.org_numbers import replace_org_phone_numbers
+from apps.api.channels.voice.plivo_provisioning import fire_and_forget_register_org_plivo_numbers
 from apps.api.config import settings
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import invalidate_user_sessions
@@ -324,6 +325,9 @@ async def update_org(
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(status_code=409, detail=_update_org_integrity_detail(exc)) from exc
+
+    if phone_numbers is not None:
+        fire_and_forget_register_org_plivo_numbers(org_row.id)
 
     result = await db.execute(
         select(Org).options(selectinload(Org.phone_numbers)).where(Org.id == org_row.id)

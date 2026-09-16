@@ -418,6 +418,71 @@ export interface CallingSettingsInput {
   preferred_provider: "plivo" | "twilio" | null;
 }
 
+// GET/PUT/DELETE /admin/settings/openai-key — the org's own OpenAI key
+// (encrypted server-side). The real value is never returned once saved,
+// only whether one is configured and a masked preview (e.g. "sk-...ab12").
+export interface OpenAIKeySettings {
+  configured: boolean;
+  key_preview: string | null;
+}
+
+// PUT /admin/settings/openai-key
+export interface OpenAIKeySettingsInput {
+  api_key: string;
+}
+
+// GET/PUT/DELETE /admin/settings/plivo-credentials — this org's own Plivo
+// account. No platform-wide fallback: Plivo is unavailable for this org
+// until these are set.
+export interface PlivoCredentialsSettings {
+  configured: boolean;
+  auth_id: string | null;
+  auth_token_preview: string | null;
+}
+
+// PUT /admin/settings/plivo-credentials
+export interface PlivoCredentialsSettingsInput {
+  auth_id: string;
+  auth_token: string;
+}
+
+// GET/PUT/DELETE /admin/settings/twilio-credentials — this org's own Twilio
+// account. No platform-wide fallback.
+export interface TwilioCredentialsSettings {
+  configured: boolean;
+  account_sid: string | null;
+  auth_token_preview: string | null;
+}
+
+// PUT /admin/settings/twilio-credentials
+export interface TwilioCredentialsSettingsInput {
+  account_sid: string;
+  auth_token: string;
+}
+
+// GET/PUT/DELETE /admin/settings/meta-credentials — this org's own Meta
+// WhatsApp App. No platform-wide fallback.
+export interface MetaCredentialsSettings {
+  configured: boolean;
+  app_id: string | null;
+  app_secret_configured: boolean;
+  app_secret_preview: string | null;
+  access_token_configured: boolean;
+  access_token_preview: string | null;
+  business_account_id: string | null;
+  verify_token_configured: boolean;
+  verify_token_preview: string | null;
+}
+
+// PUT /admin/settings/meta-credentials
+export interface MetaCredentialsSettingsInput {
+  app_id: string;
+  app_secret: string;
+  access_token: string;
+  business_account_id?: string | null;
+  verify_token?: string | null;
+}
+
 // Calling campaigns — bulk-upload a lead list, the background dialer
 // (apps/api/workers/campaign_dialer.py) calls each one, and the AI's
 // qualify_lead tool call decides whether a CRM Lead row gets written.

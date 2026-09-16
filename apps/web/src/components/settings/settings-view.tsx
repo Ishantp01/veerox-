@@ -1,15 +1,34 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Bot, ChevronRight, Phone, Users } from "lucide-react";
+import { Bot, ChevronRight, KeyRound, Phone, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
-import { Button, Card, CardContent, CardHeader, Label, Select, Skeleton, useToast } from "@/components/ui";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  Input,
+  Label,
+  Select,
+  Skeleton,
+  useToast,
+} from "@/components/ui";
 import {
   useCallingSettings,
+  useDeleteMetaCredentialsSettings,
+  useDeletePlivoCredentialsSettings,
+  useDeleteTwilioCredentialsSettings,
+  useMetaCredentialsSettings,
+  usePlivoCredentialsSettings,
   useTemplates,
+  useTwilioCredentialsSettings,
   useUpdateCallingSettings,
+  useUpdateMetaCredentialsSettings,
+  useUpdatePlivoCredentialsSettings,
+  useUpdateTwilioCredentialsSettings,
   useUpdateWhatsAppSettings,
   useWhatsAppSettings,
 } from "@/lib/hooks";
@@ -204,6 +223,373 @@ function HandoffTemplatePreference() {
   );
 }
 
+/**
+ * Each org calls/messages through its own Plivo, Twilio, and Meta WhatsApp
+ * accounts — there is no shared platform fallback (see
+ * apps/api/core/org_credentials.py). These three sections let an org admin
+ * view (masked) and edit its own credentials, mirroring the OpenAI-key
+ * settings pattern: `configured` boolean + masked preview, edit form,
+ * save/clear.
+ */
+function PlivoCredentialsSection() {
+  const settings = usePlivoCredentialsSettings();
+  const update = useUpdatePlivoCredentialsSettings();
+  const del = useDeletePlivoCredentialsSettings();
+  const { toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [authId, setAuthId] = useState("");
+  const [authToken, setAuthToken] = useState("");
+
+  return (
+    <QueryBoundary
+      isLoading={settings.isLoading}
+      isError={settings.isError}
+      error={settings.error}
+      onRetry={() => settings.refetch()}
+      loadingFallback={<Skeleton className="h-20 w-full rounded-xl" />}
+    >
+      {settings.data && (
+        <div className="flex flex-col gap-3">
+          {settings.data.configured && !editing ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Auth ID: <code className="text-xs">{settings.data.auth_id}</code>
+                <br />
+                Auth token: <code className="text-xs">{settings.data.auth_token_preview}</code>
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+                  Edit
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  loading={del.isPending}
+                  onClick={() =>
+                    del.mutate(undefined, {
+                      onSuccess: () => toast({ title: "Plivo credentials cleared", variant: "success" }),
+                      onError: (err) =>
+                        toast({ title: "Could not clear credentials", description: err.message, variant: "error" }),
+                    })
+                  }
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex max-w-md flex-col gap-3">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Found in the Plivo console under Account &gt; Auth ID / Auth Token.
+              </p>
+              <div>
+                <Label htmlFor="plivo-settings-auth-id">Auth ID</Label>
+                <Input id="plivo-settings-auth-id" value={authId} onChange={(e) => setAuthId(e.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor="plivo-settings-auth-token">Auth token</Label>
+                <Input
+                  id="plivo-settings-auth-token"
+                  type="password"
+                  value={authToken}
+                  onChange={(e) => setAuthToken(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  loading={update.isPending}
+                  disabled={!authId.trim() || !authToken.trim()}
+                  onClick={() =>
+                    update.mutate(
+                      { auth_id: authId.trim(), auth_token: authToken.trim() },
+                      {
+                        onSuccess: () => {
+                          toast({ title: "Plivo credentials saved", variant: "success" });
+                          setEditing(false);
+                          setAuthId("");
+                          setAuthToken("");
+                        },
+                        onError: (err) =>
+                          toast({ title: "Could not save credentials", description: err.message, variant: "error" }),
+                      }
+                    )
+                  }
+                >
+                  Save
+                </Button>
+                {settings.data.configured && (
+                  <Button variant="outline" size="sm" onClick={() => setEditing(false)}>
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </QueryBoundary>
+  );
+}
+
+function TwilioCredentialsSection() {
+  const settings = useTwilioCredentialsSettings();
+  const update = useUpdateTwilioCredentialsSettings();
+  const del = useDeleteTwilioCredentialsSettings();
+  const { toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [accountSid, setAccountSid] = useState("");
+  const [authToken, setAuthToken] = useState("");
+
+  return (
+    <QueryBoundary
+      isLoading={settings.isLoading}
+      isError={settings.isError}
+      error={settings.error}
+      onRetry={() => settings.refetch()}
+      loadingFallback={<Skeleton className="h-20 w-full rounded-xl" />}
+    >
+      {settings.data && (
+        <div className="flex flex-col gap-3">
+          {settings.data.configured && !editing ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Account SID: <code className="text-xs">{settings.data.account_sid}</code>
+                <br />
+                Auth token: <code className="text-xs">{settings.data.auth_token_preview}</code>
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+                  Edit
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  loading={del.isPending}
+                  onClick={() =>
+                    del.mutate(undefined, {
+                      onSuccess: () => toast({ title: "Twilio credentials cleared", variant: "success" }),
+                      onError: (err) =>
+                        toast({ title: "Could not clear credentials", description: err.message, variant: "error" }),
+                    })
+                  }
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex max-w-md flex-col gap-3">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Found in the Twilio console on the Account dashboard.
+              </p>
+              <div>
+                <Label htmlFor="twilio-settings-account-sid">Account SID</Label>
+                <Input
+                  id="twilio-settings-account-sid"
+                  value={accountSid}
+                  onChange={(e) => setAccountSid(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="twilio-settings-auth-token">Auth token</Label>
+                <Input
+                  id="twilio-settings-auth-token"
+                  type="password"
+                  value={authToken}
+                  onChange={(e) => setAuthToken(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  loading={update.isPending}
+                  disabled={!accountSid.trim() || !authToken.trim()}
+                  onClick={() =>
+                    update.mutate(
+                      { account_sid: accountSid.trim(), auth_token: authToken.trim() },
+                      {
+                        onSuccess: () => {
+                          toast({ title: "Twilio credentials saved", variant: "success" });
+                          setEditing(false);
+                          setAccountSid("");
+                          setAuthToken("");
+                        },
+                        onError: (err) =>
+                          toast({ title: "Could not save credentials", description: err.message, variant: "error" }),
+                      }
+                    )
+                  }
+                >
+                  Save
+                </Button>
+                {settings.data.configured && (
+                  <Button variant="outline" size="sm" onClick={() => setEditing(false)}>
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </QueryBoundary>
+  );
+}
+
+function MetaCredentialsSection() {
+  const settings = useMetaCredentialsSettings();
+  const update = useUpdateMetaCredentialsSettings();
+  const del = useDeleteMetaCredentialsSettings();
+  const { toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [appId, setAppId] = useState("");
+  const [appSecret, setAppSecret] = useState("");
+  const [accessToken, setAccessToken] = useState("");
+  const [businessAccountId, setBusinessAccountId] = useState("");
+  const [verifyToken, setVerifyToken] = useState("");
+
+  return (
+    <QueryBoundary
+      isLoading={settings.isLoading}
+      isError={settings.isError}
+      error={settings.error}
+      onRetry={() => settings.refetch()}
+      loadingFallback={<Skeleton className="h-20 w-full rounded-xl" />}
+    >
+      {settings.data && (
+        <div className="flex flex-col gap-3">
+          {settings.data.configured && !editing ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                App ID: <code className="text-xs">{settings.data.app_id}</code>
+                <br />
+                App secret: <code className="text-xs">{settings.data.app_secret_preview}</code>
+                <br />
+                Access token: <code className="text-xs">{settings.data.access_token_preview}</code>
+                <br />
+                WABA ID: <code className="text-xs">{settings.data.business_account_id ?? "—"}</code>
+                <br />
+                Webhook verify token:{" "}
+                <code className="text-xs">
+                  {settings.data.verify_token_configured ? settings.data.verify_token_preview : "not set"}
+                </code>
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+                  Edit
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  loading={del.isPending}
+                  onClick={() =>
+                    del.mutate(undefined, {
+                      onSuccess: () => toast({ title: "Meta credentials cleared", variant: "success" }),
+                      onError: (err) =>
+                        toast({ title: "Could not clear credentials", description: err.message, variant: "error" }),
+                    })
+                  }
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex max-w-md flex-col gap-3">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Found in Meta App dashboard &gt; App settings &gt; Basic, and WhatsApp &gt; API
+                Setup. The verify token is whatever you set when registering this webhook URL in
+                the App&apos;s WhatsApp &gt; Configuration screen.
+              </p>
+              <div>
+                <Label htmlFor="meta-settings-app-id">App ID</Label>
+                <Input id="meta-settings-app-id" value={appId} onChange={(e) => setAppId(e.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor="meta-settings-app-secret">App secret</Label>
+                <Input
+                  id="meta-settings-app-secret"
+                  type="password"
+                  value={appSecret}
+                  onChange={(e) => setAppSecret(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="meta-settings-access-token">Access token</Label>
+                <Input
+                  id="meta-settings-access-token"
+                  type="password"
+                  value={accessToken}
+                  onChange={(e) => setAccessToken(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="meta-settings-waba-id">WhatsApp Business Account ID</Label>
+                <Input
+                  id="meta-settings-waba-id"
+                  value={businessAccountId}
+                  onChange={(e) => setBusinessAccountId(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="meta-settings-verify-token">Webhook verify token</Label>
+                <Input
+                  id="meta-settings-verify-token"
+                  type="password"
+                  value={verifyToken}
+                  onChange={(e) => setVerifyToken(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  loading={update.isPending}
+                  disabled={!appId.trim() || !appSecret.trim() || !accessToken.trim()}
+                  onClick={() =>
+                    update.mutate(
+                      {
+                        app_id: appId.trim(),
+                        app_secret: appSecret.trim(),
+                        access_token: accessToken.trim(),
+                        business_account_id: businessAccountId.trim() || null,
+                        verify_token: verifyToken.trim() || null,
+                      },
+                      {
+                        onSuccess: () => {
+                          toast({ title: "Meta credentials saved", variant: "success" });
+                          setEditing(false);
+                          setAppId("");
+                          setAppSecret("");
+                          setAccessToken("");
+                          setBusinessAccountId("");
+                          setVerifyToken("");
+                        },
+                        onError: (err) =>
+                          toast({ title: "Could not save credentials", description: err.message, variant: "error" }),
+                      }
+                    )
+                  }
+                >
+                  Save
+                </Button>
+                {settings.data.configured && (
+                  <Button variant="outline" size="sm" onClick={() => setEditing(false)}>
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </QueryBoundary>
+  );
+}
+
 export interface SettingsViewProps {
   title: string;
   description: string;
@@ -250,6 +636,15 @@ export function SettingsView({ title, description, channel }: SettingsViewProps)
           </CollapsibleSection>
         )}
 
+        {channel === "whatsapp" && isOrgAdmin && (
+          <CollapsibleSection
+            title="Meta WhatsApp Credentials"
+            icon={<KeyRound size={15} aria-hidden className="text-slate-400" />}
+          >
+            <MetaCredentialsSection />
+          </CollapsibleSection>
+        )}
+
         {channel === "calling" && isOrgAdmin && (
           <CollapsibleSection
             title="Voice Provider"
@@ -257,6 +652,24 @@ export function SettingsView({ title, description, channel }: SettingsViewProps)
             defaultOpen
           >
             <ProviderPreference />
+          </CollapsibleSection>
+        )}
+
+        {channel === "calling" && isOrgAdmin && (
+          <CollapsibleSection
+            title="Plivo Credentials"
+            icon={<KeyRound size={15} aria-hidden className="text-slate-400" />}
+          >
+            <PlivoCredentialsSection />
+          </CollapsibleSection>
+        )}
+
+        {channel === "calling" && isOrgAdmin && (
+          <CollapsibleSection
+            title="Twilio Credentials"
+            icon={<KeyRound size={15} aria-hidden className="text-slate-400" />}
+          >
+            <TwilioCredentialsSection />
           </CollapsibleSection>
         )}
       </div>

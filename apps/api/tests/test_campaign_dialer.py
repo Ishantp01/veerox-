@@ -216,6 +216,8 @@ async def test_claim_targets_claims_pending_voice_campaign(
         preferred_provider,
         org_id,
         max_attempts,
+        plivo_creds,
+        twilio_creds,
     ) = claimed[0]
     assert target_id == str(target.id)
     assert phone == target.phone
@@ -294,7 +296,7 @@ async def test_claim_targets_carries_org_preferred_provider(db_session: AsyncSes
     claimed = await campaign_dialer._claim_targets()
 
     assert len(claimed) == 1
-    *_, preferred_provider, org_id, max_attempts = claimed[0]
+    *_, preferred_provider, org_id, max_attempts, _plivo_creds, _twilio_creds = claimed[0]
     assert preferred_provider == "twilio"
 
 
@@ -329,7 +331,7 @@ async def test_claim_targets_uses_pinned_phone_number_and_overrides_provider(
     claimed = await campaign_dialer._claim_targets()
 
     assert len(claimed) == 1
-    _, _, _, plivo_from, twilio_from, preferred_provider, _, _ = claimed[0]
+    _, _, _, plivo_from, twilio_from, preferred_provider, _, _, _, _ = claimed[0]
     assert plivo_from == "+14155550001"
     assert twilio_from is None
     assert preferred_provider == "plivo"

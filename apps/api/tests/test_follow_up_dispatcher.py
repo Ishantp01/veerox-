@@ -139,11 +139,11 @@ async def test_execute_task_places_call_for_voice_lead(
 
     calls: list[tuple[str, str]] = []
 
-    async def fake_initiate_call(to_e164, answer_url, **kwargs):
+    async def fake_initiate_call(plivo_creds, twilio_creds, to_e164, answer_url, **kwargs):
         calls.append((to_e164, answer_url))
         return {"request_uuid": "abc"}, "plivo"
 
-    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "is_configured", lambda: True)
+    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "is_configured", lambda *a, **k: True)
     monkeypatch.setattr(follow_up_dispatcher.voice_failover, "initiate_call", fake_initiate_call)
 
     await follow_up_dispatcher._execute_task(task.id)
@@ -164,7 +164,7 @@ async def test_execute_task_skips_voice_lead_when_no_voice_provider_configured(
     lead = await _seed_lead(db_session, channel="voice", phone="+910000000008")
     task = await _seed_sending_task(db_session, lead)
 
-    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "is_configured", lambda: False)
+    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "is_configured", lambda *a, **k: False)
 
     await follow_up_dispatcher._execute_task(task.id)
 
@@ -189,7 +189,7 @@ async def test_execute_task_skips_voice_lead_over_call_minute_limit(
     async def fake_is_over_plan_limit(*args, **kwargs) -> bool:
         return True
 
-    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "is_configured", lambda: True)
+    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "is_configured", lambda *a, **k: True)
     monkeypatch.setattr(follow_up_dispatcher.voice_failover, "initiate_call", fake_initiate_call)
     monkeypatch.setattr(follow_up_dispatcher, "is_over_plan_limit", fake_is_over_plan_limit)
 

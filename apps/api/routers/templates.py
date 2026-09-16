@@ -11,9 +11,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 
 from apps.api.channels.whatsapp import client as wa_client
+from apps.api.core.org_credentials import resolve_meta_credentials
 from apps.api.core.tools import _default_org_id
 from apps.api.core.whatsapp_assets import asset_public_url
-from apps.api.db.models import WhatsAppAsset, WhatsAppTemplate
+from apps.api.db.models import Org, WhatsAppAsset, WhatsAppTemplate
 from apps.api.deps import DbDep, RedisDep, verify_admin_or_session
 from apps.api.schemas.template import TemplateCreate, TemplateOut, TemplateSyncResult, TemplateUpdateIn
 
@@ -35,6 +36,8 @@ async def list_templates(
     active: bool | None = Query(None),
 ) -> list[TemplateOut]:
     org_id = _default_org_id()
+    org_record = await db.get(Org, org_id)
+    meta_creds = resolve_meta_credentials(org_record)
     stmt = (
         select(WhatsAppTemplate)
         .where(WhatsAppTemplate.org_id == org_id)
@@ -51,13 +54,17 @@ async def list_templates(
     # the slower of the two, so this halves the endpoint's latency instead
     # of paying for both one after the other.
     async def _load_meta_status() -> dict[str, str]:
+        if meta_creds is None or not meta_creds.business_account_id:
+            return {}
         cached = await redis.get(_META_STATUS_CACHE_KEY)
         if cached is not None:
             return json.loads(cached)
         try:
             status_by_key = {
                 f"{t['name']} {t['language']}": t.get("status", "")
-                for t in await wa_client.list_templates()
+                for t in await wa_client.list_templates(
+                    meta_creds.access_token, meta_creds.business_account_id
+                )
                 if t.get("name") and t.get("language")
             }
         except httpx.HTTPError as exc:
@@ -126,6 +133,8 @@ async def create_template(payload: TemplateCreate, db: DbDep) -> WhatsAppTemplat
     entry).
     """
     org_id = _default_org_id()
+    org_record = await db.get(Org, org_id)
+    meta_creds = resolve_meta_credentials(org_record)
     media_header_types = {"IMAGE", "VIDEO", "DOCUMENT"}
     header_type = (payload.header_type or "").upper() or None
     header_handle: str | None = None
@@ -155,12 +164,20 @@ async def create_template(payload: TemplateCreate, db: DbDep) -> WhatsAppTemplat
                 status_code=400,
                 detail=f"header_asset_id is required for a {header_type} header",
             )
+        if meta_creds is None:
+            raise HTTPException(
+                status_code=400, detail="This org's Meta WhatsApp App isn't configured yet."
+            )
         asset = await db.get(WhatsAppAsset, payload.header_asset_id)
         if asset is None or asset.org_id != org_id:
             raise HTTPException(status_code=404, detail="Header asset not found")
         try:
             header_handle = await wa_client.get_header_media_handle(
-                data=asset.data, mime_type=asset.mime_type, filename=asset.filename
+                meta_creds.access_token,
+                meta_creds.app_id,
+                data=asset.data,
+                mime_type=asset.mime_type,
+                filename=asset.filename,
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -176,8 +193,14 @@ async def create_template(payload: TemplateCreate, db: DbDep) -> WhatsAppTemplat
         header_example = asset_public_url(asset)
 
     if payload.body_preview:
+        if meta_creds is None or not meta_creds.business_account_id:
+            raise HTTPException(
+                status_code=400, detail="This org's Meta WhatsApp App isn't configured yet."
+            )
         try:
             await wa_client.create_template(
+                meta_creds.access_token,
+                meta_creds.business_account_id,
                 name=payload.name,
                 body_text=payload.body_preview,
                 category=category,
@@ -285,7 +308,11 @@ async def sync_templates_from_meta(db: DbDep) -> TemplateSyncResult:
     label, so overwriting those would make them worse.
     """
     org_id = _default_org_id()
-    meta_templates = await wa_client.list_templates()
+    org_record = await db.get(Org, org_id)
+    meta_creds = resolve_meta_credentials(org_record)
+    if meta_creds is None or not meta_creds.business_account_id:
+        raise HTTPException(status_code=400, detail="This org's Meta WhatsApp App isn't configured yet.")
+    meta_templates = await wa_client.list_templates(meta_creds.access_token, meta_creds.business_account_id)
 
     existing_rows = (
         (

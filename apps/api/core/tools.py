@@ -31,6 +31,11 @@ from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice.org_numbers import get_default_whatsapp_number_id, get_rotating_numbers
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
+from apps.api.core.org_credentials import (
+    resolve_meta_credentials,
+    resolve_plivo_credentials,
+    resolve_twilio_credentials,
+)
 from apps.api.core.whatsapp_assets import asset_public_url, load_org_assets, resolve_asset
 from apps.api.core.whatsapp_template_catalog import resolve_template
 from apps.api.db.models.account_user import AccountUser
@@ -950,20 +955,25 @@ async def transfer_to_human(
             ]
 
         phone_number_id = await get_default_whatsapp_number_id(db, org_id)
-        try:
-            await wa_client.send_template(
-                _normalize_phone(notify_phone),
-                template_name,
-                body_params=body_params,
-                phone_number_id=phone_number_id,
-            )
-        except httpx.HTTPError:
-            logger.warning(
-                "transfer_to_human_notify_send_error",
-                org_id=str(org_id),
-                notify_phone=notify_phone,
-                exc_info=True,
-            )
+        meta_creds = resolve_meta_credentials(org)
+        if meta_creds is None:
+            logger.warning("transfer_to_human_notify_not_configured", org_id=str(org_id))
+        else:
+            try:
+                await wa_client.send_template(
+                    meta_creds.access_token,
+                    _normalize_phone(notify_phone),
+                    template_name,
+                    body_params=body_params,
+                    phone_number_id=phone_number_id,
+                )
+            except httpx.HTTPError:
+                logger.warning(
+                    "transfer_to_human_notify_send_error",
+                    org_id=str(org_id),
+                    notify_phone=notify_phone,
+                    exc_info=True,
+                )
     elif campaign_owner is not None:
         # Lead still lands on the campaign owner's dashboard below; we just
         # can't WhatsApp them. Not falling back to round-robin — that would
@@ -1257,9 +1267,20 @@ async def send_appointment_confirmation(
         )
         return
 
+    org = await db.get(Org, org_id)
+    meta_creds = resolve_meta_credentials(org)
+    if meta_creds is None:
+        logger.warning(
+            "appointment_confirmation_not_configured",
+            appointment_id=str(appointment_id),
+            org_id=str(org_id),
+        )
+        return
+
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
     try:
         await wa_client.send_template(
+            meta_creds.access_token,
             _normalize_phone(phone),
             _APPOINTMENT_TEMPLATE_NAME,
             body_params=[name or "there", date, _format_display_time(time)],
@@ -1315,11 +1336,16 @@ async def send_whatsapp_message(
     if not target_phone:
         return {"status": "error", "reason": "no_phone_number_available"}
 
+    org = await db.get(Org, org_id)
+    meta_creds = resolve_meta_credentials(org)
+    if meta_creds is None:
+        return {"status": "error", "reason": "whatsapp_not_configured"}
+
     normalized = _normalize_phone(target_phone)
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
     try:
-        await wa_client.send_text(normalized, message, phone_number_id=phone_number_id)
+        await wa_client.send_text(meta_creds.access_token, normalized, message, phone_number_id=phone_number_id)
     except httpx.HTTPStatusError as exc:
         if (
             _meta_error_code(exc) == _REENGAGEMENT_ERROR_CODE
@@ -1328,6 +1354,7 @@ async def send_whatsapp_message(
         ):
             try:
                 await wa_client.send_template(
+                    meta_creds.access_token,
                     normalized,
                     _APPOINTMENT_TEMPLATE_NAME,
                     body_params=[
@@ -1411,11 +1438,17 @@ async def send_whatsapp_file(
     if isinstance(resolved, list):
         return {"status": "error", "reason": "ambiguous_file_name", "matches": resolved}
 
+    org = await db.get(Org, org_id)
+    meta_creds = resolve_meta_credentials(org)
+    if meta_creds is None:
+        return {"status": "error", "reason": "whatsapp_not_configured"}
+
     normalized = _normalize_phone(target_phone)
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
     try:
         await wa_client.send_media(
+            meta_creds.access_token,
             normalized,
             resolved.media_type,
             asset_public_url(resolved),
@@ -1488,6 +1521,11 @@ async def send_whatsapp_template(
     if isinstance(resolved, list):
         return {"status": "error", "reason": "ambiguous_template_name", "matches": resolved}
 
+    org = await db.get(Org, org_id)
+    meta_creds = resolve_meta_credentials(org)
+    if meta_creds is None:
+        return {"status": "error", "reason": "whatsapp_not_configured"}
+
     normalized = _normalize_phone(target_phone)
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
@@ -1520,6 +1558,7 @@ async def send_whatsapp_template(
 
     try:
         await wa_client.send_template(
+            meta_creds.access_token,
             normalized,
             resolved.name,
             language_code=resolved.language,
@@ -1612,11 +1651,14 @@ async def initiate_ai_call(
     if not target_phone:
         return {"status": "error", "reason": "no_phone_number_available"}
 
-    if not voice_failover.is_configured():
-        return {"status": "error", "reason": "calling_not_configured"}
-
     normalized = _normalize_phone(target_phone)
     org = await db.get(Org, org_id)
+    plivo_creds = resolve_plivo_credentials(org)
+    twilio_creds = resolve_twilio_credentials(org)
+
+    if not voice_failover.is_configured(plivo_creds, twilio_creds):
+        return {"status": "error", "reason": "calling_not_configured"}
+
     plivo_from, twilio_from = (
         await get_rotating_numbers(db, get_redis_pool(), org_id) if org else (None, None)
     )
@@ -1624,13 +1666,15 @@ async def initiate_ai_call(
     answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer?org_id={org_id}"
     try:
         _result, provider = await voice_failover.initiate_call(
+            plivo_creds,
+            twilio_creds,
             normalized,
             answer_url,
             plivo_from_number=plivo_from,
             twilio_from_number=twilio_from,
             preferred_provider=org.preferred_voice_provider if org else None,
         )
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, RuntimeError) as exc:
         logger.warning(
             "initiate_ai_call_tool_failed",
             phone=normalized,

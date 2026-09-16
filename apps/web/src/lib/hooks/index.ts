@@ -33,6 +33,18 @@ export {
   useUpdateWhatsAppSettings,
   useCallingSettings,
   useUpdateCallingSettings,
+  useOpenAIKeySettings,
+  useUpdateOpenAIKeySettings,
+  useDeleteOpenAIKeySettings,
+  usePlivoCredentialsSettings,
+  useUpdatePlivoCredentialsSettings,
+  useDeletePlivoCredentialsSettings,
+  useTwilioCredentialsSettings,
+  useUpdateTwilioCredentialsSettings,
+  useDeleteTwilioCredentialsSettings,
+  useMetaCredentialsSettings,
+  useUpdateMetaCredentialsSettings,
+  useDeleteMetaCredentialsSettings,
 } from "./useConfig";
 export {
   useScripts,

@@ -22,7 +22,10 @@ logger = structlog.get_logger(__name__)
 _client: AsyncOpenAI | None = None
 
 
-def _get_client() -> AsyncOpenAI:
+def _get_client(api_key: str | None = None) -> AsyncOpenAI:
+    """See core/llm.py::_get_client — same pooled-default/one-off-override split."""
+    if api_key and api_key != settings.openai_api_key:
+        return AsyncOpenAI(api_key=api_key)
     global _client
     if _client is None:
         _client = AsyncOpenAI(api_key=settings.openai_api_key)
@@ -51,6 +54,7 @@ async def transcribe(
     *,
     mime: str = "audio/ogg",
     language: str | None = None,
+    api_key: str | None = None,
 ) -> str:
     """Transcribe an audio blob via OpenAI Whisper and return the text.
 
@@ -62,6 +66,9 @@ async def transcribe(
         language: Optional ISO-639-1 hint (``"hi"``, ``"en"``). Whisper
             auto-detects when unset, which is the right default for
             code-mixed Hindi/English speakers.
+        api_key: Override for ``settings.openai_api_key`` — pass an org's own
+            key (see core/org_openai_key.py::resolve_openai_api_key) to bill
+            this call against it instead of the platform's shared key.
 
     Returns:
         The transcribed text. Empty string if Whisper returned no text.
@@ -73,13 +80,13 @@ async def transcribe(
     # **dict[str, object] ambiguous to the type checker. The two branches
     # cover whether `language` is provided.
     if language:
-        result = await _get_client().audio.transcriptions.create(
+        result = await _get_client(api_key).audio.transcriptions.create(
             model="whisper-1",
             file=file_tuple,
             language=language,
         )
     else:
-        result = await _get_client().audio.transcriptions.create(
+        result = await _get_client(api_key).audio.transcriptions.create(
             model="whisper-1",
             file=file_tuple,
         )

@@ -99,3 +99,40 @@ class Org(Base):
     # (the hardcoded `agent_connect_request` once Meta-approved, otherwise
     # the `appointment_confirmation` fallback). Set via PUT /admin/settings/whatsapp.
     agent_connect_template_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # This org's own OpenAI API key (Fernet-encrypted, see core/crypto.py),
+    # letting it bring/pay for its own usage instead of the platform's
+    # shared settings.openai_api_key. NULL = not configured, fall back to
+    # the platform key everywhere a key is resolved (core/org_openai_key.py
+    # ::resolve_openai_api_key). Never returned to the client in plaintext —
+    # routers/admin.py's openai-key endpoints only ever expose a masked
+    # preview (core/crypto.py::mask_secret) plus a configured boolean.
+    openai_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # This org's own Plivo/Twilio/Meta WhatsApp channel credentials
+    # (Fernet-encrypted secrets, see core/crypto.py), letting each client
+    # bring its own provider account instead of dialing/sending through the
+    # platform's shared settings.plivo_*/twilio_*/meta_* credentials. There
+    # is deliberately NO fallback to the platform credentials once this
+    # feature is live — see core/org_credentials.py::resolve_plivo_credentials
+    # / resolve_twilio_credentials / resolve_meta_credentials, which every
+    # outbound call/SMS/WhatsApp send site now goes through. An org's own
+    # dedicated phone numbers still live separately in OrgPhoneNumber
+    # (db/models/org_phone_number.py) — these columns are only the account-
+    # level auth needed to place calls/sends on THAT org's provider account.
+    # Non-secret ids are stored in plaintext; secrets are Fernet-encrypted
+    # and masked (core/crypto.py::mask_secret) whenever shown back to the
+    # client, same pattern as openai_api_key_encrypted above.
+    plivo_auth_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    plivo_auth_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    twilio_account_sid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    twilio_auth_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meta_app_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    meta_app_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meta_whatsapp_business_account_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # This org's own Meta webhook verify token — Meta webhooks are
+    # configured per-App in the Meta dashboard, not per phone number, so an
+    # org bringing its own Meta App must register OUR shared callback URL
+    # ({PUBLIC_BASE_URL}/webhook/whatsapp) in THEIR App's dashboard with
+    # THIS token. channels/whatsapp/webhook.py's GET handshake accepts a
+    # match against any org's token, not one global one.
+    meta_verify_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meta_access_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)

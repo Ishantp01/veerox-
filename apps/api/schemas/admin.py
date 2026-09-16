@@ -203,6 +203,75 @@ class CallingSettingsIn(BaseModel):
     )
 
 
+class OpenAIKeySettingsOut(BaseModel):
+    """Status of this org's own OpenAI key — see WhatsAppSettingsOut for why
+    the real value never comes back over the API, only a masked preview."""
+
+    configured: bool = Field(
+        ..., description="True when this org has its own key set; false means it's on the platform key."
+    )
+    key_preview: str | None = Field(
+        None, description="e.g. 'sk-...ab12' — last 4 characters only, never the full key."
+    )
+
+
+class OpenAIKeySettingsIn(BaseModel):
+    api_key: str = Field(..., min_length=20, description="The org's OpenAI API key (starts with 'sk-').")
+
+
+class PlivoCredentialsSettingsOut(BaseModel):
+    """Status of this org's own Plivo account — no platform-wide fallback;
+    an org with nothing configured here simply can't call/SMS via Plivo."""
+
+    configured: bool
+    auth_id: str | None = Field(None, description="Plivo Account SID — not secret, shown in full.")
+    auth_token_preview: str | None = Field(None, description="e.g. 'sk-...ab12' — last 4 chars only.")
+
+
+class PlivoCredentialsSettingsIn(BaseModel):
+    auth_id: str = Field(..., min_length=1, description="Plivo Account Auth ID.")
+    auth_token: str = Field(..., min_length=4, description="Plivo Account Auth Token.")
+
+
+class TwilioCredentialsSettingsOut(BaseModel):
+    """Status of this org's own Twilio account — no platform-wide fallback."""
+
+    configured: bool
+    account_sid: str | None = Field(None, description="Twilio Account SID — not secret, shown in full.")
+    auth_token_preview: str | None = Field(None, description="e.g. 'sk-...ab12' — last 4 chars only.")
+
+
+class TwilioCredentialsSettingsIn(BaseModel):
+    account_sid: str = Field(..., min_length=1, description="Twilio Account SID.")
+    auth_token: str = Field(..., min_length=4, description="Twilio Auth Token.")
+
+
+class MetaCredentialsSettingsOut(BaseModel):
+    """Status of this org's own Meta WhatsApp App — no platform-wide
+    fallback; an org with nothing configured here simply can't send/receive
+    WhatsApp through Meta."""
+
+    configured: bool
+    app_id: str | None = None
+    app_secret_configured: bool = False
+    app_secret_preview: str | None = None
+    access_token_configured: bool = False
+    access_token_preview: str | None = None
+    business_account_id: str | None = None
+    verify_token_configured: bool = False
+    verify_token_preview: str | None = None
+
+
+class MetaCredentialsSettingsIn(BaseModel):
+    app_id: str = Field(..., min_length=1, description="Meta App ID.")
+    app_secret: str = Field(..., min_length=4, description="Meta App Secret.")
+    access_token: str = Field(..., min_length=4, description="Meta WhatsApp permanent access token.")
+    business_account_id: str | None = Field(None, description="WhatsApp Business Account (WABA) id.")
+    verify_token: str | None = Field(
+        None, description="Token Meta's webhook handshake must present (hub.verify_token)."
+    )
+
+
 class StatsTimeseriesPoint(BaseModel):
     date: str  # YYYY-MM-DD, UTC
     calls: int

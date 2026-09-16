@@ -9,11 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from apps.api.channels.voice import plivo_client
+from apps.api.channels.voice.plivo_provisioning import register_all_org_plivo_numbers
 from apps.api.channels.voice.realtime_bridge import router as voice_stream_router
 from apps.api.channels.voice.webhook import router as voice_router
 from apps.api.channels.whatsapp.webhook import router as whatsapp_router
 from apps.api.config import settings
+from apps.api.db.session import AsyncSessionLocal
 from apps.api.db.startup_seed import ensure_env_seed_data_on_startup
 from apps.api.logging import setup_logging
 from apps.api.rate_limit import limiter
@@ -46,7 +47,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging()
     init_sentry()
     await ensure_env_seed_data_on_startup()
-    plivo_registration_task = asyncio.create_task(plivo_client.register_inbound_answer_url())
+
+    async def _register_all_org_plivo_numbers() -> None:
+        try:
+            async with AsyncSessionLocal() as db:
+                await register_all_org_plivo_numbers(db)
+        except Exception:
+            # Best-effort — must never block or crash startup.
+            pass
+
+    plivo_registration_task = asyncio.create_task(_register_all_org_plivo_numbers())
     dialer_task = asyncio.create_task(run_campaign_dialer())
     whatsapp_dispatcher_task = asyncio.create_task(run_whatsapp_dispatcher())
     follow_up_task = asyncio.create_task(run_follow_up_dispatcher())

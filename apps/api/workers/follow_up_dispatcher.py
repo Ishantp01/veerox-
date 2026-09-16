@@ -36,6 +36,11 @@ from apps.api.channels.voice.org_numbers import get_default_whatsapp_number_id, 
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.agent import _is_kill_switch_active
+from apps.api.core.org_credentials import (
+    resolve_meta_credentials,
+    resolve_plivo_credentials,
+    resolve_twilio_credentials,
+)
 from apps.api.core.usage import get_credit_usage
 from apps.api.db.models import FollowUpRule, FollowUpTask, Lead
 from apps.api.db.models.org import Org
@@ -273,7 +278,9 @@ async def _place_follow_up_call(db: AsyncSession, task_id: UUID, lead: Lead, org
     means the call was successfully *placed*, not that the recipient
     answered, same loose meaning "sent" already carries for a WhatsApp task.
     """
-    if not voice_failover.is_configured():
+    plivo_creds = resolve_plivo_credentials(org_record)
+    twilio_creds = resolve_twilio_credentials(org_record)
+    if not voice_failover.is_configured(plivo_creds, twilio_creds):
         logger.warning("follow_up_dispatcher_voice_not_configured", task_id=str(task_id))
         await _resolve_task(task_id, "skipped")
         return
@@ -287,6 +294,8 @@ async def _place_follow_up_call(db: AsyncSession, task_id: UUID, lead: Lead, org
 
     try:
         _, provider = await voice_failover.initiate_call(
+            plivo_creds,
+            twilio_creds,
             lead.phone,
             answer_url,
             plivo_from_number=plivo_from,
@@ -295,7 +304,7 @@ async def _place_follow_up_call(db: AsyncSession, task_id: UUID, lead: Lead, org
         )
         if provider == "twilio" and not twilio_from:
             logger.warning("follow_up_dispatcher_fell_back_to_twilio", task_id=str(task_id))
-    except httpx.HTTPError:
+    except (httpx.HTTPError, RuntimeError):
         logger.warning("follow_up_dispatcher_call_failed", task_id=str(task_id))
         await _resolve_task(task_id, "failed")
         return
@@ -348,13 +357,20 @@ async def _execute_task(task_id: UUID) -> None:
 
         # Send from this org's own default dedicated WhatsApp number when it
         # has one (see channels/voice/org_numbers.py::
-        # get_default_whatsapp_number_id), falling back to the platform default.
+        # get_default_whatsapp_number_id).
         phone_number_id = await get_default_whatsapp_number_id(db, lead.org_id)
+        meta_creds = resolve_meta_credentials(org_record)
+
+    if meta_creds is None:
+        logger.warning("follow_up_dispatcher_whatsapp_not_configured", task_id=str(task_id))
+        await _resolve_task(task_id, "skipped")
+        return
 
     try:
         if task.template_name:
             body_params = _resolve_template_body_params(task.template_params, lead.name)
             await wa_client.send_template(
+                meta_creds.access_token,
                 lead.phone,
                 task.template_name,
                 task.template_language or "en_US",
@@ -362,7 +378,9 @@ async def _execute_task(task_id: UUID) -> None:
                 phone_number_id=phone_number_id,
             )
         else:
-            await wa_client.send_text(lead.phone, message, phone_number_id=phone_number_id)
+            await wa_client.send_text(
+                meta_creds.access_token, lead.phone, message, phone_number_id=phone_number_id
+            )
     except httpx.HTTPError:
         logger.warning("follow_up_dispatcher_send_failed", task_id=str(task_id))
         await _resolve_task(task_id, "failed")

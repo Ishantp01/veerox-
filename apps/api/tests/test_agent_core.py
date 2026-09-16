@@ -82,6 +82,7 @@ def _patch_llm_sequence(
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         temperature: float = 0.4,
+        api_key: str | None = None,
     ) -> ChatResult:
         calls.append([dict(m) for m in messages])
         return next(iterator)

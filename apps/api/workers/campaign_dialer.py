@@ -24,6 +24,12 @@ from apps.api.channels.voice.org_numbers import get_numbers_by_org, next_rotatin
 from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.config import settings
 from apps.api.core.agent import _is_kill_switch_active
+from apps.api.core.org_credentials import (
+    PlivoCredentials,
+    TwilioCredentials,
+    resolve_plivo_credentials,
+    resolve_twilio_credentials,
+)
 from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
@@ -169,7 +175,20 @@ async def _count_calls_in_flight(db) -> int:
     return (await db.execute(stmt)).scalar_one()
 
 
-async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, str | None, UUID, int]]:
+async def _claim_targets() -> list[
+    tuple[
+        str,
+        str,
+        int,
+        str | None,
+        str | None,
+        str | None,
+        UUID,
+        int,
+        PlivoCredentials | None,
+        TwilioCredentials | None,
+    ]
+]:
     """Atomically claim up to the remaining concurrency budget's worth of the
     oldest pending targets of running campaigns.
 
@@ -232,7 +251,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
             select(
                 CampaignTarget,
                 CallCampaign.org_id,
-                Org.preferred_voice_provider,
+                Org,
                 CallCampaign.phone_number_id,
                 CallCampaign.max_attempts,
             )
@@ -257,8 +276,14 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
         rows = (await db.execute(stmt)).all()
 
         org_over_limit: dict[UUID, bool] = {}
+        # Resolve each distinct org's own Plivo/Twilio credentials once per
+        # batch — Org rows are already joined in above, so this is a
+        # decrypt-in-memory operation per distinct org_id, not an extra
+        # query, mirroring get_numbers_by_org's batched-not-per-target
+        # approach for phone numbers.
+        creds_by_org: dict[UUID, tuple[PlivoCredentials | None, TwilioCredentials | None]] = {}
         staged: list[tuple[CampaignTarget, UUID, str | None, UUID | None, int]] = []
-        for target, org_id, preferred_provider, phone_number_id, max_attempts in rows:
+        for target, org_id, org_record, phone_number_id, max_attempts in rows:
             if len(staged) >= capacity:
                 break
             if org_id not in org_over_limit:
@@ -268,10 +293,17 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
                 )
             if org_over_limit[org_id]:
                 continue
+            if org_id not in creds_by_org:
+                creds_by_org[org_id] = (
+                    resolve_plivo_credentials(org_record),
+                    resolve_twilio_credentials(org_record),
+                )
             target.status = "calling"
             target.attempt_count += 1
             target.called_at = datetime.now(UTC)
-            staged.append((target, org_id, preferred_provider, phone_number_id, max_attempts))
+            staged.append(
+                (target, org_id, org_record.preferred_voice_provider, phone_number_id, max_attempts)
+            )
 
         if not staged:
             return []
@@ -308,6 +340,7 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
                     redis, org_id, "twilio", org_numbers.get("twilio", [])
                 )
                 effective_provider = preferred_provider
+            plivo_creds, twilio_creds = creds_by_org[org_id]
             claimed.append(
                 (
                     str(target.id),
@@ -318,6 +351,8 @@ async def _claim_targets() -> list[tuple[str, str, int, str | None, str | None, 
                     effective_provider,
                     org_id,
                     max_attempts,
+                    plivo_creds,
+                    twilio_creds,
                 )
             )
         await db.commit()
@@ -372,6 +407,8 @@ async def _dial_one(
     preferred_provider: str | None,
     org_id: UUID,
     max_attempts: int,
+    plivo_creds: PlivoCredentials | None,
+    twilio_creds: TwilioCredentials | None,
 ) -> None:
     answer_url = (
         f"{settings.public_base_url.rstrip('/')}/voice/answer?campaign_target_id={target_id}"
@@ -381,17 +418,19 @@ async def _dial_one(
         f"?campaign_target_id={target_id}"
     )
 
-    if not voice_failover.is_configured():
+    if not voice_failover.is_configured(plivo_creds, twilio_creds):
         # Local-dev fallback, same convention as POST /admin/outbound/call:
         # leave the target "calling" (simulating a placed call) rather than
         # failing it outright, so the dialer's concurrency gate and the
         # stuck-target requeue-on-restart path stay testable without real
         # Plivo credentials.
-        logger.warning("campaign_dialer_plivo_not_configured", target_id=target_id)
+        logger.warning("campaign_dialer_not_configured", target_id=target_id, org_id=str(org_id))
         return
 
     try:
         result, provider = await voice_failover.initiate_call(
+            plivo_creds,
+            twilio_creds,
             phone,
             answer_url,
             hangup_url=hangup_url,
@@ -410,7 +449,7 @@ async def _dial_one(
             # duration instead of waiting for the callee to answer — see
             # start_precall_connect's docstring.
             start_precall_connect(request_uuid, UUID(target_id), org_id)
-    except httpx.HTTPError:
+    except (httpx.HTTPError, RuntimeError):
         logger.warning("campaign_dialer_initiate_call_failed", target_id=target_id)
         await _mark_target(target_id, "pending" if attempt_count < max_attempts else "failed")
 
@@ -430,6 +469,8 @@ async def _dial_batch() -> None:
                 preferred_provider,
                 org_id,
                 max_attempts,
+                plivo_creds,
+                twilio_creds,
             )
             for (
                 target_id,
@@ -440,6 +481,8 @@ async def _dial_batch() -> None:
                 preferred_provider,
                 org_id,
                 max_attempts,
+                plivo_creds,
+                twilio_creds,
             ) in claimed
         )
     )

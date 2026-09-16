@@ -27,23 +27,20 @@ _http: httpx.AsyncClient = httpx.AsyncClient(timeout=10.0)
 _GRAPH_BASE = "https://graph.facebook.com"
 
 
-def _graph_url(path: str, phone_number_id: str | None = None) -> str:
+def _graph_url(path: str, phone_number_id: str | None) -> str:
     """Build a Graph API URL pinned to the configured version + phone-number id.
 
     ``path`` is anything that follows the phone-number id (e.g. ``"/messages"``
     or ``""``). Pass ``path=""`` for endpoints that *are* the phone-number id
-    itself. ``phone_number_id`` overrides the platform-default
-    ``settings.meta_phone_number_id`` — used to send from one of an org's own
-    dedicated WhatsApp numbers (see ``db/models/org_phone_number.py``).
+    itself. ``phone_number_id`` is the org's own dedicated WhatsApp number id
+    (see ``db/models/org_phone_number.py``) — there is no platform-wide
+    default any more, so callers must always supply one.
     """
-    return (
-        f"{_GRAPH_BASE}/{settings.meta_graph_api_version}"
-        f"/{phone_number_id or settings.meta_phone_number_id}{path}"
-    )
+    return f"{_GRAPH_BASE}/{settings.meta_graph_api_version}/{phone_number_id}{path}"
 
 
-def _auth_headers() -> dict[str, str]:
-    return {"Authorization": f"Bearer {settings.meta_access_token}"}
+def _auth_headers(access_token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {access_token}"}
 
 
 def _meta_error_detail(exc: httpx.HTTPError) -> dict[str, Any] | None:
@@ -108,12 +105,15 @@ def friendly_error_message(meta_error: dict[str, Any] | None) -> str:
     return message
 
 
-async def send_text(to_e164: str, body: str, phone_number_id: str | None = None) -> dict[str, Any]:
+async def send_text(
+    access_token: str, to_e164: str, body: str, phone_number_id: str | None = None
+) -> dict[str, Any]:
     """Send a plain-text WhatsApp message via the Graph API.
 
-    ``phone_number_id``, when given, sends from one of an org's own
-    dedicated WhatsApp numbers instead of the platform default (see
-    ``db/models/org_phone_number.py``).
+    ``access_token`` is this org's own Meta access token (see
+    ``core/org_credentials.py::resolve_meta_credentials`` — no platform-wide
+    fallback). ``phone_number_id`` sends from one of the org's own dedicated
+    WhatsApp numbers (see ``db/models/org_phone_number.py``).
 
     Returns the raw JSON response (which contains the outbound message id).
     Raises ``httpx.HTTPStatusError`` on a non-2xx response.
@@ -126,7 +126,7 @@ async def send_text(to_e164: str, body: str, phone_number_id: str | None = None)
         "text": {"body": body},
     }
     try:
-        r = await _http.post(url, json=payload, headers=_auth_headers())
+        r = await _http.post(url, json=payload, headers=_auth_headers(access_token))
         r.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning(
@@ -151,6 +151,7 @@ _MEDIA_HEADER_FORMATS = {"IMAGE", "VIDEO", "DOCUMENT"}
 
 
 async def send_template(
+    access_token: str,
     to_e164: str,
     template_name: str,
     language_code: str = "en_US",
@@ -247,7 +248,7 @@ async def send_template(
         "template": template,
     }
     try:
-        r = await _http.post(url, json=payload, headers=_auth_headers())
+        r = await _http.post(url, json=payload, headers=_auth_headers(access_token))
         r.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning(
@@ -271,6 +272,7 @@ async def send_template(
 
 
 async def send_media(
+    access_token: str,
     to_e164: str,
     media_type: str,
     link: str,
@@ -307,7 +309,7 @@ async def send_media(
         media_type: media_obj,
     }
     try:
-        r = await _http.post(url, json=payload, headers=_auth_headers())
+        r = await _http.post(url, json=payload, headers=_auth_headers(access_token))
         r.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning(
@@ -333,7 +335,9 @@ async def send_media(
 _MEDIA_HEADER_TYPES = {"IMAGE", "VIDEO", "DOCUMENT"}
 
 
-async def get_header_media_handle(data: bytes, mime_type: str, filename: str) -> str:
+async def get_header_media_handle(
+    access_token: str, app_id: str, data: bytes, mime_type: str, filename: str
+) -> str:
     """Upload file bytes to Meta's Resumable Upload API and return a media
     ``handle`` usable as a template HEADER's ``example.header_handle``.
 
@@ -346,25 +350,24 @@ async def get_header_media_handle(data: bytes, mime_type: str, filename: str) ->
     2. ``POST /{session_id}`` with the raw bytes (``Authorization: OAuth
        {token}``, not ``Bearer``) returns the ``h`` handle.
 
-    Raises ``httpx.HTTPStatusError`` on a non-2xx response from either step,
-    or ``RuntimeError`` if ``settings.meta_app_id`` isn't configured.
+    ``app_id``/``access_token`` are this org's own Meta App id and access
+    token (see ``core/org_credentials.py::resolve_meta_credentials`` — no
+    platform-wide fallback). Raises ``httpx.HTTPStatusError`` on a non-2xx
+    response from either step.
     """
-    if not settings.meta_app_id:
-        raise RuntimeError("META_APP_ID must be set to upload template header media")
-
-    start_url = f"{_GRAPH_BASE}/{settings.meta_graph_api_version}/{settings.meta_app_id}/uploads"
+    start_url = f"{_GRAPH_BASE}/{settings.meta_graph_api_version}/{app_id}/uploads"
     try:
         start_r = await _http.post(
             start_url,
             params={"file_length": len(data), "file_type": mime_type, "file_name": filename},
-            headers=_auth_headers(),
+            headers=_auth_headers(access_token),
         )
         start_r.raise_for_status()
         upload_session_id = start_r.json()["id"]
 
         upload_r = await _http.post(
             f"{_GRAPH_BASE}/{settings.meta_graph_api_version}/{upload_session_id}",
-            headers={"Authorization": f"OAuth {settings.meta_access_token}", "file_offset": "0"},
+            headers={"Authorization": f"OAuth {access_token}", "file_offset": "0"},
             content=data,
             # The shared client's default 10s timeout is fine for small JSON
             # calls but too tight for a document/video upload (up to 16MB) on
@@ -387,6 +390,8 @@ async def get_header_media_handle(data: bytes, mime_type: str, filename: str) ->
 
 
 async def create_template(
+    access_token: str,
+    business_account_id: str,
     name: str,
     body_text: str,
     category: str = "UTILITY",
@@ -428,10 +433,7 @@ async def create_template(
     Raises ``httpx.HTTPStatusError`` on a non-2xx response (e.g. a name
     that's already taken for this language, or a malformed component).
     """
-    url = (
-        f"{_GRAPH_BASE}/{settings.meta_graph_api_version}"
-        f"/{settings.meta_whatsapp_business_account_id}/message_templates"
-    )
+    url = f"{_GRAPH_BASE}/{settings.meta_graph_api_version}/{business_account_id}/message_templates"
     components: list[dict[str, Any]] = []
 
     if header_type and header_type.upper() in _MEDIA_HEADER_TYPES and header_handle:
@@ -470,7 +472,7 @@ async def create_template(
         "components": components,
     }
     try:
-        r = await _http.post(url, json=payload, headers=_auth_headers())
+        r = await _http.post(url, json=payload, headers=_auth_headers(access_token))
         r.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning(
@@ -492,7 +494,7 @@ async def create_template(
     return data
 
 
-async def list_templates() -> list[dict[str, Any]]:
+async def list_templates(access_token: str, business_account_id: str) -> list[dict[str, Any]]:
     """Fetch this WABA's message templates with their live Meta review status.
 
     Used to show real approval status (``PENDING`` / ``APPROVED`` /
@@ -505,13 +507,10 @@ async def list_templates() -> list[dict[str, Any]]:
     templates that don't have a local row yet — Meta is the only source for
     that, our local row is created *from* this data, not the other way round.
     """
-    url = (
-        f"{_GRAPH_BASE}/{settings.meta_graph_api_version}"
-        f"/{settings.meta_whatsapp_business_account_id}/message_templates"
-    )
+    url = f"{_GRAPH_BASE}/{settings.meta_graph_api_version}/{business_account_id}/message_templates"
     params = {"fields": "name,language,status,category,components", "limit": 200}
     try:
-        r = await _http.get(url, params=params, headers=_auth_headers())
+        r = await _http.get(url, params=params, headers=_auth_headers(access_token))
         r.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning("whatsapp_list_templates_failed", error=str(exc))
@@ -520,7 +519,7 @@ async def list_templates() -> list[dict[str, Any]]:
     return list(data.get("data", []))
 
 
-async def download_media(media_id: str) -> bytes:
+async def download_media(access_token: str, media_id: str) -> bytes:
     """Download a media blob from Meta in two steps.
 
     1. ``GET /{media_id}`` returns JSON with a short-lived signed ``url``.
@@ -531,7 +530,7 @@ async def download_media(media_id: str) -> bytes:
     # Step 1: resolve the media id to a download URL.
     meta_url = f"{_GRAPH_BASE}/{settings.meta_graph_api_version}/{media_id}"
     try:
-        meta_r = await _http.get(meta_url, headers=_auth_headers())
+        meta_r = await _http.get(meta_url, headers=_auth_headers(access_token))
         meta_r.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning(
@@ -551,7 +550,7 @@ async def download_media(media_id: str) -> bytes:
     # Step 2: fetch the actual bytes. The CDN URL still requires the bearer
     # token — failing to send it returns a 401 with a misleading body.
     try:
-        bin_r = await _http.get(download_url, headers=_auth_headers())
+        bin_r = await _http.get(download_url, headers=_auth_headers(access_token))
         bin_r.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning(
@@ -571,7 +570,9 @@ async def download_media(media_id: str) -> bytes:
     return bin_r.content
 
 
-async def mark_read(message_id: str, typing: bool = False, phone_number_id: str | None = None) -> None:
+async def mark_read(
+    access_token: str, message_id: str, typing: bool = False, phone_number_id: str | None = None
+) -> None:
     """POST a read receipt for an inbound message.
 
     With ``typing=True`` the receipt also shows a typing indicator in the
@@ -591,7 +592,7 @@ async def mark_read(message_id: str, typing: bool = False, phone_number_id: str 
     if typing:
         payload["typing_indicator"] = {"type": "text"}
     try:
-        r = await _http.post(url, json=payload, headers=_auth_headers())
+        r = await _http.post(url, json=payload, headers=_auth_headers(access_token))
         r.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning(

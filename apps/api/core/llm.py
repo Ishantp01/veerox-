@@ -56,7 +56,13 @@ class ChatResult:
 _client: AsyncOpenAI | None = None
 
 
-def _get_client() -> AsyncOpenAI:
+def _get_client(api_key: str | None = None) -> AsyncOpenAI:
+    """Reuses the pooled default client for the platform key; an org with
+    its own key (see core/org_openai_key.py) gets a fresh one-off client
+    instead — these are cheap to construct and there's no per-org pool to
+    manage the lifetime of."""
+    if api_key and api_key != settings.openai_api_key:
+        return AsyncOpenAI(api_key=api_key, timeout=20.0)
     global _client
     if _client is None:
         # Bounded so a stalled request fails fast into the existing retry
@@ -84,9 +90,9 @@ def _should_retry(exc: BaseException) -> bool:
     wait=wait_exponential(multiplier=1, min=1, max=8),
     retry=retry_if_exception(_should_retry),
 )
-async def _create_completion(**kwargs: Any) -> Any:
+async def _create_completion(*, api_key: str | None = None, **kwargs: Any) -> Any:
     """Single retried call into the OpenAI SDK."""
-    return await _get_client().chat.completions.create(**kwargs)
+    return await _get_client(api_key).chat.completions.create(**kwargs)
 
 
 async def chat_completion(
@@ -95,6 +101,7 @@ async def chat_completion(
     model: str | None = None,
     temperature: float = 0.4,
     max_tokens: int = 600,
+    api_key: str | None = None,
 ) -> ChatResult:
     """Run one chat-completion turn and return a provider-agnostic result.
 
@@ -111,6 +118,9 @@ async def chat_completion(
             "short and conversational") can run several times longer than a
             typical turn with nothing to stop it. 600 comfortably covers a
             normal voice/WhatsApp reply while bounding the worst case.
+        api_key: Override for ``settings.openai_api_key`` — pass an org's own
+            key (see core/org_openai_key.py::resolve_openai_api_key) to bill
+            this call against it instead of the platform's shared key.
 
     Returns:
         A ``ChatResult`` with text (if any), parallel tool calls (if any),
@@ -129,7 +139,7 @@ async def chat_completion(
         request["tool_choice"] = "auto"
 
     started = time.monotonic()
-    response = await _create_completion(**request)
+    response = await _create_completion(api_key=api_key, **request)
     duration_ms = int((time.monotonic() - started) * 1000)
 
     choice = response.choices[0]

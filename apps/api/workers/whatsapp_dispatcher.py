@@ -30,9 +30,11 @@ from sqlalchemy import select, update
 from apps.api.channels.voice.org_numbers import get_default_whatsapp_number_id
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.core.agent import _is_kill_switch_active
+from apps.api.core.org_credentials import resolve_meta_credentials
 from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
+from apps.api.db.models.org import Org
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.models.template import WhatsAppTemplate
 from apps.api.db.session import AsyncSessionLocal
@@ -275,6 +277,17 @@ async def _send_one(
     template_header_params: list[str] | None,
     custom_message: str | None,
 ) -> None:
+    async with AsyncSessionLocal() as db:
+        org_record = await db.get(Org, org_id)
+    meta_creds = resolve_meta_credentials(org_record)
+    if meta_creds is None:
+        logger.warning("whatsapp_dispatcher_not_configured", target_id=target_id, org_id=str(org_id))
+        await _mark_target(
+            target_id,
+            "pending" if attempt_count < _MAX_ATTEMPTS else "failed",
+            disposition_reason="This org's Meta WhatsApp App isn't configured.",
+        )
+        return
     try:
         if template_name:
             body_params = _resolve_template_body_params(template_params, target_name)
@@ -303,6 +316,7 @@ async def _send_one(
                 # passes through unchanged.
                 header_params = _resolve_template_body_params(template_header_params, target_name)
             await wa_client.send_template(
+                meta_creds.access_token,
                 phone,
                 template_name,
                 template_language or "en_US",
@@ -313,7 +327,7 @@ async def _send_one(
             )
         else:
             await wa_client.send_text(
-                phone, _opening_message(criteria), phone_number_id=phone_number_id
+                meta_creds.access_token, phone, _opening_message(criteria), phone_number_id=phone_number_id
             )
     except httpx.HTTPError as exc:
         reason = wa_client.friendly_error_message(wa_client._meta_error_detail(exc))
@@ -339,7 +353,7 @@ async def _send_one(
     # session by replying) doesn't fail the target — it's recorded as a
     # visible disposition_reason on an otherwise-"completed" target instead.
     try:
-        await wa_client.send_text(phone, custom_message, phone_number_id=phone_number_id)
+        await wa_client.send_text(meta_creds.access_token, phone, custom_message, phone_number_id=phone_number_id)
     except httpx.HTTPError as exc:
         reason = wa_client.friendly_error_message(wa_client._meta_error_detail(exc))
         logger.warning(

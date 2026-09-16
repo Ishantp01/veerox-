@@ -37,6 +37,7 @@ from sqlalchemy import select
 from apps.api.channels.voice import adapter as voice_adapter
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.voice import twilio_client as voice_twilio
+from apps.api.core.org_credentials import resolve_plivo_credentials, resolve_twilio_credentials
 from apps.api.config import settings
 from apps.api.core.prompts import (
     OUTBOUND_CALL_PROMPT,
@@ -44,6 +45,7 @@ from apps.api.core.prompts import (
     campaign_qualification_append,
     current_datetime_block,
 )
+from apps.api.core.org_openai_key import resolve_openai_api_key
 from apps.api.core.usage import get_credit_usage
 from apps.api.core.whatsapp_assets import asset_catalog_prompt_block
 from apps.api.core.whatsapp_template_catalog import (
@@ -51,6 +53,7 @@ from apps.api.core.whatsapp_template_catalog import (
 )
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
+from apps.api.db.models.org import Org
 from apps.api.db.models.script import Script
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_over_plan_limit
@@ -63,16 +66,26 @@ router = APIRouter(tags=["voice"])
 _OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 
 
-async def _connect_to_openai() -> Any:
+async def _connect_to_openai(org_id: UUID | None = None) -> Any:
     """Open the raw OpenAI Realtime WebSocket — no instructions sent yet.
 
     websockets.connect(...) returns its own awaitable ``Connect`` object,
     not a plain coroutine — asyncio.create_task() requires an actual
     coroutine, hence this wrapper rather than passing it directly.
+
+    Uses ``org_id``'s own OpenAI key (core/org_openai_key.py) when it has
+    one configured, falling back to the platform's shared
+    ``settings.openai_api_key`` otherwise — same as every other OpenAI call
+    site. ``org_id=None`` (org not yet resolved at this call site) always
+    uses the platform key.
     """
+    api_key = settings.openai_api_key
+    if org_id is not None:
+        async with AsyncSessionLocal() as db:
+            api_key = resolve_openai_api_key(await db.get(Org, org_id))
     return await websockets.connect(
         f"{_OPENAI_REALTIME_URL}?model={settings.openai_realtime_model}",
-        additional_headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+        additional_headers={"Authorization": f"Bearer {api_key}"},
         max_size=None,
     )
 
@@ -121,7 +134,7 @@ def start_precall_connect(
     async def _prepare() -> tuple[Any, str]:
         resolved_org_id = org_id or UUID(settings.default_org_id)
         instructions = await _system_instructions(campaign_target_id, resolved_org_id)
-        oai = await _connect_to_openai()
+        oai = await _connect_to_openai(resolved_org_id)
         await oai.send(json.dumps(_session_update_event(instructions)))
         return oai, instructions
 
@@ -339,10 +352,16 @@ async def _watch_usage_limit(
                 await asyncio.sleep(4)
             except Exception:  # noqa: BLE001
                 pass
+            async with AsyncSessionLocal() as db:
+                org_record = await db.get(Org, org_id)
             if provider == "twilio":
-                await voice_twilio.hangup_call(call_uuid)
+                twilio_creds = resolve_twilio_credentials(org_record)
+                if twilio_creds is not None:
+                    await voice_twilio.hangup_call(twilio_creds, call_uuid)
             else:
-                await voice_plivo.hangup_call(call_uuid)
+                plivo_creds = resolve_plivo_credentials(org_record)
+                if plivo_creds is not None:
+                    await voice_plivo.hangup_call(plivo_creds, call_uuid)
             return
 
 
@@ -370,7 +389,20 @@ async def voice_stream(ws: WebSocket) -> None:
     # overlapping with the Plivo/Twilio handshake + DB/org-resolution work
     # below rather than waiting for it, same as before this pre-connect
     # existed. Awaited once, right before it's actually needed, further down.
-    oai_connect_task = None if precall else asyncio.create_task(_connect_to_openai())
+    # Also resolves the org's own OpenAI key (if any) concurrently, from
+    # whatever org identity is already available on the query string —
+    # Twilio's real org_id/campaign_target_id aren't known yet at this point
+    # (see comment below), so a Twilio fallback connect still uses the
+    # platform key; corrected the moment `pump_call_to_openai` resolves the
+    # real org further down would require a second connection, so this is
+    # accepted as a documented gap rather than reconnecting mid-call.
+    async def _connect_fallback() -> Any:
+        fallback_org_id = await _resolve_org_id(
+            UUID(raw_campaign_target_id) if raw_campaign_target_id else None, raw_org_id
+        )
+        return await _connect_to_openai(fallback_org_id)
+
+    oai_connect_task = None if precall else asyncio.create_task(_connect_fallback())
 
     # Twilio drops the Stream url's query string on connect (Plivo doesn't),
     # so the above are all still defaults for a Twilio call at this point —

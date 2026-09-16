@@ -33,14 +33,23 @@ from sqlalchemy.orm import selectinload
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.voice.org_numbers import (
+    get_default_numbers,
     get_default_whatsapp_number_id,
     get_rotating_numbers,
     replace_org_phone_numbers,
 )
+from apps.api.channels.voice.plivo_provisioning import fire_and_forget_register_org_plivo_numbers
+from apps.api.channels.whatsapp.webhook_registration import fire_and_forget_register_org_webhook
 from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
+from apps.api.core.crypto import decrypt_secret, encrypt_secret, mask_secret
 from apps.api.core.llm import chat_completion
+from apps.api.core.org_credentials import (
+    resolve_meta_credentials,
+    resolve_plivo_credentials,
+    resolve_twilio_credentials,
+)
 from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND, WHATSAPP_APPEND
 from apps.api.core.tools import (
     TOOL_DEFINITIONS,
@@ -92,15 +101,23 @@ from apps.api.schemas.admin import (
     CallingSettingsOut,
     KillSwitchIn,
     KillSwitchOut,
+    MetaCredentialsSettingsIn,
+    MetaCredentialsSettingsOut,
     OutboundCallIn,
     OutboundCallOut,
+    OpenAIKeySettingsIn,
+    OpenAIKeySettingsOut,
     OrgNumbersIn,
     OrgNumbersOut,
     OutboundWhatsappIn,
     OutboundWhatsappOut,
+    PlivoCredentialsSettingsIn,
+    PlivoCredentialsSettingsOut,
     PromptsOut,
     ScriptIn,
     ScriptOut,
+    TwilioCredentialsSettingsIn,
+    TwilioCredentialsSettingsOut,
     WhatsAppSettingsIn,
     WhatsAppSettingsOut,
 )
@@ -2240,19 +2257,26 @@ async def get_settings(
     }
 
 
-def _whatsapp_settings_out(org_record: Org | None) -> WhatsAppSettingsOut:
-    """Meta channel status (view-only env vars — a persisted override would
-    create a second source of truth that can silently diverge from them, see
-    the OPENAI_CHAT_MODEL incident in project notes), plus the one editable
-    DB-backed field: the org's handoff-notification template choice."""
+def _whatsapp_settings_out(
+    org_record: Org | None, phone_number_id: str | None = None
+) -> WhatsAppSettingsOut:
+    """This ORG's own Meta channel status — no platform-wide fallback, see
+    core/org_credentials.py::resolve_meta_credentials — plus the one
+    editable DB-backed field: the org's handoff-notification template
+    choice. ``graph_api_version``/``webhook_url`` stay platform-wide (not
+    secrets, not per-org). ``phone_number_id`` is this org's default
+    dedicated WhatsApp number (see channels/voice/org_numbers.py::
+    get_default_whatsapp_number_id) — the caller resolves it, since this
+    helper stays sync/DB-free."""
+    creds = resolve_meta_credentials(org_record)
     return WhatsAppSettingsOut(
-        configured=bool(settings.meta_access_token and settings.meta_phone_number_id),
-        app_id_configured=bool(settings.meta_app_id),
-        app_secret_configured=bool(settings.meta_app_secret),
-        verify_token_configured=bool(settings.meta_verify_token),
-        access_token_configured=bool(settings.meta_access_token),
-        phone_number_id=settings.meta_phone_number_id,
-        whatsapp_business_account_id=settings.meta_whatsapp_business_account_id,
+        configured=creds is not None,
+        app_id_configured=bool(org_record and org_record.meta_app_id),
+        app_secret_configured=bool(org_record and org_record.meta_app_secret_encrypted),
+        verify_token_configured=bool(org_record and org_record.meta_verify_token_encrypted),
+        access_token_configured=bool(org_record and org_record.meta_access_token_encrypted),
+        phone_number_id=phone_number_id,
+        whatsapp_business_account_id=org_record.meta_whatsapp_business_account_id if org_record else None,
         graph_api_version=settings.meta_graph_api_version,
         webhook_url=f"{settings.public_base_url.rstrip('/')}/webhook/whatsapp",
         agent_connect_template_name=(
@@ -2268,7 +2292,8 @@ async def get_whatsapp_settings(
     x_admin_token: str | None = Header(None),
 ) -> WhatsAppSettingsOut:
     """WhatsApp/Meta channel config status for the /whatsapp/settings page."""
-    return _whatsapp_settings_out(await db.get(Org, org))
+    phone_number_id = await get_default_whatsapp_number_id(db, org)
+    return _whatsapp_settings_out(await db.get(Org, org), phone_number_id)
 
 
 @router.put("/settings/whatsapp", response_model=WhatsAppSettingsOut)
@@ -2287,7 +2312,8 @@ async def update_whatsapp_settings(
     name = (body.agent_connect_template_name or "").strip()
     record.agent_connect_template_name = name or None
     await db.commit()
-    return _whatsapp_settings_out(record)
+    phone_number_id = await get_default_whatsapp_number_id(db, org)
+    return _whatsapp_settings_out(record, phone_number_id)
 
 
 @router.get("/settings/calling", response_model=CallingSettingsOut)
@@ -2311,11 +2337,13 @@ async def get_calling_settings(
     if member_scope is not None:
         raise HTTPException(status_code=403, detail="Only org admins can view calling provider settings")
     record = await db.get(Org, org)
+    plivo_creds = resolve_plivo_credentials(record)
+    plivo_default, _twilio_default = await get_default_numbers(db, org)
     return CallingSettingsOut(
-        configured=voice_plivo.is_configured(),
-        auth_id_configured=bool(settings.plivo_auth_id),
-        auth_token_configured=bool(settings.plivo_auth_token),
-        phone_number=settings.plivo_phone_number,
+        configured=voice_plivo.is_configured(plivo_creds),
+        auth_id_configured=bool(record and record.plivo_auth_id),
+        auth_token_configured=bool(record and record.plivo_auth_token_encrypted),
+        phone_number=plivo_default,
         answer_webhook_url=f"{settings.public_base_url.rstrip('/')}/voice/answer",
         preferred_provider=record.preferred_voice_provider if record else None,
     )
@@ -2343,14 +2371,317 @@ async def update_calling_settings(
         raise HTTPException(status_code=404, detail="Org not found")
     record.preferred_voice_provider = body.preferred_provider
     await db.commit()
+    plivo_creds = resolve_plivo_credentials(record)
+    plivo_default, _twilio_default = await get_default_numbers(db, org)
     return CallingSettingsOut(
-        configured=voice_plivo.is_configured(),
-        auth_id_configured=bool(settings.plivo_auth_id),
-        auth_token_configured=bool(settings.plivo_auth_token),
-        phone_number=settings.plivo_phone_number,
+        configured=voice_plivo.is_configured(plivo_creds),
+        auth_id_configured=bool(record.plivo_auth_id),
+        auth_token_configured=bool(record.plivo_auth_token_encrypted),
+        phone_number=plivo_default,
         answer_webhook_url=f"{settings.public_base_url.rstrip('/')}/voice/answer",
         preferred_provider=record.preferred_voice_provider,
     )
+
+
+@router.get("/settings/openai-key", response_model=OpenAIKeySettingsOut)
+async def get_openai_key_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> OpenAIKeySettingsOut:
+    """Status of this org's own OpenAI key. The real value is never returned
+    once saved — only whether one is configured, same pattern as
+    `get_calling_settings` above. Org-admin-only: a `role=="member"` caller
+    is refused outright rather than shown even the masked status."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can view the OpenAI key setting")
+    record = await db.get(Org, org)
+    if record is None or not record.openai_api_key_encrypted:
+        return OpenAIKeySettingsOut(configured=False, key_preview=None)
+    decrypted = decrypt_secret(record.openai_api_key_encrypted)
+    return OpenAIKeySettingsOut(
+        configured=decrypted is not None,
+        key_preview=mask_secret(decrypted) if decrypted else None,
+    )
+
+
+@router.put("/settings/openai-key", response_model=OpenAIKeySettingsOut)
+async def update_openai_key_settings(
+    body: OpenAIKeySettingsIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> OpenAIKeySettingsOut:
+    """Set this org's own OpenAI key, encrypted at rest (core/crypto.py) —
+    every OpenAI call for this org (chat, transcription, voice Realtime)
+    then uses it instead of the platform's shared key, via
+    core/org_openai_key.py::resolve_openai_api_key. Org-admin-only, same as
+    `get_openai_key_settings` above."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change the OpenAI key setting")
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    api_key = body.api_key.strip()
+    record.openai_api_key_encrypted = encrypt_secret(api_key)
+    await db.commit()
+    return OpenAIKeySettingsOut(configured=True, key_preview=mask_secret(api_key))
+
+
+@router.delete("/settings/openai-key", response_model=OpenAIKeySettingsOut)
+async def delete_openai_key_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> OpenAIKeySettingsOut:
+    """Clear this org's own OpenAI key, falling back to the platform key on
+    every subsequent call. Org-admin-only, same as the endpoints above."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change the OpenAI key setting")
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    record.openai_api_key_encrypted = None
+    await db.commit()
+    return OpenAIKeySettingsOut(configured=False, key_preview=None)
+
+
+def _plivo_credentials_settings_out(record: Org | None) -> PlivoCredentialsSettingsOut:
+    if record is None or not record.plivo_auth_id or not record.plivo_auth_token_encrypted:
+        return PlivoCredentialsSettingsOut(configured=False, auth_id=None, auth_token_preview=None)
+    decrypted = decrypt_secret(record.plivo_auth_token_encrypted)
+    return PlivoCredentialsSettingsOut(
+        configured=decrypted is not None,
+        auth_id=record.plivo_auth_id,
+        auth_token_preview=mask_secret(decrypted) if decrypted else None,
+    )
+
+
+@router.get("/settings/plivo-credentials", response_model=PlivoCredentialsSettingsOut)
+async def get_plivo_credentials_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> PlivoCredentialsSettingsOut:
+    """Status of this org's own Plivo account — no platform-wide fallback,
+    see core/org_credentials.py::resolve_plivo_credentials. Org-admin-only,
+    same as get_openai_key_settings above."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can view the Plivo credentials")
+    return _plivo_credentials_settings_out(await db.get(Org, org))
+
+
+@router.put("/settings/plivo-credentials", response_model=PlivoCredentialsSettingsOut)
+async def update_plivo_credentials_settings(
+    body: PlivoCredentialsSettingsIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> PlivoCredentialsSettingsOut:
+    """Set this org's own Plivo account — auth_id in plaintext (not a
+    secret), auth_token encrypted at rest (core/crypto.py). Fires a
+    best-effort background task to register the inbound Answer URL for any
+    dedicated Plivo numbers this org already has (see
+    channels/voice/plivo_provisioning.py) — no redeploy needed."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change the Plivo credentials")
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    record.plivo_auth_id = body.auth_id.strip()
+    record.plivo_auth_token_encrypted = encrypt_secret(body.auth_token.strip())
+    await db.commit()
+    fire_and_forget_register_org_plivo_numbers(org)
+    return _plivo_credentials_settings_out(record)
+
+
+@router.delete("/settings/plivo-credentials", response_model=PlivoCredentialsSettingsOut)
+async def delete_plivo_credentials_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> PlivoCredentialsSettingsOut:
+    """Clear this org's own Plivo account. There is no platform-wide
+    fallback — Plivo becomes unavailable for this org until re-configured."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change the Plivo credentials")
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    record.plivo_auth_id = None
+    record.plivo_auth_token_encrypted = None
+    await db.commit()
+    return PlivoCredentialsSettingsOut(configured=False, auth_id=None, auth_token_preview=None)
+
+
+def _twilio_credentials_settings_out(record: Org | None) -> TwilioCredentialsSettingsOut:
+    if record is None or not record.twilio_account_sid or not record.twilio_auth_token_encrypted:
+        return TwilioCredentialsSettingsOut(configured=False, account_sid=None, auth_token_preview=None)
+    decrypted = decrypt_secret(record.twilio_auth_token_encrypted)
+    return TwilioCredentialsSettingsOut(
+        configured=decrypted is not None,
+        account_sid=record.twilio_account_sid,
+        auth_token_preview=mask_secret(decrypted) if decrypted else None,
+    )
+
+
+@router.get("/settings/twilio-credentials", response_model=TwilioCredentialsSettingsOut)
+async def get_twilio_credentials_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> TwilioCredentialsSettingsOut:
+    """Status of this org's own Twilio account — no platform-wide fallback,
+    see core/org_credentials.py::resolve_twilio_credentials. Org-admin-only,
+    same as get_openai_key_settings above."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can view the Twilio credentials")
+    return _twilio_credentials_settings_out(await db.get(Org, org))
+
+
+@router.put("/settings/twilio-credentials", response_model=TwilioCredentialsSettingsOut)
+async def update_twilio_credentials_settings(
+    body: TwilioCredentialsSettingsIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> TwilioCredentialsSettingsOut:
+    """Set this org's own Twilio account — account_sid in plaintext (not a
+    secret), auth_token encrypted at rest (core/crypto.py)."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change the Twilio credentials")
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    record.twilio_account_sid = body.account_sid.strip()
+    record.twilio_auth_token_encrypted = encrypt_secret(body.auth_token.strip())
+    await db.commit()
+    return _twilio_credentials_settings_out(record)
+
+
+@router.delete("/settings/twilio-credentials", response_model=TwilioCredentialsSettingsOut)
+async def delete_twilio_credentials_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> TwilioCredentialsSettingsOut:
+    """Clear this org's own Twilio account. There is no platform-wide
+    fallback — Twilio becomes unavailable for this org until re-configured."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change the Twilio credentials")
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    record.twilio_account_sid = None
+    record.twilio_auth_token_encrypted = None
+    await db.commit()
+    return TwilioCredentialsSettingsOut(configured=False, account_sid=None, auth_token_preview=None)
+
+
+def _meta_credentials_settings_out(record: Org | None) -> MetaCredentialsSettingsOut:
+    if record is None:
+        return MetaCredentialsSettingsOut(configured=False)
+    creds = resolve_meta_credentials(record)
+    app_secret = decrypt_secret(record.meta_app_secret_encrypted) if record.meta_app_secret_encrypted else None
+    access_token = (
+        decrypt_secret(record.meta_access_token_encrypted) if record.meta_access_token_encrypted else None
+    )
+    verify_token = (
+        decrypt_secret(record.meta_verify_token_encrypted) if record.meta_verify_token_encrypted else None
+    )
+    return MetaCredentialsSettingsOut(
+        configured=creds is not None,
+        app_id=record.meta_app_id,
+        app_secret_configured=app_secret is not None,
+        app_secret_preview=mask_secret(app_secret) if app_secret else None,
+        access_token_configured=access_token is not None,
+        access_token_preview=mask_secret(access_token) if access_token else None,
+        business_account_id=record.meta_whatsapp_business_account_id,
+        verify_token_configured=verify_token is not None,
+        verify_token_preview=mask_secret(verify_token) if verify_token else None,
+    )
+
+
+@router.get("/settings/meta-credentials", response_model=MetaCredentialsSettingsOut)
+async def get_meta_credentials_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> MetaCredentialsSettingsOut:
+    """Status of this org's own Meta WhatsApp App — no platform-wide
+    fallback, see core/org_credentials.py::resolve_meta_credentials.
+    Org-admin-only, same as get_openai_key_settings above."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can view the Meta credentials")
+    return _meta_credentials_settings_out(await db.get(Org, org))
+
+
+@router.put("/settings/meta-credentials", response_model=MetaCredentialsSettingsOut)
+async def update_meta_credentials_settings(
+    body: MetaCredentialsSettingsIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> MetaCredentialsSettingsOut:
+    """Set this org's own Meta WhatsApp App — app_id/business_account_id in
+    plaintext (not secrets), app_secret/access_token/verify_token encrypted
+    at rest (core/crypto.py). On success, best-effort registers this org's
+    webhook subscription with Meta via the Graph API (callback URL + verify
+    token on the App, and the App-to-WABA subscription) instead of leaving
+    that as a manual App-dashboard step — see
+    channels/whatsapp/webhook_registration.py."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change the Meta credentials")
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    record.meta_app_id = body.app_id.strip()
+    record.meta_app_secret_encrypted = encrypt_secret(body.app_secret.strip())
+    record.meta_access_token_encrypted = encrypt_secret(body.access_token.strip())
+    record.meta_whatsapp_business_account_id = (
+        body.business_account_id.strip() if body.business_account_id else None
+    )
+    record.meta_verify_token_encrypted = (
+        encrypt_secret(body.verify_token.strip()) if body.verify_token else None
+    )
+    await db.commit()
+    fire_and_forget_register_org_webhook(org)
+    return _meta_credentials_settings_out(record)
+
+
+@router.delete("/settings/meta-credentials", response_model=MetaCredentialsSettingsOut)
+async def delete_meta_credentials_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> MetaCredentialsSettingsOut:
+    """Clear this org's own Meta WhatsApp App. There is no platform-wide
+    fallback — WhatsApp becomes unavailable for this org until
+    re-configured."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change the Meta credentials")
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    record.meta_app_id = None
+    record.meta_app_secret_encrypted = None
+    record.meta_access_token_encrypted = None
+    record.meta_whatsapp_business_account_id = None
+    record.meta_verify_token_encrypted = None
+    await db.commit()
+    return MetaCredentialsSettingsOut(configured=False)
 
 
 # ---------------------------------------------------------------------------
@@ -2781,6 +3112,8 @@ async def update_org_numbers(
         raise HTTPException(
             status_code=409, detail="One of these numbers is already assigned to another org."
         )
+    if body.phone_numbers is not None:
+        fire_and_forget_register_org_plivo_numbers(org)
     result = await db.execute(
         select(Org).options(selectinload(Org.phone_numbers)).where(Org.id == org)
     )
@@ -2969,11 +3302,15 @@ async def outbound_whatsapp(
     db.add(message)
     await db.commit()
 
-    # Local-dev fallback: if Meta creds are missing, keep the stub response.
-    if not settings.meta_access_token:
+    # Stub response when this org hasn't configured its own Meta WhatsApp
+    # App — no platform-wide fallback account to send through instead.
+    org_record = await db.get(Org, org_id)
+    meta_creds = resolve_meta_credentials(org_record)
+    if meta_creds is None:
         logger.warning(
-            "outbound_whatsapp_meta_token_unset",
+            "outbound_whatsapp_not_configured",
             phone=payload.phone,
+            org_id=str(org_id),
             reason="skipping_real_send",
         )
         return OutboundWhatsappOut(status="queued", phone=payload.phone, text=body_for_record)
@@ -3030,6 +3367,7 @@ async def outbound_whatsapp(
                     header_params = [asset_public_url(asset)]
 
             graph_response = await wa_client.send_template(
+                meta_creds.access_token,
                 payload.phone,
                 template_name=payload.template_name,
                 language_code=payload.template_lang,
@@ -3044,7 +3382,7 @@ async def outbound_whatsapp(
         else:
             # text is guaranteed non-None here by OutboundWhatsappIn's validator.
             graph_response = await wa_client.send_text(
-                payload.phone, payload.text or "", phone_number_id=phone_number_id
+                meta_creds.access_token, payload.phone, payload.text or "", phone_number_id=phone_number_id
             )
     except httpx.HTTPError as exc:
         meta_error = wa_client._meta_error_detail(exc)
@@ -3123,19 +3461,23 @@ async def outbound_call(
         await _claim_customer_lead_for_member(db, org_id, customer, member_scope, channel="voice")
         await db.commit()
 
-    if not voice_failover.is_configured():
+    org_record = await db.get(Org, org_id)
+    plivo_creds = resolve_plivo_credentials(org_record)
+    twilio_creds = resolve_twilio_credentials(org_record)
+
+    if not voice_failover.is_configured(plivo_creds, twilio_creds):
         logger.warning(
-            "outbound_call_plivo_not_configured",
+            "outbound_call_not_configured",
             to=payload.to_phone,
+            org_id=str(org_id),
             reason="skipping_real_call",
         )
         return OutboundCallOut(call_sid=f"STUB-{uuid4()}", status="stub")
 
     # Dial from this org's own dedicated numbers per provider, round-robining
     # across all of them when it has more than one (see
-    # channels/voice/org_numbers.py::get_rotating_numbers), falling back to
-    # each provider's platform default when it has none.
-    org_record = await db.get(Org, org_id)
+    # channels/voice/org_numbers.py::get_rotating_numbers). No platform
+    # default — a provider this org has no number for is simply skipped.
     plivo_from, twilio_from = await get_rotating_numbers(db, redis, org_id)
 
     # org_id travels on the answer_url so the realtime bridge attributes this
@@ -3150,6 +3492,8 @@ async def outbound_call(
     preferred_provider = payload.provider or (org_record.preferred_voice_provider if org_record else None)
     try:
         result, provider = await voice_failover.initiate_call(
+            plivo_creds,
+            twilio_creds,
             payload.to_phone,
             answer_url,
             plivo_from_number=plivo_from,
@@ -3162,6 +3506,9 @@ async def outbound_call(
             to=payload.to_phone,
             error=str(exc),
         )
+        raise HTTPException(status_code=502, detail="Outbound call failed") from exc
+    except RuntimeError as exc:
+        logger.warning("outbound_call_not_configured", to=payload.to_phone, error=str(exc))
         raise HTTPException(status_code=502, detail="Outbound call failed") from exc
 
     if provider == "twilio":

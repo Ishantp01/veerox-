@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 
 from apps.api.channels.voice import plivo_client, twilio_client
+from apps.api.core.org_credentials import PlivoCredentials, TwilioCredentials
 
 
 def _to_e164(number: str) -> str:
@@ -19,34 +20,48 @@ def _to_e164(number: str) -> str:
     return f"+{digits}"
 
 
-async def detect_provider(number: str) -> str | None:
+async def detect_provider(
+    number: str,
+    plivo_creds: PlivoCredentials | None,
+    twilio_creds: TwilioCredentials | None,
+) -> str | None:
     """Returns ``"plivo"``, ``"twilio"``, or ``None``.
 
-    ``None`` means neither configured provider account owns this number (or
-    neither provider has credentials set, e.g. local dev — callers should
-    treat that case as "can't verify" rather than "invalid").
+    Checks against the CALLING org's own Plivo/Twilio account (resolved by
+    the caller via ``core/org_credentials.py`` — no platform-wide fallback).
+    ``None`` means neither of this org's configured provider accounts owns
+    this number (or the org has neither provider configured, e.g. local dev
+    — callers should treat that case as "can't verify" rather than
+    "invalid").
     """
     digits = re.sub(r"\D", "", number)
     if not digits:
         return None
 
-    if plivo_client.is_configured() and await plivo_client.owns_number(digits):
+    if plivo_client.is_configured(plivo_creds) and await plivo_client.owns_number(plivo_creds, digits):
         return "plivo"
-    if twilio_client.is_configured() and await twilio_client.owns_number(_to_e164(number)):
+    if twilio_client.is_configured(twilio_creds) and await twilio_client.owns_number(
+        twilio_creds, _to_e164(number)
+    ):
         return "twilio"
     return None
 
 
-async def resolve_calling_number(number: str) -> tuple[str, str]:
-    """Normalize + classify an admin-entered calling number.
+async def resolve_calling_number(
+    number: str,
+    plivo_creds: PlivoCredentials | None,
+    twilio_creds: TwilioCredentials | None,
+) -> tuple[str, str]:
+    """Normalize + classify an admin-entered calling number against this
+    org's own Plivo/Twilio accounts.
 
     Returns ``(digits, provider)`` where ``provider`` is ``"plivo"`` or
     ``"twilio"``. Defaults to ``"plivo"`` when neither account confirms
-    ownership — either because neither provider has credentials configured
+    ownership — either because this org has neither provider configured
     (nothing to check against, e.g. local dev) or the number genuinely isn't
     in either account yet (kept permissive rather than rejecting outright,
     since the number may simply not be provisioned yet).
     """
     digits = re.sub(r"\D", "", number)
-    provider = await detect_provider(number)
+    provider = await detect_provider(number, plivo_creds, twilio_creds)
     return digits, provider or "plivo"

@@ -4,9 +4,12 @@
 provider-aware, so a call that fails over to Twilio reaches the same AI
 voice bridge a Plivo call does — not just a ring with no answer script.
 
-With no Twilio credentials set, this is a no-op passthrough to Plivo alone,
-same as before this module existed — failing over needs somewhere to fail
-over TO.
+Every function here takes this org's own resolved ``PlivoCredentials`` /
+``TwilioCredentials`` (see ``core/org_credentials.py``, resolved from the
+``Org`` row by the caller) — there is no platform-wide fallback. A provider
+is only attempted when BOTH its credentials are configured AND a dedicated
+number for it was passed in; an org missing either for a provider simply
+skips that provider, same as "not configured" used to work.
 
 CAVEAT: the Twilio side of this (answer webhook TwiML, Twilio Media Streams
 message shapes, recording/hangup) was written against Twilio's documented
@@ -22,16 +25,19 @@ import httpx
 import structlog
 
 from apps.api.channels.voice import plivo_client, twilio_client
+from apps.api.core.org_credentials import PlivoCredentials, TwilioCredentials
 
 logger = structlog.get_logger(__name__)
 
 
-def is_configured() -> bool:
+def is_configured(plivo_creds: PlivoCredentials | None, twilio_creds: TwilioCredentials | None) -> bool:
     """True if at least one provider can place a call."""
-    return plivo_client.is_configured() or twilio_client.is_configured()
+    return plivo_client.is_configured(plivo_creds) or twilio_client.is_configured(twilio_creds)
 
 
 async def initiate_call(
+    plivo_creds: PlivoCredentials | None,
+    twilio_creds: TwilioCredentials | None,
     to_e164: str,
     answer_url: str,
     hangup_url: str | None = None,
@@ -41,21 +47,22 @@ async def initiate_call(
 ) -> tuple[dict[str, Any], str]:
     """Place an outbound call, preferring Plivo and falling back to Twilio.
 
-    ``plivo_from_number`` / ``twilio_from_number``, when given, override each
-    provider's configured caller ID — used to dial from an org's own
-    dedicated number (see ``channels/voice/org_numbers.py::get_default_numbers``
-    and ``db/models/org_phone_number.py``) instead of the platform default. An org can
-    have a dedicated number on BOTH providers at once, so when
+    ``plivo_from_number`` / ``twilio_from_number`` must be one of this org's
+    own dedicated numbers on that provider (see
+    ``channels/voice/org_numbers.py::get_rotating_numbers`` and
+    ``db/models/org_phone_number.py``) — a provider with no matching number
+    is skipped outright, same as having no credentials for it, since there's
+    no platform-wide default number/account to fall back to. An org can have
+    a dedicated number on BOTH providers at once, so when
     ``twilio_from_number`` is set and ``plivo_from_number`` isn't, Twilio is
-    tried FIRST — dialing from Plivo with no matching number for this org
-    would just be the platform default caller ID, not this org's own line.
+    tried FIRST.
     ``preferred_provider`` (``"plivo"`` or ``"twilio"``), when given,
     overrides that inference outright — e.g. the dashboard's calling page
     lets an org with dedicated numbers on both providers explicitly choose
     which one to dial from. Either way the other provider is still tried as
-    a fallback (using ITS platform default, or its own dedicated number when
-    the org has one) so a provider-wide outage doesn't strand the org's
-    calls entirely — this is a preference, not a hard restriction.
+    a fallback when it's configured, so a provider-wide outage doesn't
+    strand the org's calls entirely — this is a preference, not a hard
+    restriction.
 
     Returns ``(response_json, provider_name)`` so callers can log/attribute
     which provider actually placed the call. Raises the primary provider's
@@ -74,12 +81,17 @@ async def initiate_call(
 
     primary_error: httpx.HTTPError | None = None
     for name, from_number in providers:
+        if name == "plivo":
+            if not plivo_client.is_configured(plivo_creds) or not from_number:
+                continue
+        else:
+            if not twilio_client.is_configured(twilio_creds) or not from_number:
+                continue
         client = plivo_client if name == "plivo" else twilio_client
-        if not client.is_configured():
-            continue
+        creds = plivo_creds if name == "plivo" else twilio_creds
         try:
             result = await client.initiate_call(
-                to_e164, answer_url, hangup_url=hangup_url, from_number=from_number
+                creds, to_e164, answer_url, from_number, hangup_url=hangup_url
             )
             return result, name
         except httpx.HTTPError as exc:
@@ -95,32 +107,40 @@ async def initiate_call(
 
     if primary_error is not None:
         raise primary_error
-    raise RuntimeError("No voice provider (Plivo or Twilio) is configured.")
+    raise RuntimeError("No voice provider (Plivo or Twilio) is configured for this org.")
 
 
-def is_sms_configured() -> bool:
+def is_sms_configured(plivo_creds: PlivoCredentials | None, twilio_creds: TwilioCredentials | None) -> bool:
     """True if at least one provider can send an SMS."""
-    return plivo_client.is_configured() or twilio_client.is_configured()
+    return plivo_client.is_configured(plivo_creds) or twilio_client.is_configured(twilio_creds)
 
 
-async def send_sms(to_e164: str, text: str) -> tuple[dict[str, Any], str]:
+async def send_sms(
+    plivo_creds: PlivoCredentials | None,
+    twilio_creds: TwilioCredentials | None,
+    to_e164: str,
+    text: str,
+    plivo_from_number: str | None = None,
+    twilio_from_number: str | None = None,
+) -> tuple[dict[str, Any], str]:
     """Send an SMS, preferring Plivo and falling back to Twilio.
 
     Same shape/behavior as ``initiate_call`` above: returns
     ``(response_json, provider_name)``, raises the primary provider's error
-    (not the fallback's) if both fail.
+    (not the fallback's) if both fail. Each ``*_from_number`` must be one of
+    this org's own dedicated numbers on that provider — no platform default.
     """
     providers = [
-        ("plivo", plivo_client.is_configured, plivo_client.send_sms),
-        ("twilio", twilio_client.is_configured, twilio_client.send_sms),
+        ("plivo", plivo_client, plivo_creds, plivo_from_number),
+        ("twilio", twilio_client, twilio_creds, twilio_from_number),
     ]
 
     primary_error: httpx.HTTPError | None = None
-    for name, configured, send in providers:
-        if not configured():
+    for name, client, creds, from_number in providers:
+        if not client.is_configured(creds) or not from_number:
             continue
         try:
-            result = await send(to_e164, text)
+            result = await client.send_sms(creds, to_e164, text, from_number)
             return result, name
         except httpx.HTTPError as exc:
             logger.warning(f"{name}_sms_failed_trying_fallback", to=to_e164, error=str(exc))
@@ -131,4 +151,4 @@ async def send_sms(to_e164: str, text: str) -> tuple[dict[str, Any], str]:
 
     if primary_error is not None:
         raise primary_error
-    raise RuntimeError("No SMS provider (Plivo or Twilio) is configured.")
+    raise RuntimeError("No SMS provider (Plivo or Twilio) is configured for this org.")

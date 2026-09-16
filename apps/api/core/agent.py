@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
 from apps.api.core.llm import ChatResult, ToolCall, chat_completion
+from apps.api.core.org_openai_key import resolve_openai_api_key
 from apps.api.core.memory import load_last_n, persist_turn
 from apps.api.core.prompts import (
     KNOWN_USER_HINT,
@@ -389,6 +390,7 @@ class AgentCore:
                     whatsapp_script_id = campaign.whatsapp_script_id if campaign else None
 
         history = await load_last_n(db, user_id)
+        openai_api_key = resolve_openai_api_key(await db.get(Org, org_id))
 
         system_prompt = await _system_prompt_for(
             db, org_id, channel, whatsapp_script_id, whatsapp_phone_number_id
@@ -413,7 +415,7 @@ class AgentCore:
         total_tokens_out = 0
 
         for iteration in range(MAX_AGENT_ITERATIONS):
-            result = await chat_completion(messages, tools=TOOL_DEFINITIONS)
+            result = await chat_completion(messages, tools=TOOL_DEFINITIONS, api_key=openai_api_key)
             total_tokens_in += result.tokens_in
             total_tokens_out += result.tokens_out
 

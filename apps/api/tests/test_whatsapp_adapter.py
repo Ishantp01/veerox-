@@ -37,8 +37,21 @@ class _FakeRedis:
 
 @pytest_asyncio.fixture
 async def seeded_db(db_session: AsyncSession) -> AsyncSession:
-    """Seed the default Org row the adapter assumes exists."""
-    db_session.add(Org(id=ORG_ID, name="test-org"))
+    """Seed the default Org row the adapter assumes exists — with its own
+    Meta credentials configured (encrypted) so mark_read/send_text/
+    download_media aren't skipped as "not configured" (no platform-wide
+    fallback, see core/org_credentials.py)."""
+    from apps.api.core.crypto import encrypt_secret
+
+    db_session.add(
+        Org(
+            id=ORG_ID,
+            name="test-org",
+            meta_app_id="test-meta-app-id",
+            meta_app_secret_encrypted=encrypt_secret("test-meta-app-secret"),
+            meta_access_token_encrypted=encrypt_secret("test-meta-access-token"),
+        )
+    )
     await db_session.commit()
     return db_session
 
@@ -126,12 +139,14 @@ async def test_text_message_triggers_agent_and_send(
         return "hello back"
 
     async def fake_send_text(
-        to: str, body: str, phone_number_id: str | None = None
+        access_token: str, to: str, body: str, phone_number_id: str | None = None
     ) -> dict[str, Any]:
         send_calls.append((to, body))
         return {"messages": [{"id": "wamid.out"}]}
 
-    async def fake_mark_read(msg_id: str, typing: bool = False, phone_number_id: str | None = None) -> None:
+    async def fake_mark_read(
+        access_token: str, msg_id: str, typing: bool = False, phone_number_id: str | None = None
+    ) -> None:
         mark_calls.append(msg_id)
 
     # Patch where the adapter looks them up (it imports the names from the
@@ -174,12 +189,14 @@ async def test_duplicate_message_id_is_skipped_on_second_delivery(
         return "echo: " + input_text
 
     async def fake_send_text(
-        to: str, body: str, phone_number_id: str | None = None
+        access_token: str, to: str, body: str, phone_number_id: str | None = None
     ) -> dict[str, Any]:
         send_calls.append((to, body))
         return {"messages": [{"id": "wamid.out"}]}
 
-    async def fake_mark_read(_: str, typing: bool = False, phone_number_id: str | None = None) -> None:
+    async def fake_mark_read(
+        access_token: str, _: str, typing: bool = False, phone_number_id: str | None = None
+    ) -> None:
         return None
 
     monkeypatch.setattr(adapter_module.agent_core, "handle_turn", fake_handle_turn)

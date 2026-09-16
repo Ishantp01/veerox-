@@ -5,6 +5,12 @@ a shared module-level ``httpx.AsyncClient`` for connection pooling, errors
 logged then propagated to the caller (the admin route decides whether to
 swallow or surface them).
 
+Every function takes an explicit ``creds: PlivoCredentials`` — this org's own
+Plivo account (see ``core/org_credentials.py::resolve_plivo_credentials``).
+There is no platform-wide fallback: a caller with ``creds is None`` should
+treat this provider as unconfigured (``is_configured(None)`` is False)
+rather than call any of these.
+
 Only the outbound *call-initiation* call lives here. When Plivo connects the
 call it fetches the ``answer_url`` we pass — that XML is served by
 ``channels/voice/webhook.py``.
@@ -18,6 +24,7 @@ import httpx
 import structlog
 
 from apps.api.config import settings
+from apps.api.core.org_credentials import PlivoCredentials
 
 logger = structlog.get_logger(__name__)
 
@@ -28,43 +35,41 @@ _http: httpx.AsyncClient = httpx.AsyncClient(timeout=10.0)
 _PLIVO_BASE = "https://api.plivo.com/v1"
 
 
-def is_configured() -> bool:
-    """True only when every credential needed to place a real call is set.
+def is_configured(creds: PlivoCredentials | None) -> bool:
+    """True only when this org has its own Plivo auth_id + auth_token on
+    file. No platform-wide fallback — see module docstring."""
+    return creds is not None
 
-    Without all three the admin route falls back to the local-dev stub — same
-    convention as ``outbound_whatsapp`` skipping the real send when
-    ``meta_access_token`` is unset.
-    """
-    return bool(
-        settings.plivo_auth_id
-        and settings.plivo_auth_token
-        and settings.plivo_phone_number
-    )
+
+def _auth(creds: PlivoCredentials) -> tuple[str, str]:
+    return (creds.auth_id, creds.auth_token)
 
 
 async def initiate_call(
+    creds: PlivoCredentials,
     to_e164: str,
     answer_url: str,
+    from_number: str,
     hangup_url: str | None = None,
-    from_number: str | None = None,
 ) -> dict[str, Any]:
     """Place an outbound call via ``POST /Account/{id}/Call/``.
 
-    Plivo dials ``to_e164`` from ``from_number`` (falling back to the
-    platform-wide ``settings.plivo_phone_number`` when the caller doesn't
-    have — or the org hasn't set — a dedicated number); when the callee
-    answers, Plivo fetches ``answer_url`` for the Plivo XML describing what to
-    do. Returns the raw JSON response (contains ``request_uuid``). Raises
-    ``httpx.HTTPStatusError`` on a non-2xx response.
+    ``from_number`` must be one of this org's own dedicated Plivo numbers
+    (see ``db/models/org_phone_number.py``) — there is no platform-wide
+    default number to fall back to once credentials are per-org, since a
+    platform number wouldn't exist on this org's own Plivo account anyway.
+    When the callee answers, Plivo fetches ``answer_url`` for the Plivo XML
+    describing what to do. Returns the raw JSON response (contains
+    ``request_uuid``). Raises ``httpx.HTTPStatusError`` on a non-2xx response.
 
     ``hangup_url``, when given, is where Plivo POSTs call-status changes
     (busy/no-answer/failed/completed) — the campaign dialer uses this to
     learn a call is over within seconds instead of relying on a stale-call
     timeout (see apps/api/workers/campaign_dialer.py).
     """
-    url = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}/Call/"
+    url = f"{_PLIVO_BASE}/Account/{creds.auth_id}/Call/"
     payload: dict[str, Any] = {
-        "from": from_number or settings.plivo_phone_number,
+        "from": from_number,
         "to": to_e164,
         "answer_url": answer_url,
         "answer_method": "POST",
@@ -73,11 +78,7 @@ async def initiate_call(
         payload["hangup_url"] = hangup_url
         payload["hangup_method"] = "POST"
     try:
-        r = await _http.post(
-            url,
-            json=payload,
-            auth=(settings.plivo_auth_id or "", settings.plivo_auth_token or ""),
-        )
+        r = await _http.post(url, json=payload, auth=_auth(creds))
         r.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning(
@@ -97,26 +98,24 @@ async def initiate_call(
     return data
 
 
-async def owns_number(digits: str) -> bool:
-    """True if ``digits`` (a number, `+`-less) is a number in this Plivo
-    account — used by ``channels/voice/number_provider.py::detect_provider``
-    to figure out which provider an admin-entered calling number belongs to.
-    Treats any request failure (including a plain 404 "not found") as "no".
-    """
-    if not (settings.plivo_auth_id and settings.plivo_auth_token) or not digits:
+async def owns_number(creds: PlivoCredentials, digits: str) -> bool:
+    """True if ``digits`` (a number, `+`-less) is a number in this org's
+    Plivo account — used by ``channels/voice/number_provider.py::
+    detect_provider`` to figure out which provider an admin-entered calling
+    number belongs to. Treats any request failure (including a plain 404
+    "not found") as "no"."""
+    if not digits:
         return False
-    url = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}/Number/{digits}/"
+    url = f"{_PLIVO_BASE}/Account/{creds.auth_id}/Number/{digits}/"
     try:
-        r = await _http.get(
-            url, auth=(settings.plivo_auth_id or "", settings.plivo_auth_token or "")
-        )
+        r = await _http.get(url, auth=_auth(creds))
         return r.status_code == 200
     except httpx.HTTPError as exc:
         logger.warning("plivo_owns_number_check_failed", number=digits, error=str(exc))
         return False
 
 
-async def start_recording(call_uuid: str, callback_url: str) -> None:
+async def start_recording(creds: PlivoCredentials, call_uuid: str, callback_url: str) -> None:
     """Start server-side call recording via ``POST /Call/{call_uuid}/Record/``.
 
     Runs concurrently with the live ``<Stream>`` bridge (they don't conflict —
@@ -126,10 +125,7 @@ async def start_recording(call_uuid: str, callback_url: str) -> None:
     ``channels/voice/webhook.recording_callback``). Best-effort: never raises,
     since a failed recording request shouldn't fail call answering.
     """
-    if not is_configured():
-        return
-
-    url = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}/Call/{call_uuid}/Record/"
+    url = f"{_PLIVO_BASE}/Account/{creds.auth_id}/Call/{call_uuid}/Record/"
     try:
         r = await _http.post(
             url,
@@ -138,7 +134,7 @@ async def start_recording(call_uuid: str, callback_url: str) -> None:
                 "callback_method": "POST",
                 "format": "mp3",
             },
-            auth=(settings.plivo_auth_id or "", settings.plivo_auth_token or ""),
+            auth=_auth(creds),
         )
         r.raise_for_status()
         logger.info("plivo_recording_started", call_uuid=call_uuid)
@@ -146,7 +142,7 @@ async def start_recording(call_uuid: str, callback_url: str) -> None:
         logger.warning("plivo_recording_start_failed", call_uuid=call_uuid, error=str(exc))
 
 
-async def hangup_call(call_uuid: str) -> None:
+async def hangup_call(creds: PlivoCredentials, call_uuid: str) -> None:
     """Force-terminate a live call via ``DELETE /Call/{call_uuid}/``.
 
     The answer XML's ``<Stream keepCallAlive="true">`` (see
@@ -155,40 +151,31 @@ async def hangup_call(call_uuid: str) -> None:
     disconnect the caller (used when a plan's usage limit is hit mid-call).
     Best-effort: never raises, mirroring ``start_recording``.
     """
-    if not is_configured():
-        return
-
-    url = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}/Call/{call_uuid}/"
+    url = f"{_PLIVO_BASE}/Account/{creds.auth_id}/Call/{call_uuid}/"
     try:
-        r = await _http.delete(
-            url, auth=(settings.plivo_auth_id or "", settings.plivo_auth_token or "")
-        )
+        r = await _http.delete(url, auth=_auth(creds))
         r.raise_for_status()
         logger.info("plivo_call_hungup", call_uuid=call_uuid)
     except httpx.HTTPError as exc:
         logger.warning("plivo_hangup_failed", call_uuid=call_uuid, error=str(exc))
 
 
-async def send_sms(to_e164: str, text: str) -> dict[str, Any]:
+async def send_sms(creds: PlivoCredentials, to_e164: str, text: str, from_number: str) -> dict[str, Any]:
     """Send an SMS via ``POST /Account/{id}/Message/``.
 
-    Uses the same Plivo number/credentials as outbound calling — no separate
-    SMS number needed as long as ``plivo_phone_number`` has SMS capability
-    enabled in the Plivo console. Raises ``httpx.HTTPStatusError`` on a
-    non-2xx response.
+    Uses one of this org's own dedicated Plivo numbers (``from_number``) —
+    no separate SMS number needed as long as it has SMS capability enabled
+    in the Plivo console. Raises ``httpx.HTTPStatusError`` on a non-2xx
+    response.
     """
-    url = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}/Message/"
+    url = f"{_PLIVO_BASE}/Account/{creds.auth_id}/Message/"
     payload: dict[str, Any] = {
-        "src": settings.plivo_phone_number,
+        "src": from_number,
         "dst": to_e164,
         "text": text,
     }
     try:
-        r = await _http.post(
-            url,
-            json=payload,
-            auth=(settings.plivo_auth_id or "", settings.plivo_auth_token or ""),
-        )
+        r = await _http.post(url, json=payload, auth=_auth(creds))
         r.raise_for_status()
     except httpx.HTTPError as exc:
         logger.warning(
@@ -207,21 +194,20 @@ async def send_sms(to_e164: str, text: str) -> dict[str, Any]:
 _INBOUND_APP_NAME = "veerox-voice-app"
 
 
-async def register_inbound_answer_url() -> None:
-    """Point the Plivo number's inbound Answer URL at PUBLIC_BASE_URL/voice/answer.
+async def register_inbound_answer_url(creds: PlivoCredentials, phone_number: str) -> None:
+    """Point ``phone_number`` (this org's Plivo number) inbound Answer URL at
+    PUBLIC_BASE_URL/voice/answer.
 
-    Runs on every app startup so the number always follows wherever this
-    backend is currently deployed, instead of needing a manual Plivo
-    console/API step after every redeploy to a new host. Idempotent: reuses
-    the existing ``veerox-voice-app`` Application if present, else creates it.
+    Run once per org number whenever its Plivo credentials/numbers are saved
+    (see routers/admin.py) — there's no longer a single platform-wide number
+    to register automatically on every app startup now that credentials are
+    per-org. Idempotent: reuses the existing ``veerox-voice-app`` Application
+    on that org's account if present, else creates it.
     """
-    if not is_configured():
-        return
-
     answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer"
-    number = (settings.plivo_phone_number or "").lstrip("+")
-    base = f"{_PLIVO_BASE}/Account/{settings.plivo_auth_id}"
-    auth = (settings.plivo_auth_id or "", settings.plivo_auth_token or "")
+    number = phone_number.lstrip("+")
+    base = f"{_PLIVO_BASE}/Account/{creds.auth_id}"
+    auth = _auth(creds)
 
     try:
         r = await _http.get(f"{base}/Application/", params={"limit": 20}, auth=auth)

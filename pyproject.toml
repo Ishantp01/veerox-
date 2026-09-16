@@ -28,6 +28,7 @@ dependencies = [
     "razorpay",
     "email-validator",
     "tzdata",
+    "cryptography",
 ]
 
 [dependency-groups]

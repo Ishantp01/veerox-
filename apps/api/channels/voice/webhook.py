@@ -34,7 +34,9 @@ from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.voice import twilio_client as voice_twilio
 from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.config import settings
+from apps.api.core.org_credentials import resolve_plivo_credentials, resolve_twilio_credentials
 from apps.api.db.models.conversation import Conversation
+from apps.api.db.models.org import Org
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.models.user import User
 from apps.api.db.session import AsyncSessionLocal
@@ -281,12 +283,18 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
     # stream markup above, so it doesn't interfere with the realtime audio
     # bridge. Deferred to a background task so a slow/failed provider
     # request never delays the answer response it's waiting on.
-    if call_uuid:
+    if call_uuid and org_id:
         callback_url = f"{settings.public_base_url.rstrip('/')}/voice/recording-callback"
-        if is_twilio and voice_twilio.is_configured():
-            background.add_task(voice_twilio.start_recording, call_uuid, callback_url)
-        elif not is_twilio and voice_plivo.is_configured():
-            background.add_task(voice_plivo.start_recording, call_uuid, callback_url)
+        async with AsyncSessionLocal() as db:
+            org_record = await db.get(Org, UUID(org_id))
+        if is_twilio:
+            twilio_creds = resolve_twilio_credentials(org_record)
+            if voice_twilio.is_configured(twilio_creds):
+                background.add_task(voice_twilio.start_recording, twilio_creds, call_uuid, callback_url)
+        else:
+            plivo_creds = resolve_plivo_credentials(org_record)
+            if voice_plivo.is_configured(plivo_creds):
+                background.add_task(voice_plivo.start_recording, plivo_creds, call_uuid, callback_url)
 
     return Response(content=xml, media_type="application/xml")
 

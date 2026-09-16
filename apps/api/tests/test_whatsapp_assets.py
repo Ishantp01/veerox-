@@ -57,9 +57,19 @@ async def client(
         yield ac
 
 
-async def _seed_org(db: AsyncSession) -> None:
-    db.add(Org(id=ORG_ID, name="Test Org"))
+async def _seed_org(db: AsyncSession) -> Org:
+    from apps.api.core.crypto import encrypt_secret
+
+    org = Org(
+        id=ORG_ID,
+        name="Test Org",
+        meta_app_id="test-meta-app-id",
+        meta_app_secret_encrypted=encrypt_secret("test-meta-app-secret"),
+        meta_access_token_encrypted=encrypt_secret("test-meta-access-token"),
+    )
+    db.add(org)
     await db.commit()
+    return org
 
 
 async def _upload(
@@ -219,7 +229,7 @@ def _select_all_assets():
 def capture_send_media(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     calls: list[dict] = []
 
-    async def _fake_send_media(to, media_type, link, **kwargs):  # noqa: ANN001
+    async def _fake_send_media(access_token, to, media_type, link, **kwargs):  # noqa: ANN001
         calls.append({"to": to, "media_type": media_type, "link": link, **kwargs})
         return {"messages": [{"id": "wamid.TEST"}]}
 
@@ -333,6 +343,7 @@ async def test_send_media_builds_document_payload(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(wa_client._http, "post", _fake_post)
 
     await wa_client.send_media(
+        "test-token",
         "+919999999999",
         "document",
         "https://example.com/f.pdf",
@@ -365,7 +376,7 @@ async def test_send_media_image_omits_filename(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(wa_client._http, "post", _fake_post)
 
     await wa_client.send_media(
-        "+919999999999", "image", "https://example.com/i.png", filename="i.png"
+        "test-token", "+919999999999", "image", "https://example.com/i.png", filename="i.png"
     )
 
     assert sent["json"]["type"] == "image"

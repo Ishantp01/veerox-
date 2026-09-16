@@ -42,6 +42,19 @@ export interface ProvisionOrgInput {
   // platform default numbers (see apps/api/schemas/auth.py's ProvisionOrgIn)
   // — can be set later from the Edit dialog.
   phone_numbers?: OrgPhoneNumberInput[];
+  // Optional — this org's own Plivo/Twilio/Meta WhatsApp credentials, set
+  // now instead of (or in addition to, if changed later) the org's own
+  // settings page. There's no platform-wide fallback — see
+  // apps/api/core/org_credentials.py.
+  plivo_auth_id?: string;
+  plivo_auth_token?: string;
+  twilio_account_sid?: string;
+  twilio_auth_token?: string;
+  meta_app_id?: string;
+  meta_app_secret?: string;
+  meta_access_token?: string;
+  meta_whatsapp_business_account_id?: string;
+  meta_verify_token?: string;
 }
 
 export interface ProvisionOrgResult {
