@@ -26,6 +26,12 @@ class SessionOut(BaseModel):
     # flag). Drives frontend visibility of platform-team-only pages like the
     # cross-org support ticket queue (see deps.py's verify_platform_team_member).
     is_platform_org: bool = False
+    # Lets the dashboard gate immediately on load rather than waiting for an
+    # incidental 403 from some other request — deps.py's enforce_org_license
+    # is still the real enforcement, this is display-only. Always "active"/
+    # null for is_platform_org (mirrors that dependency's own exemption).
+    license_status: str = "active"
+    license_expires_at: str | None = None
 
 
 class MeOut(BaseModel):
@@ -37,6 +43,8 @@ class MeOut(BaseModel):
     full_name: str | None = None
     is_superuser: bool = False
     is_platform_org: bool = False
+    license_status: str = "active"
+    license_expires_at: str | None = None
 
 
 class ProvisionOrgIn(BaseModel):

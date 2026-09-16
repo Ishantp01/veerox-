@@ -172,7 +172,7 @@ async def test_execute_task_skips_voice_lead_when_no_voice_provider_configured(
     assert task.status == "skipped"
 
 
-async def test_execute_task_skips_voice_lead_over_call_minute_limit(
+async def test_execute_task_skips_voice_lead_with_inactive_license(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     await _seed_org(db_session)
@@ -186,12 +186,12 @@ async def test_execute_task_skips_voice_lead_over_call_minute_limit(
         called = True
         return {}, "plivo"
 
-    async def fake_is_over_plan_limit(*args, **kwargs) -> bool:
-        return True
+    async def fake_is_org_license_active(*args, **kwargs) -> bool:
+        return False
 
     monkeypatch.setattr(follow_up_dispatcher.voice_failover, "is_configured", lambda *a, **k: True)
     monkeypatch.setattr(follow_up_dispatcher.voice_failover, "initiate_call", fake_initiate_call)
-    monkeypatch.setattr(follow_up_dispatcher, "is_over_plan_limit", fake_is_over_plan_limit)
+    monkeypatch.setattr(follow_up_dispatcher, "is_org_license_active", fake_is_org_license_active)
 
     await follow_up_dispatcher._execute_task(task.id)
 

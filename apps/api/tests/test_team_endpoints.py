@@ -7,13 +7,13 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.core.security import generate_login_token, hash_token
-from apps.api.db.models import AccountUser, Org, OrgMembership, Plan
+from apps.api.db.models import AccountUser, Org, OrgMembership
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
-async def _seed_org(db: AsyncSession, *, plan: Plan | None = None) -> Org:
-    org = Org(id=ORG_ID, name="Test Org", plan_id=plan.id if plan else None)
+async def _seed_org(db: AsyncSession) -> Org:
+    org = Org(id=ORG_ID, name="Test Org")
     db.add(org)
     await db.commit()
     return org

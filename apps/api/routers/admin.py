@@ -56,7 +56,6 @@ from apps.api.core.tools import (
     _get_or_create_user_by_phone,
     _normalize_phone,
 )
-from apps.api.core.usage import get_credit_usage
 from apps.api.core.whatsapp_assets import (
     MAX_ASSET_BYTES,
     asset_public_url,
@@ -90,7 +89,6 @@ from apps.api.deps import (
     RequestAccountUserDep,
     RequestOrgDep,
     SessionPayloadDep,
-    enforce_plan_limit,
     owned_lead_user_ids,
     verify_admin_or_session,
 )
@@ -1893,8 +1891,6 @@ async def create_campaign(
         raise HTTPException(status_code=400, detail="Only .csv or .xlsx files are supported")
 
     org_id = org
-    usage = await get_credit_usage(db, org_id)
-    await enforce_plan_limit(db, org_id, "max_campaigns", usage.campaigns)
 
     if script_id is not None:
         script = await db.get(Script, script_id)
@@ -3256,8 +3252,6 @@ async def outbound_whatsapp(
     behaviour — useful for local development without Meta credentials.
     """
     org_id = org
-    usage = await get_credit_usage(db, org_id)
-    await enforce_plan_limit(db, org_id, "max_whatsapp_messages", usage.whatsapp_messages)
 
     # Find or create the recipient user under the default org.
     user_stmt = select(User).where(User.org_id == org_id, User.phone == payload.phone)
@@ -3450,8 +3444,6 @@ async def outbound_call(
     ``channels/voice/webhook.py`` — which currently speaks a test message.
     """
     org_id = org
-    usage = await get_credit_usage(db, org_id)
-    await enforce_plan_limit(db, org_id, "max_call_minutes", usage.call_minutes)
 
     # A member calling this customer takes ownership of their lead so the
     # voice conversation (created later by the realtime bridge, keyed on the

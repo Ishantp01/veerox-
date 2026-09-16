@@ -41,11 +41,10 @@ from apps.api.core.org_credentials import (
     resolve_plivo_credentials,
     resolve_twilio_credentials,
 )
-from apps.api.core.usage import get_credit_usage
 from apps.api.db.models import FollowUpRule, FollowUpTask, Lead
 from apps.api.db.models.org import Org
 from apps.api.db.session import AsyncSessionLocal
-from apps.api.deps import is_over_plan_limit
+from apps.api.deps import is_org_license_active
 from apps.api.redis_client import get_redis_pool, record_error
 
 logger = structlog.get_logger(__name__)
@@ -240,11 +239,11 @@ async def _resolve_task(task_id: UUID, status: str) -> None:
 
 
 async def _voice_call_permitted(org_id: UUID) -> bool:
-    """True if this org is currently allowed to place an automated
-    follow-up call — checked twice, a beat apart, on fresh connections
-    before trusting a "no" answer.
+    """True if this org's license is active, so an automated follow-up call
+    may go out — checked twice, a beat apart, on fresh connections before
+    trusting a "no" answer.
 
-    Defensive guard against a transient bad read: the exact same plan-limit
+    Defensive guard against a transient bad read: the exact same kind of
     check has been observed, live, to disagree with itself seconds apart
     against literally unchanged data (verified by re-running the identical
     query directly afterward and getting the correct answer every time —
@@ -257,9 +256,8 @@ async def _voice_call_permitted(org_id: UUID) -> bool:
     """
     for attempt in range(2):
         async with AsyncSessionLocal() as db:
-            usage = await get_credit_usage(db, org_id)
-            over_limit = await is_over_plan_limit(db, org_id, "max_call_minutes", usage.call_minutes)
-        if not over_limit:
+            active = await is_org_license_active(db, org_id)
+        if active:
             return True
         if attempt == 0:
             await asyncio.sleep(1)
@@ -336,10 +334,10 @@ async def _execute_task(task_id: UUID) -> None:
         if task.template_name is None:
             if lead.channel == "voice":
                 if not await _voice_call_permitted(lead.org_id):
-                    # Same "don't place a call an over-limit org can't
-                    # afford" gate campaign_dialer._claim_targets applies —
-                    # skipped rather than retried, since this task is a
-                    # one-shot (no requeue loop like campaign targets have).
+                    # Same "don't place a call for a license-inactive org"
+                    # gate campaign_dialer._claim_targets applies — skipped
+                    # rather than retried, since this task is a one-shot (no
+                    # requeue loop like campaign targets have).
                     # _voice_call_permitted already double-checked this
                     # before answering "no".
                     await _resolve_task(task_id, "skipped")

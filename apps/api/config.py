@@ -30,11 +30,6 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 60 * 60 * 24 * 14
     require_session_auth: bool = True
 
-    # Razorpay billing
-    razorpay_key_id: str | None = None
-    razorpay_key_secret: str | None = None
-    razorpay_webhook_secret: str | None = None
-
     # Database / Redis
     database_url: str = "postgresql+asyncpg://veerox:veerox@localhost:5432/veerox"
     redis_url: str = "redis://localhost:6379/0"

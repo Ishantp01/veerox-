@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from apps.api.db.base import Base
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.models.script import Script
+
+# active = normal access. suspended = manually locked out by the platform
+# admin regardless of expiry. expired = license_expires_at has passed —
+# set by workers/license_expiry_worker.py, not chosen directly by an admin
+# action (see routers/billing.py's license endpoints).
+ORG_LICENSE_STATUSES = ("active", "suspended", "expired")
 
 
 class Org(Base):
@@ -17,36 +22,29 @@ class Org(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    plan_id: Mapped[UUID | None] = mapped_column(ForeignKey("plans.id"), nullable=True)
-    # trialing -> active -> past_due -> canceled | incomplete
-    billing_status: Mapped[str] = mapped_column(
-        String(20), nullable=False, server_default="trialing"
+    # Manually admin-managed license — replaces the old Razorpay-based
+    # billing_status/Plan system entirely (see docs/razorpay-billing-removal.md).
+    # deps.py's enforce_org_license blocks every org-scoped request once this
+    # is "suspended" or "expired".
+    license_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="active"
     )
-    # When the org's *current* plan_id took effect, i.e. its last recharge.
-    # Usage aggregation (core/usage.py) counts from here, so moving this
-    # forward is what restores an org's credits — there is no calendar
-    # reset, and a plan change isn't eaten by usage accrued under the
-    # previous plan.
-    plan_started_at: Mapped[datetime | None] = mapped_column(
+    license_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # Org-specific effective resource limits, overriding Plan.limits once
-    # populated — this is what lets a single-resource recharge (see
-    # routers/billing.py `_activate_paid_payment`) top up e.g. call minutes
-    # without disturbing WhatsApp messages/team members/campaigns. NULL
-    # means "never touched by a recharge under this scheme yet" — every
-    # metric falls back to the current plan's `limits` wholesale, so
-    # existing orgs are unaffected until their next recharge (see
-    # deps.py `effective_limits`).
-    resource_limits: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    # Set the first (and only) time this org is granted a free (price_cents
-    # == 0) plan — see routers/billing.py `create_checkout_session`. Once
-    # set, no free plan can be selected or renewed again, even after the
-    # org later upgrades to a paid plan or its free credits run out. NULL =
-    # never claimed a free plan yet (includes orgs that predate this field).
-    free_plan_claimed_at: Mapped[datetime | None] = mapped_column(
+    license_issued_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # The number of days the license was last issued/renewed for — remembered
+    # so a quick one-click renew (no form) can reuse the same duration the
+    # admin used last time instead of a hardcoded default (see
+    # routers/billing.py's renew_license / QuickRenewButton in the frontend).
+    # Untouched by extend (additive on top of the existing expiry, not a
+    # fresh duration) and by suspend/reactivate.
+    license_duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Free-text admin note (e.g. "renewed via bank transfer 2026-09-16") —
+    # shown on the Organizations page, purely informational.
+    license_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

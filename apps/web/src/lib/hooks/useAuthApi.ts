@@ -13,6 +13,10 @@ export interface SessionInfo {
   // Veerox staff account (not just the superuser) gets this. Gates
   // platform-team-only pages like the cross-org support ticket queue.
   is_platform_org: boolean;
+  // Display-only — deps.py's enforce_org_license is the real enforcement.
+  // Always "active"/null for is_platform_org.
+  license_status: "active" | "suspended" | "expired";
+  license_expires_at: string | null;
 }
 
 export interface MeInfo {
@@ -24,6 +28,8 @@ export interface MeInfo {
   full_name: string | null;
   is_superuser: boolean;
   is_platform_org: boolean;
+  license_status: "active" | "suspended" | "expired";
+  license_expires_at: string | null;
 }
 
 /** POST /auth/login → SessionInfo. Login token is the sole credential — no

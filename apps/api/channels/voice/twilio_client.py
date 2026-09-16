@@ -173,8 +173,7 @@ async def send_sms(creds: TwilioCredentials, to_e164: str, text: str, from_numbe
 async def hangup_call(creds: TwilioCredentials, call_sid: str) -> None:
     """Force-terminate a live call via ``POST /Calls/{call_sid}.json`` with
     ``Status=completed``. Best-effort: never raises, mirroring
-    ``plivo_client.hangup_call`` (used when a plan's usage limit is hit
-    mid-call — see realtime_bridge.py's ``_watch_usage_limit``).
+    ``plivo_client.hangup_call``.
     """
     url = f"{_TWILIO_BASE}/Accounts/{creds.account_sid}/Calls/{call_sid}.json"
     try:

@@ -11,7 +11,6 @@ from apps.api.deps import (
     DbDep,
     MemberScopeDep,
     RequestOrgDep,
-    enforce_plan_feature,
     owned_lead_ids,
     verify_admin_or_session,
 )
@@ -27,7 +26,6 @@ router = APIRouter(tags=["follow-ups"], dependencies=[Depends(verify_admin_or_se
 
 @router.get("/follow-up-rules", response_model=list[FollowUpRuleOut])
 async def list_follow_up_rules(db: DbDep, org: RequestOrgDep) -> list[FollowUpRule]:
-    await enforce_plan_feature(db, org, "automated_followups")
     stmt = (
         select(FollowUpRule)
         .where(FollowUpRule.org_id == org)
@@ -41,7 +39,6 @@ async def list_follow_up_rules(db: DbDep, org: RequestOrgDep) -> list[FollowUpRu
 async def create_follow_up_rule(
     payload: FollowUpRuleCreate, db: DbDep, org: RequestOrgDep
 ) -> FollowUpRule:
-    await enforce_plan_feature(db, org, "automated_followups")
     rule = FollowUpRule(
         org_id=org,
         name=payload.name,
@@ -64,7 +61,6 @@ async def create_follow_up_rule(
 async def update_follow_up_rule(
     rule_id: UUID, payload: FollowUpRuleUpdateIn, db: DbDep, org: RequestOrgDep
 ) -> FollowUpRule:
-    await enforce_plan_feature(db, org, "automated_followups")
     rule = await db.get(FollowUpRule, rule_id)
     if rule is None or rule.org_id != org:
         raise HTTPException(status_code=404, detail="Follow-up rule not found")
@@ -99,7 +95,6 @@ async def delete_follow_up_rule(rule_id: UUID, db: DbDep, org: RequestOrgDep) ->
     workers/follow_up_dispatcher.py's materialize functions already use for
     the identical race between two dispatcher instances.
     """
-    await enforce_plan_feature(db, org, "automated_followups")
     rule = await db.get(FollowUpRule, rule_id)
     if rule is None or rule.org_id != org:
         raise HTTPException(status_code=404, detail="Follow-up rule not found")
@@ -131,7 +126,6 @@ async def list_follow_up_tasks(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[FollowUpTask]:
-    await enforce_plan_feature(db, org, "automated_followups")
     stmt = (
         select(FollowUpTask)
         .where(FollowUpTask.org_id == org)
@@ -150,7 +144,6 @@ async def list_follow_up_tasks(
 async def cancel_follow_up_task(
     task_id: UUID, db: DbDep, org: RequestOrgDep, member_scope: MemberScopeDep
 ) -> FollowUpTask:
-    await enforce_plan_feature(db, org, "automated_followups")
     task = await db.get(FollowUpTask, task_id)
     if task is None or task.org_id != org:
         raise HTTPException(status_code=404, detail="Follow-up task not found")

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Phone, MessageSquare, Share2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { SettingsView } from "@/components/settings/settings-view";
-import { SocialLinksPanel } from "@/components/billing/platform-settings-panel";
+import { SocialLinksPanel } from "@/components/settings/social-links-panel";
 import { useAuth } from "@/lib/auth-context";
 
 type Tab = "calling" | "whatsapp" | "social";

@@ -30,13 +30,12 @@ from apps.api.core.org_credentials import (
     resolve_plivo_credentials,
     resolve_twilio_credentials,
 )
-from apps.api.core.usage import get_credit_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.session import AsyncSessionLocal
-from apps.api.deps import is_over_plan_limit
+from apps.api.deps import is_org_license_active
 from apps.api.redis_client import get_redis_pool, record_error
 from apps.api.workers.campaign_scheduling import (
     complete_finished_campaigns,
@@ -275,7 +274,7 @@ async def _claim_targets() -> list[
         )
         rows = (await db.execute(stmt)).all()
 
-        org_over_limit: dict[UUID, bool] = {}
+        org_license_inactive: dict[UUID, bool] = {}
         # Resolve each distinct org's own Plivo/Twilio credentials once per
         # batch — Org rows are already joined in above, so this is a
         # decrypt-in-memory operation per distinct org_id, not an extra
@@ -286,12 +285,9 @@ async def _claim_targets() -> list[
         for target, org_id, org_record, phone_number_id, max_attempts in rows:
             if len(staged) >= capacity:
                 break
-            if org_id not in org_over_limit:
-                usage = await get_credit_usage(db, org_id)
-                org_over_limit[org_id] = await is_over_plan_limit(
-                    db, org_id, "max_call_minutes", usage.call_minutes
-                )
-            if org_over_limit[org_id]:
+            if org_id not in org_license_inactive:
+                org_license_inactive[org_id] = not await is_org_license_active(db, org_id)
+            if org_license_inactive[org_id]:
                 continue
             if org_id not in creds_by_org:
                 creds_by_org[org_id] = (

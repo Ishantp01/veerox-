@@ -19,10 +19,9 @@ engine = create_async_engine(
     # SQLAlchemy defaults (5 + 10 overflow) get pinched under concurrent
     # dashboard polling (multiple open tabs, several 3-4s intervals each) —
     # and more importantly under many simultaneous voice calls, each of
-    # which opens a short-lived AsyncSessionLocal() for every tool call,
-    # transcript persist, and a usage-limit check every 20s
-    # (realtime_bridge.py::_watch_usage_limit). At 100 concurrent calls
-    # that's a real, recurring burst of checkouts, not just idle
+    # which opens a short-lived AsyncSessionLocal() for every tool call and
+    # transcript persist. At 100 concurrent calls that's a real, recurring
+    # burst of checkouts, not just idle
     # dashboard tabs. Neon's pooled endpoint fronts this with PgBouncer in
     # transaction-pooling mode, so raising the app-side pool doesn't
     # multiply real Postgres connections 1:1 — but Neon's own PgBouncer

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Pencil } from "lucide-react";
+import { ChevronDown, Pencil } from "lucide-react";
 import { z } from "zod";
 import {
   Button,
@@ -37,6 +37,18 @@ const editOrgSchema = z.object({
 type EditOrgForm = z.infer<typeof editOrgSchema>;
 type OrgFieldErrors = Partial<Record<keyof EditOrgForm, string>>;
 
+const EMPTY_CREDENTIALS = {
+  plivoAuthId: "",
+  plivoAuthToken: "",
+  twilioAccountSid: "",
+  twilioAuthToken: "",
+  metaAppId: "",
+  metaAppSecret: "",
+  metaAccessToken: "",
+  metaBusinessAccountId: "",
+  metaVerifyToken: "",
+};
+
 function formFromOrg(org: AdminOrg): EditOrgForm {
   return {
     orgName: org.name,
@@ -67,9 +79,8 @@ function whatsappNumbersFromOrg(org: AdminOrg): PhoneNumberEntry[] {
  * admin's email/name/mobile, and its dedicated calling/WhatsApp numbers.
  * The admin's login token itself isn't editable here — that's rotated via
  * RegenerateTokenDialog instead, since a new token can only be shown once.
- * Plan/billing status aren't editable here either since they're driven by
- * the checkout/payment flow (see apps/api/schemas/billing.py's OrgUpdateIn
- * for why).
+ * License fields aren't editable here either — see ManageLicenseDialog for
+ * issue/renew/extend/suspend/reactivate actions.
  */
 export function EditOrgDialog({ org }: { org: AdminOrg }) {
   const [open, setOpen] = useState(false);
@@ -82,6 +93,8 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
   const [whatsappNumbers, setWhatsappNumbers] = useState<PhoneNumberEntry[]>(() =>
     whatsappNumbersFromOrg(org),
   );
+  const [credentials, setCredentials] = useState(EMPTY_CREDENTIALS);
+  const [credentialsOpen, setCredentialsOpen] = useState(false);
   const updateOrg = useUpdateOrgAdmin();
   const { toast } = useToast();
 
@@ -126,6 +139,15 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
           ...twilioNumbers.map((n) => ({ provider: "twilio" as const, ...n })),
           ...whatsappNumbers.map((n) => ({ provider: "whatsapp" as const, ...n })),
         ],
+        plivo_auth_id: credentials.plivoAuthId.trim() || undefined,
+        plivo_auth_token: credentials.plivoAuthToken.trim() || undefined,
+        twilio_account_sid: credentials.twilioAccountSid.trim() || undefined,
+        twilio_auth_token: credentials.twilioAuthToken.trim() || undefined,
+        meta_app_id: credentials.metaAppId.trim() || undefined,
+        meta_app_secret: credentials.metaAppSecret.trim() || undefined,
+        meta_access_token: credentials.metaAccessToken.trim() || undefined,
+        meta_whatsapp_business_account_id: credentials.metaBusinessAccountId.trim() || undefined,
+        meta_verify_token: credentials.metaVerifyToken.trim() || undefined,
       },
       {
         onSuccess: () => {
@@ -145,6 +167,8 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
       setPlivoNumbers(numbersFromOrg(org, "plivo"));
       setTwilioNumbers(numbersFromOrg(org, "twilio"));
       setWhatsappNumbers(whatsappNumbersFromOrg(org));
+      setCredentials(EMPTY_CREDENTIALS);
+      setCredentialsOpen(false);
     } else {
       setFieldErrors({});
       updateOrg.reset();
@@ -252,6 +276,139 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
               multipleHint="Sends use the Default number unless a campaign pins a specific one."
               defaultLabel="Default"
             />
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setCredentialsOpen((v) => !v)}
+                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-medium"
+                aria-expanded={credentialsOpen}
+              >
+                Provider setup
+                <ChevronDown
+                  size={15}
+                  aria-hidden
+                  className={`transition-transform ${credentialsOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+              {credentialsOpen && (
+                <div className="flex flex-col gap-4 border-t border-slate-200 px-3 py-3 dark:border-slate-700">
+                  <p className="text-xs text-slate-500">
+                    These fields are blank because stored credentials can&apos;t be read back — fill
+                    in only what you want to change. Leave a provider&apos;s fields blank to keep its
+                    current credentials.
+                  </p>
+
+                  <section className="flex flex-col gap-3 rounded-md border border-slate-200 p-3 dark:border-slate-700">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Plivo
+                    </p>
+                    <div>
+                      <Label htmlFor="edit-plivo-auth-id">Auth ID</Label>
+                      <Input
+                        id="edit-plivo-auth-id"
+                        value={credentials.plivoAuthId}
+                        onChange={(e) => setCredentials((c) => ({ ...c, plivoAuthId: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="edit-plivo-auth-token">Auth token</Label>
+                      <Input
+                        id="edit-plivo-auth-token"
+                        type="password"
+                        value={credentials.plivoAuthToken}
+                        onChange={(e) =>
+                          setCredentials((c) => ({ ...c, plivoAuthToken: e.target.value }))
+                        }
+                      />
+                    </div>
+                  </section>
+
+                  <section className="flex flex-col gap-3 rounded-md border border-slate-200 p-3 dark:border-slate-700">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Twilio
+                    </p>
+                    <div>
+                      <Label htmlFor="edit-twilio-account-sid">Account SID</Label>
+                      <Input
+                        id="edit-twilio-account-sid"
+                        value={credentials.twilioAccountSid}
+                        onChange={(e) =>
+                          setCredentials((c) => ({ ...c, twilioAccountSid: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="edit-twilio-auth-token">Auth token</Label>
+                      <Input
+                        id="edit-twilio-auth-token"
+                        type="password"
+                        value={credentials.twilioAuthToken}
+                        onChange={(e) =>
+                          setCredentials((c) => ({ ...c, twilioAuthToken: e.target.value }))
+                        }
+                      />
+                    </div>
+                  </section>
+
+                  <section className="flex flex-col gap-3 rounded-md border border-slate-200 p-3 dark:border-slate-700">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Meta WhatsApp
+                    </p>
+                    <div>
+                      <Label htmlFor="edit-meta-app-id">App ID</Label>
+                      <Input
+                        id="edit-meta-app-id"
+                        value={credentials.metaAppId}
+                        onChange={(e) => setCredentials((c) => ({ ...c, metaAppId: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="edit-meta-app-secret">App secret</Label>
+                      <Input
+                        id="edit-meta-app-secret"
+                        type="password"
+                        value={credentials.metaAppSecret}
+                        onChange={(e) =>
+                          setCredentials((c) => ({ ...c, metaAppSecret: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="edit-meta-access-token">Access token</Label>
+                      <Input
+                        id="edit-meta-access-token"
+                        type="password"
+                        value={credentials.metaAccessToken}
+                        onChange={(e) =>
+                          setCredentials((c) => ({ ...c, metaAccessToken: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="edit-meta-business-account-id">WhatsApp Business Account ID</Label>
+                      <Input
+                        id="edit-meta-business-account-id"
+                        value={credentials.metaBusinessAccountId}
+                        onChange={(e) =>
+                          setCredentials((c) => ({ ...c, metaBusinessAccountId: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="edit-meta-verify-token">Webhook verify token</Label>
+                      <Input
+                        id="edit-meta-verify-token"
+                        type="password"
+                        value={credentials.metaVerifyToken}
+                        onChange={(e) =>
+                          setCredentials((c) => ({ ...c, metaVerifyToken: e.target.value }))
+                        }
+                      />
+                    </div>
+                  </section>
+                </div>
+              )}
+            </div>
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => handleClose(false)}>

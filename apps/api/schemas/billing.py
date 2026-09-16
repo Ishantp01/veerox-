@@ -1,56 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, EmailStr
 
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn, OrgPhoneNumberOut
-
-
-class PlanOut(BaseModel):
-    code: str
-    name: str
-    price_cents: int
-    limits: dict[str, Any]
-    # None = a full subscription plan. One of Plan.PLAN_RESOURCE_TYPES = a
-    # single-resource recharge/top-up SKU (see apps/api/db/models/plan.py).
-    resource_type: str | None = None
-
-
-class PlanAdminOut(BaseModel):
-    code: str
-    name: str
-    price_cents: int
-    limits: dict[str, Any]
-    is_active: bool
-    resource_type: str | None = None
-
-
-class BillingPaymentOut(BaseModel):
-    """Same shape as OrgPaymentAdminOut below — kept as a separate model
-    because the two are read by different endpoints for different
-    audiences (self-service GET /billing/payments vs. platform-admin GET
-    /billing/orgs/{org_id}/payments), same as PlanOut/PlanAdminOut."""
-
-    id: str
-    provider: str
-    plan_code: str | None
-    plan_name: str | None
-    amount_cents: int
-    status: str
-    period_start: str | None
-    created_at: str
-
-
-class OrgPaymentAdminOut(BaseModel):
-    id: str
-    provider: str
-    plan_code: str | None
-    plan_name: str | None
-    amount_cents: int
-    status: str
-    period_start: str | None
-    created_at: str
 
 
 class RegenerateAdminTokenOut(BaseModel):
@@ -64,8 +16,11 @@ class RegenerateAdminTokenOut(BaseModel):
 class OrgAdminOut(BaseModel):
     id: str
     name: str
-    plan_code: str | None
-    billing_status: str
+    license_status: str
+    license_expires_at: str | None = None
+    license_issued_at: str | None = None
+    license_duration_days: int | None = None
+    license_notes: str | None = None
     seat_count: int
     admin_email: str | None
     admin_name: str | None = None
@@ -78,9 +33,9 @@ class OrgAdminOut(BaseModel):
 
 class OrgUpdateIn(BaseModel):
     """All fields optional — only what's sent gets changed (PATCH semantics).
-    Deliberately excludes plan/billing_status: those are driven by the
-    checkout/payment flow (see POST /billing/checkout-session), not a direct
-    admin edit, to keep them consistent with BillingPayment records.
+    Deliberately excludes license fields: those are driven by the dedicated
+    POST /billing/orgs/{id}/license/* actions instead of a direct field edit,
+    so every change goes through one auditable path.
 
     `phone_numbers` omitted = the org's numbers (Plivo, Twilio, and WhatsApp
     alike) are left untouched; present (including `[]`) = its full number
@@ -92,83 +47,58 @@ class OrgUpdateIn(BaseModel):
     collected on creation (see ProvisionOrgIn), now editable afterward too.
     Deliberately excludes the login token itself: that's rotated via the
     dedicated POST /billing/orgs/{id}/regenerate-admin-token instead of a
-    plain field edit, since a new token can only ever be shown once."""
+    plain field edit, since a new token can only ever be shown once.
+
+    Credential fields mirror ProvisionOrgIn's — same "both halves of a pair
+    or neither" rule (e.g. plivo_auth_id needs plivo_auth_token alongside
+    it to take effect), and omitting a pair leaves that provider's stored
+    credentials untouched (there's no way to see/return them once
+    encrypted, so the form always starts blank for these)."""
 
     name: str | None = None
     admin_email: EmailStr | None = None
     admin_name: str | None = None
     admin_mobile: str | None = None
     phone_numbers: list[OrgPhoneNumberIn] | None = None
+    plivo_auth_id: str | None = None
+    plivo_auth_token: str | None = None
+    twilio_account_sid: str | None = None
+    twilio_auth_token: str | None = None
+    meta_app_id: str | None = None
+    meta_app_secret: str | None = None
+    meta_access_token: str | None = None
+    meta_whatsapp_business_account_id: str | None = None
+    meta_verify_token: str | None = None
 
 
-class PlanCreateIn(BaseModel):
-    code: str
-    name: str
-    price_cents: int
-    limits: dict[str, Any]
-    is_active: bool = True
-    resource_type: str | None = None
+class IssueLicenseIn(BaseModel):
+    days: int
+    notes: str | None = None
 
 
-class PlanUpdateIn(BaseModel):
-    """All fields optional — only what's sent gets changed (PATCH semantics)."""
-
-    name: str | None = None
-    price_cents: int | None = None
-    limits: dict[str, Any] | None = None
-    is_active: bool | None = None
-    resource_type: str | None = None
-
-
-class BillingStatusOut(BaseModel):
-    billing_status: str
-    plan: PlanOut | None
-    seat_count: int
-    # When the org's current credits were bought. Informational only —
-    # nothing expires on a timer any more, access ends when the credits in
-    # BillingUsageOut run out (see core/usage.py).
-    last_recharge_at: str | None
-    # True once this org has ever been granted a free (price_cents == 0)
-    # plan — the frontend uses this to stop offering free plans again,
-    # matching the one-time enforcement in POST /billing/checkout-session.
-    free_plan_claimed: bool
+class RenewLicenseIn(BaseModel):
+    # Omitted = reuse the org's last issued/renewed duration
+    # (Org.license_duration_days), falling back to 30 days if it's never
+    # been set — what a one-click "Renew" row action sends (see
+    # QuickRenewButton in the frontend). A form-driven renewal in
+    # ManageLicenseDialog always sends this explicitly.
+    days: int | None = None
 
 
-class UsageMetricOut(BaseModel):
-    used: float
-    limit: float | None
+class ExtendLicenseIn(BaseModel):
+    days: int
 
 
-class BillingUsageOut(BaseModel):
-    # Start of the *credit* period — the org's last recharge, not a
-    # calendar month boundary.
-    period_start: str
-    campaigns: UsageMetricOut
-    call_minutes: UsageMetricOut
-    whatsapp_messages: UsageMetricOut
+class SuspendLicenseIn(BaseModel):
+    notes: str | None = None
 
 
-class CheckoutSessionIn(BaseModel):
-    plan_code: str
-    success_url: str
-    cancel_url: str
-
-
-class CheckoutSessionOut(BaseModel):
-    # Free plans: set, frontend redirects straight there (no Razorpay
-    # involved). Paid plans: null — the frontend instead uses order_id +
-    # razorpay_key_id to launch Razorpay's embedded Checkout modal for a
-    # one-time payment, then confirms via POST /billing/verify-payment.
-    checkout_url: str | None = None
-    order_id: str | None = None
-    amount_cents: int | None = None
-    razorpay_key_id: str | None = None
-
-
-class VerifyPaymentIn(BaseModel):
-    razorpay_payment_id: str
-    razorpay_order_id: str
-    razorpay_signature: str
+class ReactivateLicenseIn(BaseModel):
+    # Required only when the current expiry has already passed — otherwise
+    # reactivating would immediately be flipped back to "expired" by the
+    # background worker. Omitted = reuse the org's last issued/renewed
+    # duration, same fallback as RenewLicenseIn.
+    days: int | None = None
 
 
 class PlatformSettingsOut(BaseModel):

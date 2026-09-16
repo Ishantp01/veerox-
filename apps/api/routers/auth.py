@@ -131,10 +131,9 @@ async def provision_org(
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # No plan assigned yet on purpose: `Org.plan_id is None` is exactly the
-    # signal the frontend's dashboard layout gates on to force new orgs
-    # through /billing (choose-a-plan, even the free one) before anything
-    # else in the app becomes reachable. See DashboardLayout in apps/web.
+    # No license issued yet on purpose — the org starts "active" with no
+    # expiry (never auto-expires) until the platform admin issues its first
+    # real license via POST /billing/orgs/{id}/license/issue.
     org = Org(name=payload.org_name)
     if payload.plivo_auth_id and payload.plivo_auth_token:
         org.plivo_auth_id = payload.plivo_auth_id.strip()
@@ -242,16 +241,18 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: 
     # core/security.py — every real token is high-entropy and unique), so
     # looking it up by hash first is a guaranteed-miss round trip on this
     # path. Going straight to the dev/admin account skips it.
+    license_status = "active"
+    license_expires_at: datetime | None = None
     if payload.token == settings.admin_token:
         account_user, membership, org_name = await _ensure_default_org_owner(db)
     else:
         # One outer-join query instead of a separate account lookup + a
         # separate membership lookup + a separate org lookup — real latency
         # savings against a remote DB (see .env), not just fewer local
-        # queries. Org.name rides along in this same query instead of a
-        # trailing db.get(Org, ...) after the session is created.
+        # queries. Org.name/license fields ride along in this same query
+        # instead of a trailing db.get(Org, ...) after the session is created.
         result = await db.execute(
-            select(AccountUser, OrgMembership, Org.name)
+            select(AccountUser, OrgMembership, Org.name, Org.license_status, Org.license_expires_at)
             .outerjoin(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
             .outerjoin(Org, Org.id == OrgMembership.org_id)
             .where(AccountUser.token_hash == hash_token(payload.token))
@@ -259,12 +260,19 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: 
             .limit(1)
         )
         row = result.first()
-        account_user, membership, org_name = row if row else (None, None, None)
+        if row is None:
+            account_user, membership, org_name = None, None, None
+        else:
+            account_user, membership, org_name, license_status, license_expires_at = row
 
     if account_user is None or not account_user.is_active:
         raise HTTPException(status_code=401, detail="Invalid login token")
     if membership is None:
         raise HTTPException(status_code=403, detail="Account has no org membership")
+
+    is_platform_org = membership.org_id == DEFAULT_ORG_ID
+    if is_platform_org:
+        license_status, license_expires_at = "active", None
 
     background_tasks.add_task(_record_last_login, account_user.id)
 
@@ -280,7 +288,9 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: 
         email=account_user.email,
         full_name=account_user.full_name,
         is_superuser=account_user.is_superuser,
-        is_platform_org=membership.org_id == DEFAULT_ORG_ID,
+        is_platform_org=is_platform_org,
+        license_status=license_status,
+        license_expires_at=license_expires_at.isoformat() if license_expires_at else None,
     )
 
 
@@ -369,19 +379,23 @@ async def logout(redis: RedisDep, x_session_token: str | None = Header(None)) ->
 
 @router.get("/me", response_model=MeOut)
 async def me(current_user: CurrentUserDep, db: DbDep) -> MeOut:
-    # Org.name folded into the same round trip via an outer join instead of
-    # a trailing db.get(Org, ...) — this endpoint runs on every dashboard
-    # hydration/reload, and DB here is a remote Neon instance (see .env).
+    # Org.name/license fields folded into the same round trip via an outer
+    # join instead of a trailing db.get(Org, ...) — this endpoint runs on
+    # every dashboard hydration/reload, and DB here is a remote Neon
+    # instance (see .env).
     result = await db.execute(
-        select(OrgMembership, Org.name)
+        select(OrgMembership, Org.name, Org.license_status, Org.license_expires_at)
         .outerjoin(Org, Org.id == OrgMembership.org_id)
         .where(OrgMembership.account_user_id == current_user.id)
         .order_by(OrgMembership.created_at)
     )
     row = result.first()
-    membership, org_name = row if row else (None, None)
-    if membership is None:
+    if row is None:
         raise HTTPException(status_code=403, detail="Account has no org membership")
+    membership, org_name, license_status, license_expires_at = row
+    is_platform_org = membership.org_id == DEFAULT_ORG_ID
+    if is_platform_org:
+        license_status, license_expires_at = "active", None
     return MeOut(
         org_id=membership.org_id,
         org_name=org_name or "",
@@ -390,5 +404,7 @@ async def me(current_user: CurrentUserDep, db: DbDep) -> MeOut:
         email=current_user.email,
         full_name=current_user.full_name,
         is_superuser=current_user.is_superuser,
-        is_platform_org=membership.org_id == DEFAULT_ORG_ID,
+        is_platform_org=is_platform_org,
+        license_status=license_status,
+        license_expires_at=license_expires_at.isoformat() if license_expires_at else None,
     )

@@ -22,14 +22,12 @@ import {
   LogIn,
   LogOut,
   X,
-  CreditCard,
   Building2,
   UsersRound,
   LifeBuoy,
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { useBillingStatus } from "@/lib/hooks/useBilling";
 import { ONBORDA_NAV_IDS } from "@/lib/onboarding/tours";
 
 interface NavItem {
@@ -99,7 +97,6 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: "/team", label: "Team", Icon: UsersRound },
       { href: "/settings", label: "Settings", Icon: Settings },
-      { href: "/billing", label: "Billing", Icon: CreditCard },
       { href: "/support", label: "Support", Icon: LifeBuoy },
     ],
   },
@@ -136,28 +133,15 @@ export interface NavProps {
   onCloseMobile?: () => void;
 }
 
-// Org-level pages (team management, billing, connection settings) — visible
-// to the org's admin, hidden for a plain "member" so they land on
-// their working tools only, not the org's back office.
-const MEMBER_RESTRICTED_HREFS = new Set(["/team", "/settings", "/billing"]);
-
-// Hrefs gated behind a plan feature flag (a key in Plan.limits) rather than
-// a role — hidden whenever the org's current plan doesn't have that flag
-// set to true. Mirrors MEMBER_RESTRICTED_HREFS's filtering, just keyed off
-// billing data instead of the user's role.
-const PLAN_FEATURE_HREFS: Record<string, string> = {
-  "/automation/follow-ups": "automated_followups",
-};
+// Org-level pages (team management, connection settings) — visible to the
+// org's admin, hidden for a plain "member" so they land on their working
+// tools only, not the org's back office.
+const MEMBER_RESTRICTED_HREFS = new Set(["/team", "/settings"]);
 
 export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
   const pathname = usePathname();
   const { isAuthenticated, logout, user } = useAuth();
-  const billing = useBillingStatus();
   const isRestrictedMember = user?.role === "member" && !user?.is_superuser;
-  // Orgs with no plan resolved yet (still loading, or genuinely planless —
-  // the dashboard layout's onboarding gate handles that case) keep every
-  // feature-gated item visible rather than flashing it away and back.
-  const planLimits = billing.data?.plan?.limits;
   const isPlatformTeam = user?.is_superuser || user?.is_platform_org;
   const platformItems: NavItem[] = [];
   if (user?.is_superuser) platformItems.push(ORGANIZATIONS_ITEM);
@@ -172,10 +156,6 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
         // Mutually exclusive with Support Tickets: the Veerox team triages
         // the queue there and doesn't need to raise tickets to itself.
         if (item.href === "/support" && isPlatformTeam) return false;
-        const feature = PLAN_FEATURE_HREFS[item.href];
-        if (feature && !user?.is_superuser && planLimits && planLimits[feature] !== true) {
-          return false;
-        }
         return true;
       }),
     }))

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { Button, Card, CardContent, CardHeader, Input, Textarea, useToast } from "@/components/ui";
+import { Button, Card, CardContent, CardHeader, Input, useToast } from "@/components/ui";
 import { usePlatformSettings, useUpdatePlatformSettings } from "@/lib/hooks";
 
 // Fixed, known social platforms — stored as flat keys inside
@@ -18,79 +18,10 @@ const SOCIAL_FIELDS: { key: string; label: string; placeholder: string }[] = [
 ];
 
 /**
- * Platform-wide help-desk chatbot script editor — superuser-only, same
- * PlatformAdminDep gate as the Billing page's plan catalog
- * (apps/api/routers/billing.py's /billing/platform-settings endpoints).
- */
-export function HelpDeskScriptPanel() {
-  const settings = usePlatformSettings();
-  const updateSettings = useUpdatePlatformSettings();
-  const { toast } = useToast();
-
-  const [scriptDraft, setScriptDraft] = useState("");
-
-  useEffect(() => {
-    if (settings.data) setScriptDraft(settings.data.help_desk_script ?? "");
-  }, [settings.data]);
-
-  if (settings.isLoading || !settings.data) return null;
-
-  const scriptDirty = scriptDraft !== (settings.data.help_desk_script ?? "");
-
-  function saveScript() {
-    updateSettings.mutate(
-      { help_desk_script: scriptDraft.trim() || null },
-      {
-        onSuccess: () => toast({ title: "Help-desk script saved", variant: "success" }),
-        onError: (err) =>
-          toast({ title: "Could not save script", description: err.message, variant: "error" }),
-      }
-    );
-  }
-
-  return (
-    <Card className="max-w-3xl">
-      <CardHeader>
-        <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">
-          Help-desk chatbot script
-        </h3>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          System prompt for the in-app help-desk widget every org&apos;s team members can open.
-          It&apos;s global — there is no per-org override. Leave blank to use the built-in default
-          (scoped to Veerox product questions only).
-        </p>
-        <Textarea
-          value={scriptDraft}
-          onChange={(e) => setScriptDraft(e.target.value)}
-          rows={12}
-          placeholder="Leave blank to use the built-in default"
-          className="font-mono text-xs"
-        />
-        <div className="flex items-center gap-2">
-          <Button size="sm" disabled={!scriptDirty} loading={updateSettings.isPending} onClick={saveScript}>
-            Save script
-          </Button>
-          {settings.data.help_desk_script && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={updateSettings.isPending}
-              onClick={() => setScriptDraft("")}
-            >
-              Clear (use default)
-            </Button>
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-/**
- * Platform-wide social links editor — superuser-only, same gate as
- * HelpDeskScriptPanel above. Shown to every client org (e.g. nav footer).
+ * Platform-wide social links editor — superuser-only, same PlatformAdminDep
+ * gate as the org directory (apps/api/routers/billing.py's
+ * /billing/platform-settings endpoints). Shown to every client org (e.g.
+ * nav footer).
  */
 export function SocialLinksPanel() {
   const settings = usePlatformSettings();
@@ -148,15 +79,5 @@ export function SocialLinksPanel() {
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-/** Both panels together — used where a single combined section still makes sense (e.g. Billing page). */
-export function PlatformSettingsPanel() {
-  return (
-    <div className="flex flex-col gap-5">
-      <HelpDeskScriptPanel />
-      <SocialLinksPanel />
-    </div>
   );
 }

@@ -133,28 +133,14 @@ export {
   type UpdateWhatsappAssetInput,
 } from "./useWhatsappAssets";
 export {
-  useBillingStatus,
-  useBillingUsage,
-  useAvailablePlans,
-  useCreateCheckoutSession,
-  useVerifyPayment,
-  type Plan,
-  type BillingStatus,
-  type BillingUsage,
-  type UsageMetric,
-  type CheckoutSession,
-  type VerifyPaymentInput,
-} from "./useBilling";
-export {
-  useAdminPlans,
-  useCreatePlan,
-  useUpdatePlan,
-  useDeletePlan,
-  type AdminPlan,
-  type CreatePlanInput,
-  type UpdatePlanInput,
-} from "./useAdminPlans";
-export { useAdminOrgs, type AdminOrg } from "./useAdminOrgs";
+  useAdminOrgs,
+  useIssueLicense,
+  useRenewLicense,
+  useExtendLicense,
+  useSuspendLicense,
+  useReactivateLicense,
+  type AdminOrg,
+} from "./useAdminOrgs";
 export {
   usePlatformSettings,
   useUpdatePlatformSettings,

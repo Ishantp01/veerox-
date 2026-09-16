@@ -83,5 +83,4 @@ export const POLL = {
   conversationList: 4_000,
   leads: 10_000,
   campaigns: 3_000,
-  billing: 4_000,
 } as const;

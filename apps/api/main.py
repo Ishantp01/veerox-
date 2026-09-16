@@ -39,6 +39,7 @@ from apps.api.routers import (
 from apps.api.sentry import init_sentry
 from apps.api.workers.campaign_dialer import run_campaign_dialer
 from apps.api.workers.follow_up_dispatcher import run_follow_up_dispatcher
+from apps.api.workers.license_expiry_worker import run_license_expiry_worker
 from apps.api.workers.whatsapp_dispatcher import run_whatsapp_dispatcher
 
 
@@ -60,13 +61,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     dialer_task = asyncio.create_task(run_campaign_dialer())
     whatsapp_dispatcher_task = asyncio.create_task(run_whatsapp_dispatcher())
     follow_up_task = asyncio.create_task(run_follow_up_dispatcher())
-    # billing_expiry_task removed from here — plans no longer expire on a
-    # timer, see removefeature.md §4 to re-add.
+    license_expiry_task = asyncio.create_task(run_license_expiry_worker())
     background_tasks = (
         plivo_registration_task,
         dialer_task,
         whatsapp_dispatcher_task,
         follow_up_task,
+        license_expiry_task,
     )
     try:
         yield

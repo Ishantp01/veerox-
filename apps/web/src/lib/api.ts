@@ -3,13 +3,15 @@ export const AUTH_MODE_KEY = "veerox_auth_mode";
 export type AuthMode = "session" | "admin";
 
 /**
- * Fired on `window` whenever the API answers 402 — the org has run out of
- * plan credit (or its paid period lapsed) and the request was refused. The
- * credit modal (components/billing/credit-expired-modal.tsx) listens for
- * this so the block surfaces the instant it happens, instead of waiting up
- * to POLL.billing ms for /billing/status to catch up.
+ * Fired on `window` whenever the API answers 403 with
+ * `detail.error === "license_inactive"` — this org's license has expired or
+ * been suspended by the platform admin (see apps/api/deps.py's
+ * enforce_org_license). The lockout screen
+ * (components/organizations/license-locked-screen.tsx) listens for this so
+ * the block surfaces the instant it happens, on whichever route the user
+ * was on.
  */
-export const CREDIT_LIMIT_EVENT = "veerox:credit-limit";
+export const LICENSE_INACTIVE_EVENT = "veerox:license-inactive";
 
 /**
  * Read the dashboard session token from localStorage.
@@ -95,10 +97,14 @@ export async function apiFetch<T>(
 
   if (!response.ok) {
     let message = `API error ${response.status}: ${response.statusText}`;
+    let licenseStatus: string | undefined;
     try {
       const body = await response.json();
       if (typeof body?.detail === "string") {
         message = body.detail;
+      } else if (body?.detail?.error === "license_inactive") {
+        licenseStatus = body.detail.status;
+        message = body.detail.message ?? message;
       } else if (typeof body?.message === "string") {
         message = body.message;
       }
@@ -106,12 +112,14 @@ export async function apiFetch<T>(
       // ignore JSON parse failure — use the status message
     }
     message = humanizeApiError(response.status, message);
-    // Announce a plan-credit refusal to whoever is listening (the credit
-    // modal), regardless of which page made the call — every feature route
-    // goes through this wrapper, so the block can't be missed just because
-    // the calling page only rendered a toast.
-    if (response.status === 402 && typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent(CREDIT_LIMIT_EVENT, { detail: { message } }));
+    // Announce a license lockout to whoever is listening (the lockout
+    // screen), regardless of which page made the call — every feature
+    // route goes through this wrapper, so the block can't be missed just
+    // because the calling page only rendered a toast.
+    if (licenseStatus && typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent(LICENSE_INACTIVE_EVENT, { detail: { message, status: licenseStatus } })
+      );
     }
     // Status is attached (not just embedded in the message) so callers —
     // notably the query client's retry policy — can tell a permanent auth

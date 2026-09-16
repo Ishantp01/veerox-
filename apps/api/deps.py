@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 import redis.asyncio as aioredis
@@ -16,10 +16,6 @@ from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.org_membership import OrgMembership
 from apps.api.db.session import get_session
 from apps.api.redis_client import get_redis
-
-if TYPE_CHECKING:
-    from apps.api.db.models.org import Org
-    from apps.api.db.models.plan import Plan
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -103,6 +99,7 @@ async def get_current_user(
 
 
 async def get_current_org(
+    db: DbDep,
     payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> CurrentOrg:
@@ -111,7 +108,9 @@ async def get_current_org(
 
     if payload is None:
         raise HTTPException(status_code=401, detail="Missing session token")
-    return CurrentOrg(org_id=UUID(payload["org_id"]), role=payload["role"])
+    org_id = UUID(payload["org_id"])
+    await enforce_org_license(db, org_id)
+    return CurrentOrg(org_id=org_id, role=payload["role"])
 
 
 CurrentUserDep = Annotated[AccountUser, Depends(get_current_user)]
@@ -147,122 +146,40 @@ async def _org_is_platform_admin_owned(db: AsyncSession, org_id: UUID) -> bool:
     return result.scalar_one_or_none() is not None
 
 
-_BLOCKED_BILLING_STATUSES = ("past_due", "canceled", "incomplete")
-
-
-def effective_limits(org: Org, plan: Plan | None) -> dict[str, Any]:
-    """The org's real, currently-in-effect resource limits — `Org.resource_limits`
-    once a recharge has populated it (it takes full precedence, key by key
-    against the plan, since it's already seeded as a complete snapshot on
-    every full-plan purchase — see routers/billing.py `_activate_paid_payment`),
-    falling back to the catalog `Plan.limits` wholesale for an org that has
-    never been touched by the new recharge logic (resource_limits is None)."""
-    if org.resource_limits is not None:
-        return org.resource_limits
-    return dict(plan.limits) if plan is not None else {}
-
-
-async def is_over_plan_limit(
-    db: AsyncSession, org_id: UUID, metric: str, current_count: float
-) -> bool:
-    """True if the org should be blocked from consuming `metric` right now —
-    either its billing has lapsed, or `current_count` has reached the org's
-    effective limit for `metric` (a key in `Plan.limits`/`Org.resource_limits`,
-    e.g. "max_seats"/"max_call_minutes" — see `effective_limits`).
-
-    Credits are recharge-based: `current_count` comes from core/usage.py,
-    which measures usage since the org's last recharge and never resets on
-    a calendar boundary. So reaching the limit blocks the metric until the
-    org buys the plan (or the relevant resource recharge) again via
-    POST /billing/checkout-session — that's the normal way an org ends up
-    blocked here.
-
-    A `billing_status` outside ("trialing", "active") blocks *every* metric
-    rather than just the one being checked. Nothing downgrades an org on a
-    timer any more (there is no expiry worker — access ends when credits
-    run out, not when a date passes); this state is now only reached by a
-    failed payment or a deliberate admin action.
-
-    Orgs with no plan assigned yet AND no recharge on record (pre-backfill
-    edge case, or a customer who hasn't finished onboarding) are treated as
-    unlimited rather than blocked — enforcement here is a defensive
-    backstop, the primary gate is the frontend's onboarding redirect to
-    /choose-plan. Note this check must run *before* the billing_status check
-    below, to keep byte-for-byte the same "unlimited, status not even
-    consulted" behavior a plan-less org has always had.
-
-    Non-raising so background workers (campaign_dialer.py,
-    whatsapp_dispatcher.py) can skip claiming a target without an
-    HTTPException to catch; `enforce_plan_limit` below is the HTTP-route
-    wrapper around this same check.
-    """
+async def is_org_license_active(db: AsyncSession, org_id: UUID) -> bool:
+    """False if this org's license is suspended or expired — the platform's
+    own operating org is always exempt (see `_org_is_platform_admin_owned`),
+    same as it always was for plan-limit enforcement. Non-raising so
+    background workers can check without an HTTPException to catch;
+    `enforce_org_license` below is the HTTP-route wrapper around this."""
     from apps.api.db.models.org import Org
-    from apps.api.db.models.plan import Plan
-
-    if await _org_is_platform_admin_owned(db, org_id):
-        return False
-
-    result = await db.execute(
-        select(Plan, Org).outerjoin(Plan, Org.plan_id == Plan.id).where(Org.id == org_id)
-    )
-    row = result.first()
-    if row is None:
-        return False
-    plan, target_org = row
-    if plan is None and target_org.resource_limits is None:
-        return False
-    if target_org.billing_status in _BLOCKED_BILLING_STATUSES:
-        return True
-    limit = effective_limits(target_org, plan).get(metric)
-    return limit is not None and current_count >= limit
-
-
-async def enforce_plan_limit(
-    db: AsyncSession,
-    org_id: UUID,
-    metric: str,
-    current_count: float,
-    *,
-    message: str = "Credit limit reached. Please upgrade your plan to continue.",
-) -> None:
-    """Raise 402 if the org has reached its plan limit for `metric` — see
-    `is_over_plan_limit` for the underlying check. `message` lets a caller
-    give a metric-appropriate reason ("credit" reads oddly for e.g. a user
-    seat cap)."""
-    if await is_over_plan_limit(db, org_id, metric, current_count):
-        raise HTTPException(status_code=402, detail=message)
-
-
-async def is_plan_feature_enabled(db: AsyncSession, org_id: UUID, feature: str) -> bool:
-    """True if the org's plan includes boolean feature flag `feature` (a key
-    in `Plan.limits`, e.g. "automated_followups"). Orgs with no plan yet or
-    owned by the platform admin are treated as having every feature — same
-    defensive-backstop reasoning as `is_over_plan_limit` (the frontend's
-    onboarding/upgrade gates are the primary enforcement for those cases).
-    """
-    from apps.api.db.models.org import Org
-    from apps.api.db.models.plan import Plan
 
     if await _org_is_platform_admin_owned(db, org_id):
         return True
 
-    result = await db.execute(
-        select(Plan).join(Org, Org.plan_id == Plan.id).where(Org.id == org_id)
-    )
-    plan = result.scalar_one_or_none()
-    if plan is None:
+    result = await db.execute(select(Org.license_status).where(Org.id == org_id))
+    license_status = result.scalar_one_or_none()
+    if license_status is None:
         return True
-    return plan.limits.get(feature) is True
+    return license_status == "active"
 
 
-async def enforce_plan_feature(db: AsyncSession, org_id: UUID, feature: str) -> None:
-    """Raise 403 if the org's plan doesn't include `feature` — a UI-hidden
-    page redirects an ordinary click, but the API must reject the same
-    request made directly (curl, a stale tab, a bookmarked URL)."""
-    if not await is_plan_feature_enabled(db, org_id, feature):
+async def enforce_org_license(db: AsyncSession, org_id: UUID) -> None:
+    """Raise 403 if `org_id`'s license is suspended or expired. Wired into
+    `resolve_request_org_id` below so it runs on every org-scoped request
+    without per-route changes."""
+    if not await is_org_license_active(db, org_id):
+        from apps.api.db.models.org import Org
+
+        result = await db.execute(select(Org.license_status).where(Org.id == org_id))
+        license_status = result.scalar_one()
         raise HTTPException(
             status_code=403,
-            detail="Your plan doesn't include this feature. Upgrade to unlock it.",
+            detail={
+                "error": "license_inactive",
+                "status": license_status,
+                "message": "Your organization's license is inactive. Contact the platform admin.",
+            },
         )
 
 
@@ -344,6 +261,7 @@ async def verify_platform_team_member(
 
 
 async def resolve_request_org_id(
+    db: DbDep,
     membership_org_id: SessionMembershipOrgIdDep,
     x_admin_token: str | None = Header(None),
 ) -> UUID:
@@ -361,9 +279,9 @@ async def resolve_request_org_id(
     access rather than attributing that traffic to some arbitrary org.
     """
     _ = x_admin_token  # validity already enforced by verify_admin_or_session
-    if membership_org_id is not None:
-        return membership_org_id
-    return UUID(settings.default_org_id)
+    org_id = membership_org_id if membership_org_id is not None else UUID(settings.default_org_id)
+    await enforce_org_license(db, org_id)
+    return org_id
 
 
 RequestOrgDep = Annotated[UUID, Depends(resolve_request_org_id)]

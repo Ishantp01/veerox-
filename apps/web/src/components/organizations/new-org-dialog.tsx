@@ -16,7 +16,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { PhoneNumberListField, type PhoneNumberEntry } from "./phone-number-list-field";
-import { useProvisionOrg, type ProvisionOrgResult } from "@/lib/hooks/useAdminOrgs";
+import { useIssueLicense, useProvisionOrg, type ProvisionOrgResult } from "@/lib/hooks/useAdminOrgs";
 import { E164_REGEX, E164_MESSAGE } from "@/lib/phone";
 
 const EMPTY = {
@@ -68,8 +68,10 @@ export function NewOrgDialog() {
   const [whatsappNumbers, setWhatsappNumbers] = useState<PhoneNumberEntry[]>([]);
   const [credentials, setCredentials] = useState(EMPTY_CREDENTIALS);
   const [credentialsOpen, setCredentialsOpen] = useState(false);
+  const [licenseDays, setLicenseDays] = useState("30");
   const [result, setResult] = useState<ProvisionOrgResult | null>(null);
   const provisionOrg = useProvisionOrg();
+  const issueLicense = useIssueLicense();
   const { toast } = useToast();
 
   function validateField(key: keyof typeof EMPTY, nextForm: typeof EMPTY) {
@@ -126,6 +128,20 @@ export function NewOrgDialog() {
         onSuccess: (res) => {
           setResult(res);
           toast({ title: "Organization created", variant: "success" });
+          const parsedDays = Number(licenseDays);
+          if (Number.isFinite(parsedDays) && parsedDays > 0) {
+            issueLicense.mutate(
+              { orgId: res.org_id, days: parsedDays },
+              {
+                onError: (err) =>
+                  toast({
+                    title: "Organization created, but the license couldn't be issued",
+                    description: `${err.message} — issue it from the Organizations page instead.`,
+                    variant: "error",
+                  }),
+              }
+            );
+          }
         },
         onError: (err) =>
           toast({ title: "Could not create organization", description: err.message, variant: "error" }),
@@ -143,8 +159,10 @@ export function NewOrgDialog() {
       setWhatsappNumbers([]);
       setCredentials(EMPTY_CREDENTIALS);
       setCredentialsOpen(false);
+      setLicenseDays("30");
       setResult(null);
       provisionOrg.reset();
+      issueLicense.reset();
     }
   }
 
@@ -181,6 +199,14 @@ export function NewOrgDialog() {
                   {result.login_token}
                 </code>
               </div>
+              {issueLicense.isSuccess && (
+                <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                  License issued — active for {licenseDays} days.
+                </p>
+              )}
+              {issueLicense.isPending && (
+                <p className="text-xs text-slate-500 dark:text-slate-400">Issuing license…</p>
+              )}
             </DialogBody>
             <DialogFooter>
               <Button variant="primary" onClick={() => handleClose(false)}>
@@ -261,6 +287,21 @@ export function NewOrgDialog() {
                     {fieldErrors.mobile}
                   </p>
                 )}
+              </div>
+              <div>
+                <Label htmlFor="license-days">License duration (days)</Label>
+                <Input
+                  id="license-days"
+                  type="number"
+                  min={1}
+                  value={licenseDays}
+                  onChange={(e) => setLicenseDays(e.target.value)}
+                  placeholder="30"
+                />
+                <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+                  Issues an active license good for this many days from now. Leave blank to skip —
+                  the org can still be used, and a license issued later from the Organizations page.
+                </p>
               </div>
               <div className="rounded-lg border border-slate-200 dark:border-slate-700">
                 <button

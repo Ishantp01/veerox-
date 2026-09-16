@@ -20,7 +20,6 @@ import {
 } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
 import { downloadCsv } from "@/lib/download-csv";
-import { useBillingStatus } from "@/lib/hooks/useBilling";
 import { useClientPagination } from "@/lib/hooks";
 import { useRemoveMember, useTeamMembers, useUpdateMember, type TeamMember } from "@/lib/hooks/useTeam";
 import { InviteMemberDialog } from "@/components/team/invite-member-dialog";
@@ -46,35 +45,16 @@ const ROLE_BADGE: Record<TeamMember["role"], "voice" | "neutral"> = {
 export default function TeamPage() {
   const { user } = useAuth();
   const { data, isLoading, isError, error, refetch } = useTeamMembers();
-  const billing = useBillingStatus();
   const updateMember = useUpdateMember();
   const removeMember = useRemoveMember();
   const { toast } = useToast();
   const confirm = useConfirm();
-  // The org owner is the account that bought the plan, not a "team member"
-  // — hidden from this list entirely (and, per apps/api/routers/team.py's
-  // invite_member, exempt from the plan's max_seats count).
+  // The org owner is the account the org was provisioned under, not a "team
+  // member" — hidden from this list entirely.
   const members = (data ?? []).filter((m) => !m.is_owner);
   const pager = useClientPagination(members, 20);
   const isAdmin = user?.role === "admin";
   const [exporting, setExporting] = useState(false);
-
-  // The platform operator's own org (any member with is_superuser=True) is
-  // exempt from every plan limit, max_seats included — see deps.py's
-  // `_org_is_platform_admin_owned`. Mirror that here so a superuser doesn't
-  // hit a UI-only "limit reached" block the backend would never enforce.
-  const isSuperuser = user?.is_superuser === true;
-  const maxMembers = billing.data?.plan?.limits.max_seats;
-  // A limit of 0 means the plan never included team members at all (same
-  // convention as the billing page's usage bars / choose-plan-cards) — the
-  // API still refuses any invite either way (apps/api/routers/team.py), but
-  // the header shouldn't advertise a confusing "0 / 0 team members used".
-  const hasSeatLimit = !isSuperuser && typeof maxMembers === "number" && maxMembers > 0;
-  const memberLimitReached =
-    !isSuperuser &&
-    typeof maxMembers === "number" &&
-    billing.data !== undefined &&
-    members.length >= maxMembers;
 
   async function handleExport() {
     setExporting(true);
@@ -119,18 +99,14 @@ export default function TeamPage() {
     <div className="mx-auto max-w-5xl">
       <PageHeader
         title="Team"
-        description={
-          hasSeatLimit
-            ? `${members.length} / ${maxMembers} team members used`
-            : "Everyone with access to your organization's dashboard."
-        }
+        description="Everyone with access to your organization's dashboard."
         action={
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={handleExport} loading={exporting}>
               <Download size={14} aria-hidden />
               Export
             </Button>
-            {isAdmin && <InviteMemberDialog disabled={memberLimitReached} />}
+            {isAdmin && <InviteMemberDialog />}
           </div>
         }
       />

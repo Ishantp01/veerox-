@@ -1,14 +1,16 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { Building2, Download } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, Building2, Download, Search } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import {
   Badge,
   Button,
   EmptyState,
+  Input,
   SkeletonRows,
   Table,
   TableCell,
@@ -22,15 +24,16 @@ import { downloadCsv } from "@/lib/download-csv";
 import { NewOrgDialog } from "@/components/organizations/new-org-dialog";
 import { EditOrgDialog } from "@/components/organizations/edit-org-dialog";
 import { RegenerateTokenDialog } from "@/components/organizations/regenerate-token-dialog";
-import { PaymentHistoryDialog } from "@/components/organizations/payment-history-dialog";
+import { ManageLicenseDialog } from "@/components/organizations/manage-license-dialog";
+import { QuickRenewButton } from "@/components/organizations/quick-renew-button";
 import { DeleteOrgDialog } from "@/components/organizations/delete-org-dialog";
+import type { AdminOrg } from "@/lib/hooks/useAdminOrgs";
+import { EXPIRING_SOON_DAYS, isExpiringSoon } from "@/lib/license-expiry";
 
-const STATUS_BADGE: Record<string, "success" | "danger" | "neutral"> = {
+const STATUS_BADGE: Record<AdminOrg["license_status"], "success" | "danger" | "neutral"> = {
   active: "success",
-  trialing: "neutral",
-  past_due: "danger",
-  canceled: "danger",
-  incomplete: "danger",
+  suspended: "danger",
+  expired: "danger",
 };
 
 /**
@@ -44,15 +47,32 @@ export default function OrganizationsPage() {
   const { user, status } = useAuth();
   const router = useRouter();
   const { data, isLoading, isError, error, refetch } = useAdminOrgs();
-  const orgs = data ?? [];
+  const allOrgs = useMemo(() => data ?? [], [data]);
   const { toast } = useToast();
   const [exporting, setExporting] = useState(false);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     if (status === "authenticated" && !user?.is_superuser) {
       router.replace("/");
     }
   }, [status, user, router]);
+
+  const expiringSoonCount = useMemo(
+    () => allOrgs.filter((org) => isExpiringSoon(org, EXPIRING_SOON_DAYS)).length,
+    [allOrgs]
+  );
+
+  const orgs = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return allOrgs;
+    return allOrgs.filter(
+      (org) =>
+        org.name.toLowerCase().includes(q) ||
+        (org.admin_name ?? "").toLowerCase().includes(q) ||
+        (org.admin_email ?? "").toLowerCase().includes(q)
+    );
+  }, [allOrgs, query]);
 
   if (!user?.is_superuser) return null;
 
@@ -80,6 +100,17 @@ export default function OrganizationsPage() {
         description="Every organization on the platform — visible only to platform admins."
         action={
           <div className="flex items-center gap-2">
+            <Link href="/organizations/expiring">
+              <Button variant="outline" size="sm">
+                <AlertTriangle size={14} aria-hidden />
+                Expiring soon
+                {expiringSoonCount > 0 && (
+                  <Badge variant="danger" className="ml-1">
+                    {expiringSoonCount}
+                  </Badge>
+                )}
+              </Button>
+            </Link>
             <Button variant="outline" size="sm" onClick={handleExport} loading={exporting}>
               {!exporting && <Download size={14} aria-hidden />}
               Export
@@ -88,6 +119,23 @@ export default function OrganizationsPage() {
           </div>
         }
       />
+
+      <div className="mb-4 max-w-sm">
+        <div className="relative">
+          <Search
+            size={15}
+            aria-hidden
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+          />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by organization, admin name, or email"
+            className="pl-9"
+            aria-label="Search organizations"
+          />
+        </div>
+      </div>
 
       <QueryBoundary
         isLoading={isLoading}
@@ -105,7 +153,15 @@ export default function OrganizationsPage() {
           </div>
         }
         emptyFallback={
-          <EmptyState icon={Building2} title="No organizations yet" description="Orgs appear here as they sign up." />
+          query.trim() ? (
+            <EmptyState
+              icon={Search}
+              title="No matching organizations"
+              description={`Nothing matches "${query.trim()}" — try a different name or email.`}
+            />
+          ) : (
+            <EmptyState icon={Building2} title="No organizations yet" description="Orgs appear here as they sign up." />
+          )
         }
       >
         <div
@@ -118,8 +174,8 @@ export default function OrganizationsPage() {
                 <TableHeader>Organization</TableHeader>
                 <TableHeader>Admin</TableHeader>
                 <TableHeader>Email</TableHeader>
-                <TableHeader>Plan</TableHeader>
-                <TableHeader>Status</TableHeader>
+                <TableHeader>License</TableHeader>
+                <TableHeader>Expires</TableHeader>
                 <TableHeader>Team members</TableHeader>
                 <TableHeader>Created</TableHeader>
                 <TableHeader className="text-right">Actions</TableHeader>
@@ -133,17 +189,18 @@ export default function OrganizationsPage() {
                   </TableCell>
                   <TableCell>{org.admin_name ?? "—"}</TableCell>
                   <TableCell>{org.admin_email ?? "—"}</TableCell>
-                  <TableCell>{org.plan_code ?? "No plan"}</TableCell>
                   <TableCell>
-                    <Badge variant={STATUS_BADGE[org.billing_status] ?? "neutral"}>
-                      {org.billing_status.replace("_", " ")}
-                    </Badge>
+                    <Badge variant={STATUS_BADGE[org.license_status]}>{org.license_status}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    {org.license_expires_at ? new Date(org.license_expires_at).toLocaleDateString() : "—"}
                   </TableCell>
                   <TableCell>{org.seat_count}</TableCell>
                   <TableCell>{new Date(org.created_at).toLocaleDateString()}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <PaymentHistoryDialog orgId={org.id} orgName={org.name} />
+                      <QuickRenewButton org={org} />
+                      <ManageLicenseDialog org={org} />
                       <EditOrgDialog org={org} />
                       <RegenerateTokenDialog orgId={org.id} orgName={org.name} />
                       <DeleteOrgDialog orgId={org.id} orgName={org.name} />

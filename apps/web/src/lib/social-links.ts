@@ -1,9 +1,9 @@
 import { FaFacebook, FaGlobe, FaInstagram, FaLinkedin, FaWhatsapp, FaXTwitter, FaYoutube } from "react-icons/fa6";
 import type { IconType } from "react-icons";
 
-// Fixed key -> icon/label mapping matching PlatformSettingsPanel's
-// SOCIAL_FIELDS (apps/web/src/components/billing/platform-settings-panel.tsx)
-// — shared by the topbar icon row so it stays in sync with what the platform
+// Fixed key -> icon/label mapping matching SocialLinksPanel's SOCIAL_FIELDS
+// (apps/web/src/components/settings/social-links-panel.tsx) — shared by the
+// topbar icon row so it stays in sync with what the platform
 // admin configures. Any key outside this set is silently ignored rather than
 // crashing the UI. Real brand marks via react-icons (lucide-react dropped
 // brand-specific icons).

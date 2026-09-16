@@ -85,13 +85,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback((session: SessionInfo) => {
-    // Any cached query (billing status, leads, ...) belongs to whichever
-    // account was previously signed in on this browser — e.g. a prior org's
-    // `billing.data.plan` sitting in the react-query cache would let the
-    // dashboard layout briefly render before its refetch corrects to this
-    // org's actual (planless) status, flashing the dashboard for a couple
-    // seconds before bouncing to /choose-plan. Clearing on every login
-    // guarantees every query starts genuinely loading under the new identity.
+    // Any cached query (leads, conversations, ...) belongs to whichever
+    // account was previously signed in on this browser. Clearing on every
+    // login guarantees every query starts genuinely loading under the new
+    // identity, rather than briefly rendering with stale data from a
+    // different org.
     queryClient.clear();
     localStorage.setItem(SESSION_TOKEN_KEY, session.token);
     localStorage.setItem(AUTH_MODE_KEY, "session");
@@ -104,6 +102,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       full_name: session.full_name,
       is_superuser: session.is_superuser,
       is_platform_org: session.is_platform_org,
+      license_status: session.license_status,
+      license_expires_at: session.license_expires_at,
     });
     setStatus("authenticated");
   }, [queryClient]);

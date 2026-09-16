@@ -25,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -35,9 +34,6 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from apps.api.channels.voice import adapter as voice_adapter
-from apps.api.channels.voice import plivo_client as voice_plivo
-from apps.api.channels.voice import twilio_client as voice_twilio
-from apps.api.core.org_credentials import resolve_plivo_credentials, resolve_twilio_credentials
 from apps.api.config import settings
 from apps.api.core.prompts import (
     OUTBOUND_CALL_PROMPT,
@@ -46,7 +42,6 @@ from apps.api.core.prompts import (
     current_datetime_block,
 )
 from apps.api.core.org_openai_key import resolve_openai_api_key
-from apps.api.core.usage import get_credit_usage
 from apps.api.core.whatsapp_assets import asset_catalog_prompt_block
 from apps.api.core.whatsapp_template_catalog import (
     template_catalog_prompt_block as wa_template_catalog_prompt_block,
@@ -56,7 +51,6 @@ from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
 from apps.api.db.models.script import Script
 from apps.api.db.session import AsyncSessionLocal
-from apps.api.deps import is_over_plan_limit
 from apps.api.redis_client import record_error
 
 logger = structlog.get_logger(__name__)
@@ -304,67 +298,6 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
     return {"type": "session.update", "session": session}
 
 
-_USAGE_CHECK_INTERVAL_SECS = 20
-
-
-async def _watch_usage_limit(
-    org_id: UUID, call_started_at: datetime, oai: Any, call_uuid: str, provider: str, log: Any
-) -> None:
-    """Poll the org's plan usage while this call is live and force-hang-up
-    the instant it crosses ``max_call_minutes``.
-
-    ``core.usage.get_credit_usage`` only sums *ended* conversations, so it
-    can't see this call's own in-progress duration — add elapsed wall-clock
-    time for the current call on top of it, otherwise a single long call
-    could run well past the limit before anything noticed.
-    """
-    log.info("voice_usage_watcher_started", org_id=str(org_id))
-    while True:
-        await asyncio.sleep(_USAGE_CHECK_INTERVAL_SECS)
-        elapsed_minutes = (datetime.now(UTC) - call_started_at).total_seconds() / 60.0
-        async with AsyncSessionLocal() as db:
-            usage = await get_credit_usage(db, org_id)
-            over_limit = await is_over_plan_limit(
-                db, org_id, "max_call_minutes", usage.call_minutes + elapsed_minutes
-            )
-        log.info(
-            "voice_usage_watcher_check",
-            call_minutes=usage.call_minutes,
-            elapsed_minutes=elapsed_minutes,
-            over_limit=over_limit,
-        )
-        if over_limit:
-            log.info("voice_call_limit_reached", call_uuid=call_uuid)
-            try:
-                await oai.send(
-                    json.dumps(
-                        {
-                            "type": "response.create",
-                            "response": {
-                                "instructions": (
-                                    "Apologize briefly, say you have to end the "
-                                    "call now, then stop."
-                                ),
-                            },
-                        }
-                    )
-                )
-                await asyncio.sleep(4)
-            except Exception:  # noqa: BLE001
-                pass
-            async with AsyncSessionLocal() as db:
-                org_record = await db.get(Org, org_id)
-            if provider == "twilio":
-                twilio_creds = resolve_twilio_credentials(org_record)
-                if twilio_creds is not None:
-                    await voice_twilio.hangup_call(twilio_creds, call_uuid)
-            else:
-                plivo_creds = resolve_plivo_credentials(org_record)
-                if plivo_creds is not None:
-                    await voice_plivo.hangup_call(plivo_creds, call_uuid)
-            return
-
-
 @router.websocket("/voice/stream")
 async def voice_stream(ws: WebSocket) -> None:
     """Bridge a single Plivo/Twilio call to an OpenAI Realtime session."""
@@ -581,19 +514,10 @@ async def voice_stream(ws: WebSocket) -> None:
                 except Exception as exc:  # noqa: BLE001
                     log.warning("pump_openai_error", error=str(exc))
 
-            call_started_at = datetime.now(UTC)
             tasks = [
                 asyncio.create_task(pump_call_to_openai()),
                 asyncio.create_task(pump_openai_to_call()),
             ]
-            if call_uuid and state.org_id:
-                tasks.append(
-                    asyncio.create_task(
-                        _watch_usage_limit(
-                            state.org_id, call_started_at, oai, call_uuid, provider, log
-                        )
-                    )
-                )
             _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()

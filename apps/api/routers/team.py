@@ -33,7 +33,6 @@ from apps.api.deps import (
     CurrentUserDep,
     DbDep,
     RedisDep,
-    enforce_plan_limit,
     require_role,
 )
 from apps.api.schemas.team import (
@@ -96,7 +95,7 @@ async def export_members_xlsx(org: OrgMemberDep, db: DbDep) -> StreamingResponse
     for col, width in (("A", 20), ("B", 28), ("C", 16), ("D", 10), ("E", 8), ("F", 18), ("G", 18)):
         sheet.column_dimensions[col].width = width
     for account_user, membership in result.all():
-        # The org owner (the account that bought the plan) isn't a "team
+        # The org owner (the account the org was provisioned under) isn't a "team
         # member" — GET /team/members' own JSON response leaves it in, but
         # the dashboard's Team page filters it out of the list it renders
         # (team/page.tsx: `!m.is_owner`); this export should match what the
@@ -146,22 +145,6 @@ async def invite_member(
     role = payload.role
     if role not in ORG_MEMBERSHIP_ROLES:
         raise HTTPException(status_code=400, detail=f"role must be one of {ORG_MEMBERSHIP_ROLES}")
-
-    # The org owner (provisioned via /auth/provision-org, invited_by_id is
-    # null) doesn't count against max_seats — the limit is how many
-    # teammates the owner can invite, not the org's total headcount.
-    invited_member_count = await db.execute(
-        select(func.count())
-        .select_from(OrgMembership)
-        .where(OrgMembership.org_id == org.org_id, OrgMembership.invited_by_id.is_not(None))
-    )
-    await enforce_plan_limit(
-        db,
-        org.org_id,
-        "max_seats",
-        invited_member_count.scalar_one(),
-        message="You've reached your plan's team member limit. Upgrade your plan to add more.",
-    )
 
     existing_result = await db.execute(select(AccountUser).where(AccountUser.email == payload.email))
     account_user = existing_result.scalar_one_or_none()
