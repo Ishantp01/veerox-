@@ -7,13 +7,12 @@ import { Download, FileSpreadsheet, Search, Upload, Users } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { LeadTable } from "@/components/leads/lead-table";
-import { LEAD_QUALIFICATION_LABELS } from "@/components/leads/qualification-badge";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
 import { Button, EmptyState, Input, Pagination, Select, SkeletonRows, Table, useToast } from "@/components/ui";
 import { SESSION_TOKEN_KEY } from "@/lib/api";
 import { downloadCsv } from "@/lib/download-csv";
 import { useLeads } from "@/lib/hooks";
-import type { LeadQualificationStatus, LeadStatus } from "@/lib/types";
+import type { LeadStatus } from "@/lib/types";
 
 interface ImportLeadsResult {
   campaign: { name: string; channel: string };
@@ -27,21 +26,6 @@ type LeadImportStartMode = "draft" | "now" | "scheduled";
 
 const INTENT_SEARCH_DEBOUNCE_MS = 300;
 const LEADS_PAGE_SIZE = 20;
-
-// status and qualification_status are independently editable (the lead
-// table's Review Stage dropdown writes qualification_status only, never
-// touching status — see lead-table.tsx) — a lead marked "Qualified" there
-// commonly still has status "new"/"contacted". The plain "Qualified" option
-// in the status group above (status:qualified) covers both: the backend's
-// _lead_status_clause ORs in qualification_status="qualified" too
-// (apps/api/routers/admin.py), so there's no separate "Qualified" entry
-// here — only "in_review"/"disqualified" have no pipeline-status
-// equivalent and need their own entry (rendered under a "— Review Stage —"
-// divider below so they don't read as more pipeline stages).
-const EXTRA_QUALIFICATION_FILTER_OPTIONS: LeadQualificationStatus[] = [
-  "in_review",
-  "disqualified",
-];
 
 async function downloadLeadsCsv(channel?: "voice" | "whatsapp", search?: string): Promise<void> {
   const params = new URLSearchParams();
@@ -112,19 +96,9 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
   const initialChannelParam = searchParams.get("channel");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  // Combined status/qualification filter — a single dropdown that reads from
-  // whichever field the chosen option belongs to. Encoded as "status:<value>"
-  // or "qual:<value>" so one Select can drive two separate Lead fields
-  // without showing two near-duplicate dropdowns (both have a "Qualified"
-  // option). Only the qualification stages not already implied by a status
-  // value are offered here — "Unqualified" ~= "New" and "Qualified" already
-  // exists as a status.
   const [stageFilter, setStageFilter] = useState("");
   const status = stageFilter.startsWith("status:")
     ? (stageFilter.slice("status:".length) as LeadStatus)
-    : "";
-  const qualificationFilter = stageFilter.startsWith("qual:")
-    ? (stageFilter.slice("qual:".length) as LeadQualificationStatus)
     : "";
   const [channelFilter, setChannelFilter] = useState<"voice" | "whatsapp" | "">(
     initialChannelParam === "voice" || initialChannelParam === "whatsapp" ? initialChannelParam : ""
@@ -153,12 +127,11 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
   const [page, setPage] = useState(0);
   useEffect(() => {
     setPage(0);
-  }, [effectiveChannel, status, qualificationFilter, search]);
+  }, [effectiveChannel, status, search]);
 
   const filters = {
     channel: effectiveChannel,
     ...(status ? { status } : {}),
-    ...(qualificationFilter ? { qualification_status: qualificationFilter } : {}),
     ...(search ? { search } : {}),
     limit: LEADS_PAGE_SIZE,
     offset: page * LEADS_PAGE_SIZE,
@@ -258,25 +231,12 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
             <Select
               value={stageFilter}
               onChange={(v) => setStageFilter(v)}
-              aria-label="Filter leads by pipeline status or review stage"
-              title="Status = pipeline stage. Review stage = a separate rep-driven review, independent of pipeline status."
+              aria-label="Filter leads by pipeline status"
             >
               <option value="">All statuses</option>
               {LEAD_STATUS_OPTIONS.map((s) => (
                 <option key={s} value={`status:${s}`}>
                   {LEAD_STATUS_LABELS[s]}
-                </option>
-              ))}
-              {/* Non-selectable section label — the options below filter by the
-                  separate qualification_status field, not the pipeline status
-                  above, so they're visually grouped apart rather than reading
-                  as more pipeline stages. */}
-              <option value="__review_stage_divider__" disabled>
-                — Review Stage —
-              </option>
-              {EXTRA_QUALIFICATION_FILTER_OPTIONS.map((s) => (
-                <option key={s} value={`qual:${s}`}>
-                  {LEAD_QUALIFICATION_LABELS[s]}
                 </option>
               ))}
             </Select>

@@ -9,13 +9,8 @@ import { useAuth } from "@/lib/auth-context";
 import { useBillingStatus } from "@/lib/hooks/useBilling";
 
 /**
- * Standalone, full-screen onboarding gate — no sidebar/topbar (lives in the
- * (auth) route group precisely to opt out of the dashboard shell, same as
- * /login). A freshly provisioned org has no plan (`Org.plan_id` is null —
- * see apps/api/routers/auth.py's provision_org) and gets redirected here by
- * (dashboard)/layout.tsx's needsPlan check on every other route, so this is
- * the only thing they can reach until they pick a plan — no dashboard chrome
- * or feature pages peeking through in the meantime.
+ * Standalone, full-screen onboarding gate. A freshly provisioned org has no
+ * plan and gets redirected here by the dashboard layout until it picks one.
  */
 export default function ChoosePlanPage() {
   const router = useRouter();
@@ -29,39 +24,38 @@ export default function ChoosePlanPage() {
       router.replace("/login");
       return;
     }
-    // Already has a plan (or is the unlimited platform-admin org) — nothing
-    // to gate on, send them into the real dashboard.
     if (status === "authenticated" && (user?.is_superuser || (billing.data && !needsPlan))) {
       router.replace("/");
     }
   }, [status, user, billing.data, needsPlan, router]);
 
-  // Auth/billing status is still resolving, or we're mid-redirect (plan
-  // already assigned / signing out) — a brief spinner instead of a blank
-  // canvas, since this gate can be the very first thing a fresh org sees.
   if (status !== "authenticated" || billing.isLoading || !needsPlan) {
     return (
-      <div className="flex flex-col items-center gap-3 text-slate-400">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-slate-50 px-6 text-slate-500 dark:bg-slate-950 dark:text-slate-400">
         <Spinner size={22} />
-        <p className="text-sm">Loading your account…</p>
+        <p className="text-sm">Loading your account...</p>
       </div>
     );
   }
 
   return (
-    <div className="w-full max-w-3xl">
-      <div className="flex flex-col items-center mb-8 text-center">
-        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 text-white mb-4 shadow-glow-lg">
-          <CreditCard size={24} aria-hidden />
+    <main className="min-h-screen bg-slate-50 px-4 py-10 text-slate-900 dark:bg-slate-950 dark:text-slate-100 sm:px-6 lg:px-8">
+      <div className="mx-auto flex w-full max-w-6xl flex-col">
+        <div className="mb-8 flex flex-col items-center text-center">
+          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 text-white shadow-glow-lg">
+            <CreditCard size={24} aria-hidden />
+          </div>
+          <h1 className="text-3xl font-extrabold tracking-tight text-slate-950 dark:text-white">
+            Choose a plan to continue
+          </h1>
+          <p className="mt-2.5 max-w-xl text-sm leading-6 text-slate-500 dark:text-slate-400">
+            Pick any plan (the free tier works too) to unlock the dashboard. You can change or renew
+            this later from Billing.
+          </p>
         </div>
-        <h1 className="text-3xl font-extrabold text-white tracking-tight">Choose a plan to continue</h1>
-        <p className="text-sm text-slate-400 mt-2.5 max-w-md">
-          Pick any plan (the free tier works too) to unlock the dashboard — you can change or renew
-          this later from Billing.
-        </p>
-      </div>
 
-      <ChoosePlanCards onPlanActivated={() => router.replace("/")} />
-    </div>
+        <ChoosePlanCards onPlanActivated={() => router.replace("/")} />
+      </div>
+    </main>
   );
 }
