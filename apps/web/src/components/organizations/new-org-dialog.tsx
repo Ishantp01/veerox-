@@ -427,7 +427,7 @@ export function NewOrgDialog() {
                           }
                         />
                         <p className="mt-1.5 text-xs text-slate-500">
-                          Pick any string — this org's Meta App webhook gets registered against it
+                          Pick any string — this org&apos;s Meta App webhook gets registered against it
                           automatically once saved.
                         </p>
                       </div>
