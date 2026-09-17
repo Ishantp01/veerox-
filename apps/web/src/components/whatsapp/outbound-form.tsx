@@ -19,7 +19,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { useOutboundWhatsApp, useOrgNumbers, useTemplates } from "@/lib/hooks";
+import { useOutboundWhatsApp, useOrgNumbers, useTemplates, useWhatsappAssets } from "@/lib/hooks";
 import { ContactPicker } from "@/components/crm/contact-picker";
 import type { Contact, Template } from "@/lib/types";
 
@@ -87,6 +87,7 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
     );
   const outboundWhatsApp = useOutboundWhatsApp();
   const templates = useTemplates({ active: true });
+  const whatsappAssets = useWhatsappAssets();
   const orgNumbers = useOrgNumbers();
   const whatsappNumbers = (orgNumbers.data?.phone_numbers ?? []).filter(
     (n) => n.provider === "whatsapp",
@@ -432,9 +433,15 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
                     </Label>
                     <Input
                       id="templateHeaderParam"
+                      list="whatsapp-asset-names"
                       placeholder="Saved WhatsApp file name, or a direct https:// URL"
                       {...register("templateHeaderParam")}
                     />
+                    <datalist id="whatsapp-asset-names">
+                      {(whatsappAssets.data ?? []).map((asset) => (
+                        <option key={asset.id} value={asset.name} />
+                      ))}
+                    </datalist>
                     <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
                       Required — this template&apos;s header is a {selectedTemplate.header_type.toLowerCase()},
                       not text. Name a file already saved under WhatsApp Files, or paste a public URL.

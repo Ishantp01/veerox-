@@ -1,4 +1,4 @@
-import { FaFacebook, FaGlobe, FaInstagram, FaLinkedin, FaWhatsapp, FaXTwitter, FaYoutube } from "react-icons/fa6";
+import { FaFacebook, FaGlobe, FaGoogle, FaInstagram, FaLinkedin, FaWhatsapp, FaXTwitter, FaYoutube } from "react-icons/fa6";
 import type { IconType } from "react-icons";
 
 // Fixed key -> icon/label mapping matching SocialLinksPanel's SOCIAL_FIELDS
@@ -15,4 +15,5 @@ export const SOCIAL_META: Record<string, { label: string; Icon: IconType }> = {
   youtube: { label: "YouTube", Icon: FaYoutube },
   whatsapp: { label: "WhatsApp", Icon: FaWhatsapp },
   website: { label: "Website", Icon: FaGlobe },
+  google_business_profile: { label: "Google Business Profile", Icon: FaGoogle },
 };

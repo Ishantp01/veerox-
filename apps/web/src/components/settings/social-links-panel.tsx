@@ -15,6 +15,7 @@ const SOCIAL_FIELDS: { key: string; label: string; placeholder: string }[] = [
   { key: "youtube", label: "YouTube", placeholder: "https://youtube.com/@veerox" },
   { key: "whatsapp", label: "WhatsApp", placeholder: "https://wa.me/919999999999" },
   { key: "website", label: "Website", placeholder: "https://veerox.ai" },
+  { key: "google_business_profile", label: "Google Business Profile", placeholder: "https://g.page/r/veerox" },
 ];
 
 /**

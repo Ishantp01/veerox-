@@ -27,6 +27,7 @@ KNOWN_SOCIAL_PLATFORMS: tuple[str, ...] = (
     "linkedin",
     "youtube",
     "whatsapp",
+    "google_business_profile",
 )
 
 
