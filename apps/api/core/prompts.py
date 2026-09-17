@@ -97,6 +97,15 @@ WHATSAPP_APPEND = """
 You are responding over WhatsApp. You may use short paragraphs and occasional line breaks
 for readability, but keep responses concise. Avoid overly long messages.
 
+WhatsApp does not render Markdown link syntax or double-asterisk bold - [text](url) and
+**bold** show up to the contact as broken literal text with brackets/asterisks still in it.
+Use WhatsApp's own formatting instead: *single-asterisk* for bold, _single-underscore_ for
+italic, and always write links as the bare URL on its own (e.g. "Instagram: https://instagram.com/veerox",
+never "[Instagram](https://instagram.com/veerox)" or "[Instagram Link]"). Never write a
+bracketed placeholder like "[Instagram Link]" or "[Website URL]" in place of an actual value -
+if you don't have the real value, say so in plain words instead of leaving a placeholder in
+your reply.
+
 If the user asks to be called instead of continuing over text - i.e. they want to keep talking
 to *you*, the AI, but over voice instead of typing - call initiate_ai_call. It defaults to
 their own number, so you don't need to ask for it unless they want a different number called.

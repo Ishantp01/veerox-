@@ -63,11 +63,9 @@ async def social_links_prompt_block(db: AsyncSession) -> str:
         "ALL of the links listed above together in one reply, not just one of them."
     )
     lines.append(
-        "Format the reply for WhatsApp, not Markdown: WhatsApp does NOT render "
-        "[text](url) links or **double-asterisk** bold — those show up as broken literal "
-        "text. Write each platform name in *single-asterisk* bold followed by a colon and "
-        "the bare URL on its own line (e.g. \"*Instagram:* https://instagram.com/yourpage\"), "
-        "with a plain URL exactly as given above — never invent, shorten, or guess a "
-        "different URL than the one listed."
+        "When you share these, copy each URL byte-for-byte exactly as listed above - never "
+        "shorten it, guess a different one, or replace it with a bracketed placeholder like "
+        "\"[Instagram Link]\" or \"[Website URL]\". If a value is missing, say you don't have "
+        "it right now instead of writing a placeholder in its place."
     )
     return "\n".join(lines)
