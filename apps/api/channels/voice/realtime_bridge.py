@@ -225,9 +225,7 @@ async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | N
         template_catalog = (
             await wa_template_catalog_prompt_block(db, org_id) if org_id is not None else ""
         )
-        social_links = (
-            await social_links_prompt_block(db, org_id) if org_id is not None else ""
-        )
+        social_links = await social_links_prompt_block(db)
 
     tail = f"{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
     if catalog:

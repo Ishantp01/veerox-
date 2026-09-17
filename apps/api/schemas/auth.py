@@ -76,6 +76,12 @@ class ProvisionOrgIn(BaseModel):
     meta_whatsapp_business_account_id: str | None = None
     meta_verify_token: str | None = None
 
+    # Optional — this org's own OpenAI key, set at creation time instead of
+    # (or in addition to, if changed later) PUT /admin/settings/openai-key.
+    # Left unset, the org bills against the platform's shared key (see
+    # core/org_openai_key.py::resolve_openai_api_key).
+    openai_api_key: str | None = None
+
 
 class ForgotTokenIn(BaseModel):
     identifier: str  # email address or E.164 mobile number

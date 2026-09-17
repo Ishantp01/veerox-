@@ -36,6 +36,7 @@ const EMPTY_CREDENTIALS = {
   metaAccessToken: "",
   metaBusinessAccountId: "",
   metaVerifyToken: "",
+  openaiApiKey: "",
 };
 
 const orgSchema = z.object({
@@ -123,6 +124,7 @@ export function NewOrgDialog() {
         meta_access_token: credentials.metaAccessToken.trim() || undefined,
         meta_whatsapp_business_account_id: credentials.metaBusinessAccountId.trim() || undefined,
         meta_verify_token: credentials.metaVerifyToken.trim() || undefined,
+        openai_api_key: credentials.openaiApiKey.trim() || undefined,
       },
       {
         onSuccess: (res) => {
@@ -470,6 +472,31 @@ export function NewOrgDialog() {
                         <p className="mt-1.5 text-xs text-slate-500">
                           Pick any string — this org&apos;s Meta App webhook gets registered against it
                           automatically once saved.
+                        </p>
+                      </div>
+                    </section>
+
+                    {/* OpenAI: this org's own key so it bills against its own
+                        usage instead of the platform's shared key (see
+                        core/org_openai_key.py::resolve_openai_api_key). */}
+                    <section className="flex flex-col gap-3 rounded-md border border-slate-200 p-3 dark:border-slate-700">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        OpenAI
+                      </p>
+                      <div>
+                        <Label htmlFor="openai-api-key">API key</Label>
+                        <Input
+                          id="openai-api-key"
+                          type="password"
+                          value={credentials.openaiApiKey}
+                          onChange={(e) =>
+                            setCredentials((c) => ({ ...c, openaiApiKey: e.target.value }))
+                          }
+                          placeholder="sk-..."
+                        />
+                        <p className="mt-1.5 text-xs text-slate-500">
+                          Leave blank to use the platform&apos;s shared key — can be set or changed
+                          later from the org&apos;s own settings page.
                         </p>
                       </div>
                     </section>

@@ -169,7 +169,7 @@ async def _system_prompt_for(
     template_catalog = await wa_template_catalog_prompt_block(db, org_id)
     if template_catalog:
         prompt = f"{prompt}\n\n{template_catalog}"
-    social_links = await social_links_prompt_block(db, org_id)
+    social_links = await social_links_prompt_block(db)
     if social_links:
         prompt = f"{prompt}\n\n{social_links}"
     return prompt

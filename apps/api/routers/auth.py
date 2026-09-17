@@ -153,6 +153,8 @@ async def provision_org(
         org.meta_verify_token_encrypted = (
             encrypt_secret(payload.meta_verify_token.strip()) if payload.meta_verify_token else None
         )
+    if payload.openai_api_key:
+        org.openai_api_key_encrypted = encrypt_secret(payload.openai_api_key.strip())
     db.add(org)
     try:
         await db.flush()

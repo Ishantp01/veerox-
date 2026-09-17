@@ -51,7 +51,6 @@ export const queryKeys = {
   orgNumbers: () => ["org-numbers"] as const,
   settings: () => ["settings"] as const,
   whatsappSettings: () => ["settings", "whatsapp"] as const,
-  socialLinksSettings: () => ["settings", "social-links"] as const,
   callingSettings: () => ["settings", "calling"] as const,
   openaiKeySettings: () => ["settings", "openai-key"] as const,
   plivoCredentialsSettings: () => ["settings", "plivo-credentials"] as const,

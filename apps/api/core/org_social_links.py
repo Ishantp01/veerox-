@@ -1,22 +1,24 @@
-"""Org social/contact links — lookup + prompt helper.
+"""Platform-wide social/contact links — prompt helper.
 
 A leaf module (imports only the model), shared by both system-prompt
 builders (``core/agent.py`` and ``channels/voice/realtime_bridge.py``), so
-the agent always has the org's social links on hand and can share them when
-asked, without the org having to paste them into its script text — same
-pattern as ``core/whatsapp_assets.py``'s ``asset_catalog_prompt_block``.
+every org's agent always has the same set of social links on hand and can
+share them when asked. These are the one platform-wide set an admin manages
+from Settings → Social Links (superuser-only, ``PlatformSettings.social_links``
+— see ``routers/billing.py``'s ``/platform-settings`` and ``/social-links``),
+not a per-org setting — same pattern as ``core/whatsapp_assets.py``'s
+``asset_catalog_prompt_block`` for the prompt-block shape.
 """
 
 from __future__ import annotations
 
-from uuid import UUID
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.db.models.org import Org
+from apps.api.db.models.platform_settings import PlatformSettings
 
-# Ordered so the prompt block (and the settings form) list platforms in a
-# consistent, predictable order regardless of insertion order in the JSON.
+# Ordered so the prompt block lists platforms consistently regardless of
+# insertion order in the JSON — matches SOCIAL_FIELDS in
+# apps/web/src/components/settings/social-links-panel.tsx.
 KNOWN_SOCIAL_PLATFORMS: tuple[str, ...] = (
     "website",
     "instagram",
@@ -24,22 +26,21 @@ KNOWN_SOCIAL_PLATFORMS: tuple[str, ...] = (
     "twitter",
     "linkedin",
     "youtube",
-    "tiktok",
-    "google_maps",
+    "whatsapp",
 )
 
 
-async def load_org_social_links(db: AsyncSession, org_id: UUID) -> dict[str, str]:
-    org = await db.get(Org, org_id)
-    if org is None or not org.social_links:
+async def load_social_links(db: AsyncSession) -> dict[str, str]:
+    record = await db.get(PlatformSettings, 1)
+    if record is None or not record.social_links:
         return {}
-    return {k: v for k, v in org.social_links.items() if v and v.strip()}
+    return {k: v for k, v in record.social_links.items() if v and str(v).strip()}
 
 
-async def social_links_prompt_block(db: AsyncSession, org_id: UUID) -> str:
-    """A short system-prompt block listing the org's social links, or ``""``
-    when none are configured."""
-    links = await load_org_social_links(db, org_id)
+async def social_links_prompt_block(db: AsyncSession) -> str:
+    """A short system-prompt block listing the platform's social links, or
+    ``""`` when none are configured."""
+    links = await load_social_links(db)
     if not links:
         return ""
     lines = ["Your organization's social/contact links:"]

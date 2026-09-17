@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Bot, ChevronRight, KeyRound, Phone, Share2, Users } from "lucide-react";
+import { Bot, ChevronRight, KeyRound, Phone, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -29,8 +29,6 @@ import {
   useUpdateMetaCredentialsSettings,
   useUpdatePlivoCredentialsSettings,
   useUpdateTwilioCredentialsSettings,
-  useSocialLinksSettings,
-  useUpdateSocialLinksSettings,
   useUpdateWhatsAppSettings,
   useWhatsAppSettings,
 } from "@/lib/hooks";
@@ -217,100 +215,6 @@ function HandoffTemplatePreference() {
               <p className="mt-1 text-xs text-slate-400">
                 No active templates yet — sync or add one on the Templates page.
               </p>
-            )}
-          </div>
-        </div>
-      )}
-    </QueryBoundary>
-  );
-}
-
-// Fixed set offered in the form — matches
-// apps/api/core/org_social_links.py::KNOWN_SOCIAL_PLATFORMS so the prompt
-// block lists them in the same order. An org can still have other keys
-// saved (e.g. from an API integration) — those just won't show a labeled
-// field here.
-const SOCIAL_PLATFORMS: { key: string; label: string; placeholder: string }[] = [
-  { key: "website", label: "Website", placeholder: "https://example.com" },
-  { key: "instagram", label: "Instagram", placeholder: "https://instagram.com/yourhandle" },
-  { key: "facebook", label: "Facebook", placeholder: "https://facebook.com/yourpage" },
-  { key: "twitter", label: "Twitter / X", placeholder: "https://x.com/yourhandle" },
-  { key: "linkedin", label: "LinkedIn", placeholder: "https://linkedin.com/company/yourco" },
-  { key: "youtube", label: "YouTube", placeholder: "https://youtube.com/@yourchannel" },
-  { key: "tiktok", label: "TikTok", placeholder: "https://tiktok.com/@yourhandle" },
-  { key: "google_maps", label: "Google Maps", placeholder: "https://maps.app.goo.gl/..." },
-];
-
-/**
- * This org's social/contact links, set once here. The WhatsApp/voice agent
- * then shares the relevant link automatically whenever a contact asks for
- * it (see apps/api/core/org_social_links.py::social_links_prompt_block) —
- * no need to paste these into the script every time.
- */
-function SocialLinksSection() {
-  const settings = useSocialLinksSettings();
-  const update = useUpdateSocialLinksSettings();
-  const { toast } = useToast();
-  const [draft, setDraft] = useState<Record<string, string> | null>(null);
-
-  const saved = settings.data?.social_links ?? {};
-  const values = draft ?? saved;
-  const dirty = draft !== null;
-
-  return (
-    <QueryBoundary
-      isLoading={settings.isLoading}
-      isError={settings.isError}
-      error={settings.error}
-      onRetry={() => settings.refetch()}
-      loadingFallback={<Skeleton className="h-20 w-full rounded-xl" />}
-    >
-      {settings.data && (
-        <div className="flex max-w-md flex-col gap-3">
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Add the links you want the AI to share when a contact asks for them — leave any
-            blank to skip it.
-          </p>
-          {SOCIAL_PLATFORMS.map((p) => (
-            <div key={p.key}>
-              <Label htmlFor={`social-link-${p.key}`}>{p.label}</Label>
-              <Input
-                id={`social-link-${p.key}`}
-                value={values[p.key] ?? ""}
-                placeholder={p.placeholder}
-                onChange={(e) => setDraft({ ...values, [p.key]: e.target.value })}
-              />
-            </div>
-          ))}
-          <div className="flex gap-2">
-            <Button
-              variant="primary"
-              size="sm"
-              loading={update.isPending}
-              disabled={!dirty}
-              onClick={() => {
-                const cleaned = Object.fromEntries(
-                  Object.entries(values).filter(([, v]) => v.trim())
-                );
-                update.mutate(
-                  { social_links: cleaned },
-                  {
-                    onSuccess: () => {
-                      toast({ title: "Social links saved", variant: "success" });
-                      setDraft(null);
-                    },
-                    onError: (err) =>
-                      toast({ title: "Could not save links", description: err.message, variant: "error" }),
-                  }
-                );
-              }}
-            >
-              Save
-            </Button>
-            {dirty && (
-              <Button variant="outline" size="sm" onClick={() => setDraft(null)}>
-                Cancel
-              </Button>
             )}
           </div>
         </div>
@@ -729,15 +633,6 @@ export function SettingsView({ title, description, channel }: SettingsViewProps)
             icon={<Users size={15} aria-hidden className="text-slate-400" />}
           >
             <HandoffTemplatePreference />
-          </CollapsibleSection>
-        )}
-
-        {channel === "whatsapp" && (
-          <CollapsibleSection
-            title="Social Links"
-            icon={<Share2 size={15} aria-hidden className="text-slate-400" />}
-          >
-            <SocialLinksSection />
           </CollapsibleSection>
         )}
 

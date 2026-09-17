@@ -4,7 +4,6 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from apps.api.db.base import Base
@@ -135,12 +134,3 @@ class Org(Base):
     # match against any org's token, not one global one.
     meta_verify_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     meta_access_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # This org's social/contact links (website, instagram, facebook, etc.),
-    # keyed by platform name -> URL. Set once via PUT /admin/settings/social-links
-    # and then surfaced automatically to the WhatsApp/voice agent (see
-    # core/org_social_links.py::social_links_prompt_block, appended in
-    # core/agent.py::_system_prompt_for and
-    # channels/voice/realtime_bridge.py::_system_instructions) instead of the
-    # org having to paste them into its script text every time. NULL/empty
-    # means none configured.
-    social_links: Mapped[dict[str, str] | None] = mapped_column(JSONB, nullable=True)

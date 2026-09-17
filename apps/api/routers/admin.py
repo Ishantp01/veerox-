@@ -114,8 +114,6 @@ from apps.api.schemas.admin import (
     PromptsOut,
     ScriptIn,
     ScriptOut,
-    SocialLinksSettingsIn,
-    SocialLinksSettingsOut,
     TwilioCredentialsSettingsIn,
     TwilioCredentialsSettingsOut,
     WhatsAppSettingsIn,
@@ -2312,41 +2310,6 @@ async def update_whatsapp_settings(
     await db.commit()
     phone_number_id = await get_default_whatsapp_number_id(db, org)
     return _whatsapp_settings_out(record, phone_number_id)
-
-
-@router.get("/settings/social-links", response_model=SocialLinksSettingsOut)
-async def get_social_links_settings(
-    db: DbDep,
-    org: RequestOrgDep,
-    x_admin_token: str | None = Header(None),
-) -> SocialLinksSettingsOut:
-    """This org's social/contact links, for the settings page."""
-    record = await db.get(Org, org)
-    return SocialLinksSettingsOut(social_links=(record.social_links if record else None) or {})
-
-
-@router.put("/settings/social-links", response_model=SocialLinksSettingsOut)
-async def update_social_links_settings(
-    body: SocialLinksSettingsIn,
-    db: DbDep,
-    org: RequestOrgDep,
-    x_admin_token: str | None = Header(None),
-) -> SocialLinksSettingsOut:
-    """Replace this org's social/contact links. Set once here — the
-    WhatsApp/voice agent then shares them automatically when asked (see
-    core/org_social_links.py::social_links_prompt_block), no script edits
-    needed."""
-    record = await db.get(Org, org)
-    if record is None:
-        raise HTTPException(status_code=404, detail="Org not found")
-    cleaned = {
-        k.strip(): v.strip()
-        for k, v in body.social_links.items()
-        if k.strip() and v.strip()
-    }
-    record.social_links = cleaned or None
-    await db.commit()
-    return SocialLinksSettingsOut(social_links=cleaned)
 
 
 @router.get("/settings/calling", response_model=CallingSettingsOut)

@@ -58,6 +58,10 @@ export interface ProvisionOrgInput {
   meta_access_token?: string;
   meta_whatsapp_business_account_id?: string;
   meta_verify_token?: string;
+  // Optional — this org's own OpenAI key, set now instead of (or in
+  // addition to, if changed later) PUT /admin/settings/openai-key. Left
+  // unset, the org bills against the platform's shared key.
+  openai_api_key?: string;
 }
 
 export interface ProvisionOrgResult {

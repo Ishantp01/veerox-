@@ -11,8 +11,6 @@ import type {
   OpenAIKeySettingsInput,
   PlivoCredentialsSettings,
   PlivoCredentialsSettingsInput,
-  SocialLinksSettings,
-  SocialLinksSettingsInput,
   TwilioCredentialsSettings,
   TwilioCredentialsSettingsInput,
   WhatsAppSettings,
@@ -49,39 +47,6 @@ export function useUpdateWhatsAppSettings() {
       }),
     onSuccess: (data) => {
       queryClient.setQueryData(queryKeys.whatsappSettings(), data);
-    },
-  });
-}
-
-/**
- * This org's social/contact links. Static config — no polling; relies on
- * the default 30s staleTime.
- *
- * GET /admin/settings/social-links → SocialLinksSettings
- */
-export function useSocialLinksSettings() {
-  return useQuery<SocialLinksSettings>({
-    queryKey: queryKeys.socialLinksSettings(),
-    queryFn: () => apiFetch<SocialLinksSettings>("/admin/settings/social-links"),
-  });
-}
-
-/**
- * Replace this org's social/contact links. The WhatsApp/voice agent then
- * shares them automatically when a contact asks — no script edits needed.
- *
- * PUT /admin/settings/social-links → SocialLinksSettings
- */
-export function useUpdateSocialLinksSettings() {
-  const queryClient = useQueryClient();
-  return useMutation<SocialLinksSettings, Error, SocialLinksSettingsInput>({
-    mutationFn: (body) =>
-      apiFetch<SocialLinksSettings>("/admin/settings/social-links", {
-        method: "PUT",
-        body: JSON.stringify(body),
-      }),
-    onSuccess: (data) => {
-      queryClient.setQueryData(queryKeys.socialLinksSettings(), data);
     },
   });
 }
