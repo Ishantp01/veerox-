@@ -50,9 +50,24 @@ async def social_links_prompt_block(db: AsyncSession) -> str:
         label = platform.replace("_", " ").title()
         lines.append(f"- {label}: {links[platform]}")
     lines.append(
-        "If the contact asks for a specific platform (e.g. \"your instagram\"), share only "
-        "that one. If they ask generically for your \"social links\", \"social media\", "
-        "\"socials\", or similar without naming a platform, share ALL of the links listed "
-        "above together in one reply, not just one of them."
+        "ONLY share the links actually listed above — this is the complete, current set. If "
+        "the contact asks for a platform that is NOT listed above (e.g. Twitter, when only "
+        "Instagram and YouTube are listed), say you don't have that link to share right now "
+        "instead of guessing, inventing, or reusing a URL from memory/training data. Never "
+        "fabricate a URL for any platform, listed or not."
+    )
+    lines.append(
+        "If the contact asks for a specific platform (e.g. \"your instagram\") and it IS "
+        "listed above, share only that one. If they ask generically for your \"social "
+        "links\", \"social media\", \"socials\", or similar without naming a platform, share "
+        "ALL of the links listed above together in one reply, not just one of them."
+    )
+    lines.append(
+        "Format the reply for WhatsApp, not Markdown: WhatsApp does NOT render "
+        "[text](url) links or **double-asterisk** bold — those show up as broken literal "
+        "text. Write each platform name in *single-asterisk* bold followed by a colon and "
+        "the bare URL on its own line (e.g. \"*Instagram:* https://instagram.com/yourpage\"), "
+        "with a plain URL exactly as given above — never invent, shorten, or guess a "
+        "different URL than the one listed."
     )
     return "\n".join(lines)
