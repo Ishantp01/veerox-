@@ -240,10 +240,6 @@ async def update_org(
         setattr(org_row, field, value)
     if phone_numbers is not None:
         for entry in payload.phone_numbers or []:
-            if entry.provider == "whatsapp":
-                # WhatsApp numbers are allowed to repeat across orgs (see
-                # db/models/org_phone_number.py's partial unique index).
-                continue
             phone_number = re.sub(r"\D", "", entry.phone_number)
             number_owner_result = await db.execute(
                 select(OrgPhoneNumber.id).where(

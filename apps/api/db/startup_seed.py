@@ -47,12 +47,14 @@ async def _seed_env_phone_number(
 
     existing = (
         await db.execute(
-            select(OrgPhoneNumber).where(
+            select(OrgPhoneNumber)
+            .where(
                 OrgPhoneNumber.provider == provider,
                 OrgPhoneNumber.phone_number == phone_number,
             )
+            .limit(1)
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
     if existing is not None:
         if existing.org_id != org_id:
             logger.warning(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, func, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from apps.api.db.base import Base
@@ -61,16 +61,11 @@ class OrgPhoneNumber(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    # Scoped to plivo/twilio only — a WhatsApp phone_number_id is allowed to
-    # repeat across orgs for now (see routers/billing.py::update_org, the
-    # duplicate-check there is likewise skipped for provider="whatsapp").
     __table_args__ = (
         Index(
             "uq_org_phone_numbers_provider_number",
             "provider",
             "phone_number",
             unique=True,
-            postgresql_where=text("provider != 'whatsapp'"),
-            sqlite_where=text("provider != 'whatsapp'"),
         ),
     )
