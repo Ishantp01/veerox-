@@ -144,6 +144,7 @@ export function CampaignsView() {
   const [headerSource, setHeaderSource] = useState<TemplateParamSource>("custom");
   const [headerCustomValue, setHeaderCustomValue] = useState("");
   const [headerMediaValue, setHeaderMediaValue] = useState("");
+  const [buttonParamValues, setButtonParamValues] = useState<string[]>([]);
   const [customMessage, setCustomMessage] = useState("");
   const [scriptId, setScriptId] = useState("");
   const [phoneNumberId, setPhoneNumberId] = useState("");
@@ -191,6 +192,7 @@ export function CampaignsView() {
       setHeaderSource("custom");
       setHeaderCustomValue("");
       setHeaderMediaValue("");
+      setButtonParamValues([]);
       return;
     }
     setParamSources(template.param_labels.map(guessTemplateParamSource));
@@ -199,12 +201,20 @@ export function CampaignsView() {
     setHeaderMediaValue(isMediaHeader ? template.header_example ?? "" : "");
     setHeaderSource("custom");
     setHeaderCustomValue("");
+    const dynamic = (template.buttons ?? [])
+      .filter((b) => (b.type === "URL" && (b.url ?? "").includes("{{1}}")) || b.type === "COPY_CODE");
+    setButtonParamValues(dynamic.map(() => ""));
   }
 
   const isMediaHeaderTemplate = ["IMAGE", "VIDEO", "DOCUMENT"].includes(
     selectedTemplate?.header_type ?? ""
   );
   const hasTextHeaderParam = (selectedTemplate?.header_text ?? "").includes("{{1}}");
+  // Only buttons with a dynamic part (URL with {{1}}, or COPY_CODE) need a
+  // value at send time — same filter as outbound-form.tsx's dynamicButtons.
+  const dynamicButtons = (selectedTemplate?.buttons ?? [])
+    .map((b, index) => ({ ...b, index }))
+    .filter((b) => (b.type === "URL" && (b.url ?? "").includes("{{1}}")) || b.type === "COPY_CODE");
 
   function handleAddPreset() {
     const parsed = presetSchema.safeParse({ name: presetName, criteria_text: presetText });
@@ -326,6 +336,14 @@ export function CampaignsView() {
       : hasTextHeaderParam
         ? resolveTemplateParams(["Header"], [headerSource], [headerCustomValue])
         : undefined;
+    const templateButtonParams =
+      dynamicButtons.length > 0
+        ? dynamicButtons.map((b, i) => ({
+            index: b.index,
+            type: b.type === "COPY_CODE" ? ("copy_code" as const) : ("url" as const),
+            value: buttonParamValues[i] ?? "",
+          }))
+        : undefined;
 
     createCampaign.mutate(
       {
@@ -338,6 +356,7 @@ export function CampaignsView() {
         templateLanguage: selectedTemplate?.language,
         templateParams,
         templateHeaderParams,
+        templateButtonParams,
         customMessage: customMessage.trim() || undefined,
         scriptId: scriptId || undefined,
         phoneNumberId: phoneNumberId || undefined,
@@ -372,6 +391,7 @@ export function CampaignsView() {
           setHeaderSource("custom");
           setHeaderCustomValue("");
           setHeaderMediaValue("");
+          setButtonParamValues([]);
           setCustomMessage("");
           setScriptId("");
           setPhoneNumberId("");
@@ -866,6 +886,35 @@ export function CampaignsView() {
                 {fieldErrors.templateParams && (
                   <p className="mt-1.5 text-xs text-red-600">{fieldErrors.templateParams}</p>
                 )}
+              </div>
+            )}
+            {dynamicButtons.length > 0 && (
+              <div>
+                <Label className="mb-1.5">Button values</Label>
+                <p className="mb-1.5 text-xs text-slate-400 dark:text-slate-500">
+                  Sent the same for every contact in this upload.
+                </p>
+                <div className="flex flex-col gap-2">
+                  {dynamicButtons.map((btn, index) => {
+                    const isCopyCode = btn.type === "COPY_CODE";
+                    return (
+                      <div key={btn.index} className="flex items-center gap-2">
+                        <span className="w-28 shrink-0 text-xs text-slate-400">
+                          {isCopyCode ? "Copy code" : `"${btn.text}" URL`}
+                        </span>
+                        <Input
+                          value={buttonParamValues[index] ?? ""}
+                          onChange={(e) =>
+                            setButtonParamValues((prev) =>
+                              prev.map((v, idx) => (idx === index ? e.target.value : v))
+                            )
+                          }
+                          placeholder={isCopyCode ? "e.g. SAVE20" : "Value for the {{1}} in the URL"}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
             <div data-tour="campaign-submit">

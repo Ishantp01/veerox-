@@ -24,6 +24,10 @@ export interface FollowUpRuleCreateInput {
   template_name?: string;
   template_language?: string;
   template_params?: string[];
+  /** Value for the template header's {{1}}, or a saved WhatsApp file name / public URL for a media header. */
+  template_header_params?: string[];
+  /** Dynamic values for URL/COPY_CODE buttons, by 0-based button position. */
+  template_button_params?: { index: number; type: "url" | "copy_code"; value: string }[];
 }
 
 /** POST /follow-up-rules → FollowUpRule */

@@ -24,7 +24,7 @@ import {
   resolveTemplateParams,
   type TemplateParamSource,
 } from "@/components/whatsapp/template-param-mapper";
-import { useCreateFollowUpRule, useTemplates } from "@/lib/hooks";
+import { useCreateFollowUpRule, useTemplates, useWhatsappAssets } from "@/lib/hooks";
 import type { LeadStatus } from "@/lib/types";
 
 const ruleSchema = z.object({
@@ -32,7 +32,9 @@ const ruleSchema = z.object({
   delayHours: z.coerce.number().nonnegative("Must be zero or greater"),
 });
 
-type RuleFieldErrors = Partial<Record<"name" | "delayHours" | "messageTemplate" | "templateParams", string>>;
+type RuleFieldErrors = Partial<
+  Record<"name" | "delayHours" | "messageTemplate" | "templateParams" | "templateHeaderParam", string>
+>;
 
 export function NewFollowUpRuleDialog() {
   const [open, setOpen] = useState(false);
@@ -43,10 +45,13 @@ export function NewFollowUpRuleDialog() {
   const [templateId, setTemplateId] = useState("");
   const [paramSources, setParamSources] = useState<TemplateParamSource[]>([]);
   const [paramCustomValues, setParamCustomValues] = useState<string[]>([]);
+  const [headerParam, setHeaderParam] = useState("");
+  const [buttonParamValues, setButtonParamValues] = useState<string[]>([]);
   const [messageTemplate, setMessageTemplate] = useState("");
   const [fieldErrors, setFieldErrors] = useState<RuleFieldErrors>({});
   const createRule = useCreateFollowUpRule();
   const { toast } = useToast();
+  const whatsappAssets = useWhatsappAssets();
 
   const { data: templatesData } = useTemplates({ active: true });
   // Every Meta-approved template, including ones with {{1}}/{{2}} params —
@@ -55,6 +60,16 @@ export function NewFollowUpRuleDialog() {
   // than being hidden/disabled.
   const templates = (templatesData ?? []).filter((t) => t.meta_status === "APPROVED");
   const selectedTemplate = templates.find((t) => t.id === templateId);
+  const isMediaHeaderTemplate = ["IMAGE", "VIDEO", "DOCUMENT"].includes(
+    selectedTemplate?.header_type ?? ""
+  );
+  const hasTextHeaderParam = (selectedTemplate?.header_text ?? "").includes("{{1}}");
+  // Only buttons with a dynamic part (URL with {{1}}, or COPY_CODE) need a
+  // value at send time — quick-reply/static-URL/call buttons don't. Same
+  // filter as outbound-form.tsx's dynamicButtons.
+  const dynamicButtons = (selectedTemplate?.buttons ?? [])
+    .map((b, index) => ({ ...b, index }))
+    .filter((b) => (b.type === "URL" && (b.url ?? "").includes("{{1}}")) || b.type === "COPY_CODE");
 
   function handleTemplateChange(id: string) {
     setTemplateId(id);
@@ -62,10 +77,17 @@ export function NewFollowUpRuleDialog() {
     if (!template) {
       setParamSources([]);
       setParamCustomValues([]);
+      setHeaderParam("");
+      setButtonParamValues([]);
       return;
     }
     setParamSources(template.param_labels.map(guessTemplateParamSource));
     setParamCustomValues(template.param_labels.map(() => ""));
+    const isMediaHeader = ["IMAGE", "VIDEO", "DOCUMENT"].includes(template.header_type ?? "");
+    setHeaderParam(isMediaHeader ? template.header_example ?? "" : "");
+    const dynamic = (template.buttons ?? [])
+      .filter((b) => (b.type === "URL" && (b.url ?? "").includes("{{1}}")) || b.type === "COPY_CODE");
+    setButtonParamValues(dynamic.map(() => ""));
   }
 
   function reset() {
@@ -76,6 +98,8 @@ export function NewFollowUpRuleDialog() {
     setTemplateId("");
     setParamSources([]);
     setParamCustomValues([]);
+    setHeaderParam("");
+    setButtonParamValues([]);
     setMessageTemplate("");
     setFieldErrors({});
   }
@@ -101,6 +125,9 @@ export function NewFollowUpRuleDialog() {
     if (hasEmptyCustomParam) {
       errors.templateParams = "Fill in every custom placeholder value, or pick a different source";
     }
+    if (channel === "whatsapp" && selectedTemplate && isMediaHeaderTemplate && !headerParam.trim()) {
+      errors.templateHeaderParam = "Required — this template's header is media, not text";
+    }
     if (Object.keys(errors).length > 0 || !parsed.success) {
       setFieldErrors(errors);
       return;
@@ -109,6 +136,18 @@ export function NewFollowUpRuleDialog() {
     const templateParams =
       channel === "whatsapp" && selectedTemplate
         ? resolveTemplateParams(selectedTemplate.param_labels, paramSources, paramCustomValues)
+        : undefined;
+    const templateHeaderParams =
+      channel === "whatsapp" && selectedTemplate && headerParam.trim()
+        ? [headerParam.trim()]
+        : undefined;
+    const templateButtonParams =
+      channel === "whatsapp" && selectedTemplate && dynamicButtons.length > 0
+        ? dynamicButtons.map((b, i) => ({
+            index: b.index,
+            type: b.type === "COPY_CODE" ? ("copy_code" as const) : ("url" as const),
+            value: buttonParamValues[i] ?? "",
+          }))
         : undefined;
     createRule.mutate(
       {
@@ -119,6 +158,8 @@ export function NewFollowUpRuleDialog() {
         template_name: channel === "whatsapp" ? selectedTemplate?.name : undefined,
         template_language: channel === "whatsapp" ? selectedTemplate?.language : undefined,
         template_params: templateParams,
+        template_header_params: templateHeaderParams,
+        template_button_params: templateButtonParams,
       },
       {
         onSuccess: () => {
@@ -251,6 +292,46 @@ export function NewFollowUpRuleDialog() {
                       : "Reaches the contact even outside the 24h reply window — use this if leads matching this rule often haven't messaged you recently."}
                   </p>
                 </div>
+                {selectedTemplate?.header_type &&
+                  (isMediaHeaderTemplate ? (
+                    <div>
+                      <Label htmlFor="rule-template-header" required>
+                        Header {selectedTemplate.header_type.toLowerCase()}
+                      </Label>
+                      <Input
+                        id="rule-template-header"
+                        list="rule-whatsapp-asset-names"
+                        value={headerParam}
+                        onChange={(e) => setHeaderParam(e.target.value)}
+                        placeholder="Saved WhatsApp file name, or a direct https:// URL"
+                        aria-invalid={fieldErrors.templateHeaderParam ? true : undefined}
+                      />
+                      <datalist id="rule-whatsapp-asset-names">
+                        {(whatsappAssets.data ?? []).map((asset) => (
+                          <option key={asset.id} value={asset.name} />
+                        ))}
+                      </datalist>
+                      {fieldErrors.templateHeaderParam && (
+                        <p className="mt-1.5 text-xs text-red-600">{fieldErrors.templateHeaderParam}</p>
+                      )}
+                      <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                        Required — this template&apos;s header is a {selectedTemplate.header_type.toLowerCase()},
+                        not text. Name a file already saved under WhatsApp Files, or paste a public URL.
+                      </p>
+                    </div>
+                  ) : (
+                    hasTextHeaderParam && (
+                      <div>
+                        <Label htmlFor="rule-template-header">Header value ({`{{1}}`})</Label>
+                        <Input
+                          id="rule-template-header"
+                          value={headerParam}
+                          onChange={(e) => setHeaderParam(e.target.value)}
+                          placeholder={selectedTemplate.header_example || "Value for the header's {{1}}"}
+                        />
+                      </div>
+                    )
+                  ))}
                 {selectedTemplate && selectedTemplate.param_labels.length > 0 && (
                   <div>
                     <TemplateParamMapper
@@ -268,6 +349,32 @@ export function NewFollowUpRuleDialog() {
                     {fieldErrors.templateParams && (
                       <p className="mt-1.5 text-xs text-red-600">{fieldErrors.templateParams}</p>
                     )}
+                  </div>
+                )}
+                {dynamicButtons.length > 0 && (
+                  <div>
+                    <Label className="mb-1.5">Button values</Label>
+                    <div className="flex flex-col gap-2">
+                      {dynamicButtons.map((btn, index) => {
+                        const isCopyCode = btn.type === "COPY_CODE";
+                        return (
+                          <div key={btn.index} className="flex items-center gap-2">
+                            <span className="w-28 shrink-0 text-xs text-slate-400">
+                              {isCopyCode ? "Copy code" : `"${btn.text}" URL`}
+                            </span>
+                            <Input
+                              value={buttonParamValues[index] ?? ""}
+                              onChange={(e) =>
+                                setButtonParamValues((prev) =>
+                                  prev.map((v, idx) => (idx === index ? e.target.value : v))
+                                )
+                              }
+                              placeholder={isCopyCode ? "e.g. SAVE20" : "Value for the {{1}} in the URL"}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
                 <div>

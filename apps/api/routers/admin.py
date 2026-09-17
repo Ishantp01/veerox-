@@ -25,6 +25,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from sqlalchemy import String, case, cast, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,6 +111,7 @@ from apps.api.schemas.admin import (
     OrgNumbersOut,
     OutboundWhatsappIn,
     OutboundWhatsappOut,
+    TemplateButtonSendParam,
     PlivoCredentialsSettingsIn,
     PlivoCredentialsSettingsOut,
     PromptsOut,
@@ -1229,6 +1231,26 @@ def _parse_template_params_form(raw: str | None) -> list[str] | None:
     return parsed
 
 
+def _parse_template_button_params_form(raw: str | None) -> list[dict] | None:
+    """Decode the JSON-encoded ``template_button_params`` Form field (a list
+    of ``{"index", "type", "value"}`` objects — see
+    ``CallCampaign.template_button_params``), same convention as
+    ``_parse_template_params_form`` above."""
+    error_detail = "template_button_params must be a JSON array of {index, type, value} objects"
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=error_detail) from exc
+    if not isinstance(parsed, list):
+        raise HTTPException(status_code=400, detail=error_detail)
+    try:
+        return [TemplateButtonSendParam.model_validate(item).model_dump() for item in parsed]
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=error_detail) from exc
+
+
 def _decode_csv_bytes(raw: bytes) -> str:
     """Best-effort decode of an uploaded CSV's raw bytes.
 
@@ -1571,6 +1593,7 @@ async def _create_campaign_from_rows(
     template_language: str | None = None,
     template_params: list[str] | None = None,
     template_header_params: list[str] | None = None,
+    template_button_params: list[dict] | None = None,
     custom_message: str | None = None,
     script_id: UUID | None = None,
     phone_number_id: UUID | None = None,
@@ -1621,6 +1644,7 @@ async def _create_campaign_from_rows(
         template_language=template_language,
         template_params=template_params,
         template_header_params=template_header_params,
+        template_button_params=template_button_params,
         custom_message=custom_message,
         script_id=script_id,
         phone_number_id=phone_number_id,
@@ -1754,6 +1778,7 @@ async def _create_campaigns_from_rows(
     template_language: str | None = None,
     template_params: list[str] | None = None,
     template_header_params: list[str] | None = None,
+    template_button_params: list[dict] | None = None,
     custom_message: str | None = None,
     script_id: UUID | None = None,
     phone_number_id: UUID | None = None,
@@ -1821,6 +1846,7 @@ async def _create_campaigns_from_rows(
         template_language=template_language,
         template_params=template_params,
         template_header_params=template_header_params,
+        template_button_params=template_button_params,
         custom_message=custom_message,
         script_id=script_id,
         phone_number_id=phone_number_id,
@@ -1849,6 +1875,7 @@ async def create_campaign(
     template_language: str | None = Form(None),
     template_params: str | None = Form(None),
     template_header_params: str | None = Form(None),
+    template_button_params: str | None = Form(None),
     custom_message: str | None = Form(None),
     script_id: UUID | None = Form(None),
     phone_number_id: UUID | None = Form(None),
@@ -1892,6 +1919,7 @@ async def create_campaign(
         raise HTTPException(status_code=400, detail="max_attempts must be at least 1")
     parsed_template_params = _parse_template_params_form(template_params)
     parsed_header_params = _parse_template_params_form(template_header_params)
+    parsed_button_params = _parse_template_button_params_form(template_button_params)
 
     filename = (file.filename or "").lower()
     raw = await file.read()
@@ -1960,6 +1988,7 @@ async def create_campaign(
         template_language=template_language,
         template_params=parsed_template_params,
         template_header_params=parsed_header_params,
+        template_button_params=parsed_button_params,
         custom_message=custom_message,
         script_id=script_id,
         phone_number_id=phone_number_id,

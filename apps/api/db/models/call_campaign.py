@@ -56,6 +56,12 @@ class CallCampaign(Base):
     # time by workers/whatsapp_dispatcher.py's _send_one, same as
     # template_params.
     template_header_params: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Dynamic values for the template's URL/COPY_CODE buttons — list of
+    # {"index", "type", "value"} dicts, same shape and resolution timing
+    # (once, here, at campaign-creation time in routers/admin.py's
+    # create_campaign) as template_header_params above. See
+    # schemas/whatsapp_common.TemplateButtonSendParam.
+    template_button_params: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
     # Optional free-text follow-up sent right after the template (or after
     # the default opening message, if no template is set).
     custom_message: Mapped[str | None] = mapped_column(Text, nullable=True)

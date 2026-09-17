@@ -43,6 +43,7 @@ from apps.api.core.org_credentials import (
 )
 from apps.api.db.models import FollowUpRule, FollowUpTask, Lead
 from apps.api.db.models.org import Org
+from apps.api.db.models.template import WhatsAppTemplate
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import is_org_license_active
 from apps.api.redis_client import get_redis_pool, record_error
@@ -195,6 +196,12 @@ async def _materialize_rule_tasks() -> None:
                                 template_name=rule.template_name,
                                 template_language=rule.template_language,
                                 template_params=rule.template_params if rule.template_name else None,
+                                template_header_params=rule.template_header_params
+                                if rule.template_name
+                                else None,
+                                template_button_params=rule.template_button_params
+                                if rule.template_name
+                                else None,
                             )
                         )
                         await db.flush()
@@ -381,12 +388,35 @@ async def _execute_task(task_id: UUID) -> None:
     try:
         if task.template_name:
             body_params = _resolve_template_body_params(task.template_params, lead.name)
+            header_params: list[str] | None = None
+            header_type: str | None = None
+            if task.template_header_params and task.template_header_params[0]:
+                # Header value was already resolved (saved-file name -> public
+                # URL) once at rule-creation time (routers/follow_ups.py) — a
+                # media header's URL never matches a dynamic token and passes
+                # through unchanged; only the header_type lookup happens fresh
+                # here, in its own session (the one above already closed),
+                # same as workers/whatsapp_dispatcher.py's _send_one.
+                async with AsyncSessionLocal() as header_db:
+                    template_row = (
+                        await header_db.execute(
+                            select(WhatsAppTemplate).where(
+                                WhatsAppTemplate.org_id == lead.org_id,
+                                WhatsAppTemplate.name == task.template_name,
+                            )
+                        )
+                    ).scalars().first()
+                header_type = template_row.header_type if template_row else None
+                header_params = _resolve_template_body_params(task.template_header_params, lead.name)
             await wa_client.send_template(
                 meta_creds.access_token,
                 lead.phone,
                 task.template_name,
                 task.template_language or "en_US",
                 body_params=body_params,
+                header_params=header_params,
+                header_type=header_type,
+                button_params=task.template_button_params,
                 phone_number_id=phone_number_id,
             )
         else:

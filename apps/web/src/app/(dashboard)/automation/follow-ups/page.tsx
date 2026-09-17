@@ -21,6 +21,8 @@ import {
 import { NewFollowUpRuleDialog } from "@/components/automation/new-follow-up-rule-dialog";
 import { FollowUpTaskStatusBadge } from "@/components/automation/follow-up-task-status-badge";
 import { ChannelBadge } from "@/components/conversations/channel-badge";
+import { LEAD_STATUS_LABELS } from "@/components/leads/status-badge";
+import type { LeadStatus } from "@/lib/types";
 import {
   useCancelFollowUpTask,
   useDeleteFollowUpRule,
@@ -111,8 +113,11 @@ export default function FollowUpsPage() {
                         <ChannelBadge channel={rule.channel === "voice" ? "voice" : "whatsapp"} />
                       </TableCell>
                       <TableCell className="text-xs text-slate-600 dark:text-slate-400">
-                        status = {rule.trigger_config.status ?? "—"}, wait{" "}
-                        {rule.trigger_config.delay_hours ?? 0}h
+                        status ={" "}
+                        {rule.trigger_config.status
+                          ? LEAD_STATUS_LABELS[rule.trigger_config.status as LeadStatus]
+                          : "—"}
+                        , wait {rule.trigger_config.delay_hours ?? 0}h
                       </TableCell>
                       <TableCell className="max-w-xs truncate text-xs text-slate-500">
                         {rule.channel === "voice" ? (

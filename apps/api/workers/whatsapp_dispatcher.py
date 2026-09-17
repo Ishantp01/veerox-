@@ -61,7 +61,8 @@ _SEND_TIME_ZONE = ZoneInfo("Asia/Kolkata")
 
 # (target_id, target_name, phone, criteria, attempt_count, phone_number_id,
 # org_id, template_name, template_language, template_params,
-# template_header_params, custom_message) — see _claim_targets' docstring.
+# template_header_params, template_button_params, custom_message) — see
+# _claim_targets' docstring.
 _ClaimedTarget = tuple[
     str,
     str | None,
@@ -74,6 +75,7 @@ _ClaimedTarget = tuple[
     str | None,
     list[str] | None,
     list[str] | None,
+    list[dict] | None,
     str | None,
 ]
 
@@ -139,6 +141,7 @@ async def _claim_targets() -> list[_ClaimedTarget]:
                 CallCampaign.template_language,
                 CallCampaign.template_params,
                 CallCampaign.template_header_params,
+                CallCampaign.template_button_params,
                 CallCampaign.custom_message,
             )
             .join(CallCampaign, CallCampaign.id == CampaignTarget.campaign_id)
@@ -169,6 +172,7 @@ async def _claim_targets() -> list[_ClaimedTarget]:
                 template_language,
                 template_params,
                 template_header_params,
+                template_button_params,
                 custom_message,
             ) = row
             if len(claimed) >= _BATCH_SIZE:
@@ -198,6 +202,7 @@ async def _claim_targets() -> list[_ClaimedTarget]:
                     template_language,
                     template_params,
                     template_header_params,
+                    template_button_params,
                     custom_message,
                 )
             )
@@ -271,6 +276,7 @@ async def _send_one(
     template_language: str | None,
     template_params: list[str] | None,
     template_header_params: list[str] | None,
+    template_button_params: list[dict] | None,
     custom_message: str | None,
 ) -> None:
     async with AsyncSessionLocal() as db:
@@ -319,6 +325,7 @@ async def _send_one(
                 body_params=body_params,
                 header_params=header_params,
                 header_type=header_type,
+                button_params=template_button_params,
                 phone_number_id=phone_number_id,
             )
         else:

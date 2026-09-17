@@ -43,6 +43,16 @@ class FollowUpRule(Base):
     # for campaigns; workers/follow_up_dispatcher.py resolves these the same
     # way, fresh at send time, using the matched lead's name.
     template_params: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    # Same convention as CallCampaign.template_header_params: a single-item
+    # list, either a {{1}} text value/token (TEXT header) or a public
+    # https:// URL (media header) — resolved from a saved WhatsApp file name
+    # once, at rule-creation time (routers/follow_ups.py), same as campaigns
+    # resolve it once at campaign-creation time rather than per-send.
+    template_header_params: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    # Dynamic values for URL/COPY_CODE buttons — list of {"index", "type",
+    # "value"} dicts, same shape as OutboundWhatsappIn.template_button_params
+    # (schemas/admin.py's TemplateButtonSendParam).
+    template_button_params: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -114,3 +124,7 @@ class FollowUpTask(Base):
     template_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     template_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     template_params: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    # Copied from FollowUpRule at materialization time — see
+    # FollowUpRule.template_header_params/template_button_params above.
+    template_header_params: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    template_button_params: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)

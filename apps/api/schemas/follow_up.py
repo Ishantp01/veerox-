@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from apps.api.schemas.whatsapp_common import TemplateButtonSendParam
+
 FollowUpTaskStatus = Literal["pending", "sending", "sent", "failed", "skipped", "cancelled"]
 
 # Which leads a rule targets (matched against Lead.channel — see
@@ -25,6 +27,15 @@ class FollowUpRuleCreate(BaseModel):
     template_name: str | None = None
     template_language: str | None = None
     template_params: list[str] | None = None
+    # Same convention as OutboundWhatsappIn (routers/admin.py's single-send
+    # route): a single-item list for the template's HEADER — a {{1}} text
+    # value/token for a TEXT header, or a public https:// URL / saved
+    # WhatsApp file name for a media (IMAGE/VIDEO/DOCUMENT) one, resolved to
+    # a public URL once at rule-creation time (see follow_ups.py).
+    template_header_params: list[str] | None = None
+    # Dynamic values for URL/COPY_CODE buttons, one entry per button that
+    # needs one — same shape as OutboundWhatsappIn's.
+    template_button_params: list[TemplateButtonSendParam] | None = None
     active: bool = True
 
     @model_validator(mode="after")
@@ -49,6 +60,8 @@ class FollowUpRuleOut(BaseModel):
     template_name: str | None = None
     template_language: str | None = None
     template_params: list[str] | None = None
+    template_header_params: list[str] | None = None
+    template_button_params: list[TemplateButtonSendParam] | None = None
     active: bool
     created_at: datetime
 
@@ -60,6 +73,8 @@ class FollowUpRuleUpdateIn(BaseModel):
     template_name: str | None = None
     template_language: str | None = None
     template_params: list[str] | None = None
+    template_header_params: list[str] | None = None
+    template_button_params: list[TemplateButtonSendParam] | None = None
     active: bool | None = None
 
 

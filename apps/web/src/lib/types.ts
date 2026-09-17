@@ -137,6 +137,10 @@ export interface FollowUpRule {
   template_name: string | null;
   template_language: string | null;
   template_params: string[] | null;
+  /** Value for the template header's {{1}}, or a resolved public URL for a media header. */
+  template_header_params: string[] | null;
+  /** Dynamic values for URL/COPY_CODE buttons, by 0-based button position. */
+  template_button_params: { index: number; type: "url" | "copy_code"; value: string }[] | null;
   active: boolean;
   created_at: string;
 }
@@ -514,6 +518,8 @@ export interface Campaign {
    * placeholder (a {{1}} value, or the resolved URL of a media header) —
    * see template-param-mapper.tsx. */
   template_header_params: string[] | null;
+  /** Dynamic values for URL/COPY_CODE buttons, by 0-based button position. */
+  template_button_params: { index: number; type: "url" | "copy_code"; value: string }[] | null;
   custom_message: string | null;
   // Voice-only overrides — null means "use the org default script" /
   // "auto-rotate across the org's numbers".

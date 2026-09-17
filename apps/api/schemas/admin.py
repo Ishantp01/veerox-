@@ -5,14 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn, OrgPhoneNumberOut
-
-
-class TemplateButtonSendParam(BaseModel):
-    index: int = Field(..., description="0-based position of this button in the template.")
-    type: Literal["url", "copy_code"] = Field(
-        ..., description="Which dynamic button kind this fills — matches the button's own type."
-    )
-    value: str = Field(..., description="The {{1}} URL suffix, or the coupon code to show.")
+from apps.api.schemas.whatsapp_common import TemplateButtonSendParam  # re-exported for existing importers
 
 
 class OutboundWhatsappIn(BaseModel):

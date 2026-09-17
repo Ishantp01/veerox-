@@ -54,6 +54,8 @@ export interface CreateCampaignInput {
    * placeholder — a single-item array (a {{1}} value/token, or a saved
    * WhatsApp file name / public URL for a media header). */
   templateHeaderParams?: string[];
+  /** Dynamic values for URL/COPY_CODE buttons, by 0-based button position. */
+  templateButtonParams?: { index: number; type: "url" | "copy_code"; value: string }[];
   customMessage?: string;
   /** Voice-only, optional — unset falls back to the org's default script /
    * auto-rotation across its numbers, same as before either field existed. */
@@ -96,6 +98,9 @@ async function createCampaign(input: CreateCampaignInput): Promise<CampaignCreat
   }
   if (input.templateHeaderParams && input.templateHeaderParams.length > 0) {
     form.append("template_header_params", JSON.stringify(input.templateHeaderParams));
+  }
+  if (input.templateButtonParams && input.templateButtonParams.length > 0) {
+    form.append("template_button_params", JSON.stringify(input.templateButtonParams));
   }
   if (input.customMessage) form.append("custom_message", input.customMessage);
   if (input.scriptId) form.append("script_id", input.scriptId);
