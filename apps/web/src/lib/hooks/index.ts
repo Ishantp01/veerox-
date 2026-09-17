@@ -31,6 +31,8 @@ export { useKillSwitch, useSetKillSwitch } from "./useKillSwitch";
 export {
   useWhatsAppSettings,
   useUpdateWhatsAppSettings,
+  useSocialLinksSettings,
+  useUpdateSocialLinksSettings,
   useCallingSettings,
   useUpdateCallingSettings,
   useOpenAIKeySettings,

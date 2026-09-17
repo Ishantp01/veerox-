@@ -42,6 +42,7 @@ from apps.api.core.prompts import (
     current_datetime_block,
 )
 from apps.api.core.org_openai_key import resolve_openai_api_key
+from apps.api.core.org_social_links import social_links_prompt_block
 from apps.api.core.whatsapp_assets import asset_catalog_prompt_block
 from apps.api.core.whatsapp_template_catalog import (
     template_catalog_prompt_block as wa_template_catalog_prompt_block,
@@ -224,12 +225,17 @@ async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | N
         template_catalog = (
             await wa_template_catalog_prompt_block(db, org_id) if org_id is not None else ""
         )
+        social_links = (
+            await social_links_prompt_block(db, org_id) if org_id is not None else ""
+        )
 
     tail = f"{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
     if catalog:
         tail = f"{tail}\n\n{catalog}"
     if template_catalog:
         tail = f"{tail}\n\n{template_catalog}"
+    if social_links:
+        tail = f"{tail}\n\n{social_links}"
 
     if campaign is not None:
         return (

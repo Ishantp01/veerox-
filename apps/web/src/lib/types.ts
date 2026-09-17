@@ -400,6 +400,17 @@ export interface WhatsAppSettingsInput {
   agent_connect_template_name: string | null;
 }
 
+// GET/PUT /admin/settings/social-links — this org's social/contact links.
+// Shared by the WhatsApp/voice agent automatically once set, no script
+// edits needed. Platform name -> URL, e.g. { website: "...", instagram: "..." }.
+export interface SocialLinksSettings {
+  social_links: Record<string, string>;
+}
+
+export interface SocialLinksSettingsInput {
+  social_links: Record<string, string>;
+}
+
 // GET /admin/settings/calling — Plivo channel config status, plus the
 // org's own preferred-provider override (the one editable field).
 export interface CallingSettings {

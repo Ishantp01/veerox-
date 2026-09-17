@@ -272,6 +272,26 @@ class MetaCredentialsSettingsIn(BaseModel):
     )
 
 
+class SocialLinksSettingsOut(BaseModel):
+    """This org's social/contact links, set once here and then shared by the
+    WhatsApp/voice agent automatically when a contact asks — see
+    core/org_social_links.py::social_links_prompt_block. Empty dict means
+    none configured."""
+
+    social_links: dict[str, str] = Field(default_factory=dict)
+
+
+class SocialLinksSettingsIn(BaseModel):
+    social_links: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Platform name -> URL (e.g. {\"website\": \"https://...\", \"instagram\": "
+            "\"https://instagram.com/...\"}). Replaces the full set each call — omit a "
+            "platform to remove it. Empty dict clears all links."
+        ),
+    )
+
+
 class StatsTimeseriesPoint(BaseModel):
     date: str  # YYYY-MM-DD, UTC
     calls: int

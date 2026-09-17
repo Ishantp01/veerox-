@@ -31,6 +31,7 @@ from apps.api.core.prompts import (
     WHATSAPP_APPEND,
     current_datetime_block,
 )
+from apps.api.core.org_social_links import social_links_prompt_block
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
 from apps.api.core.whatsapp_assets import asset_catalog_prompt_block
 from apps.api.core.whatsapp_template_catalog import (
@@ -168,6 +169,9 @@ async def _system_prompt_for(
     template_catalog = await wa_template_catalog_prompt_block(db, org_id)
     if template_catalog:
         prompt = f"{prompt}\n\n{template_catalog}"
+    social_links = await social_links_prompt_block(db, org_id)
+    if social_links:
+        prompt = f"{prompt}\n\n{social_links}"
     return prompt
 
 
