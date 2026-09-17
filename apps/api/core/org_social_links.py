@@ -42,10 +42,16 @@ async def social_links_prompt_block(db: AsyncSession, org_id: UUID) -> str:
     links = await load_org_social_links(db, org_id)
     if not links:
         return ""
-    lines = ["Your organization's social/contact links — share the relevant one(s) if the contact asks:"]
+    lines = ["Your organization's social/contact links:"]
     ordered = [p for p in KNOWN_SOCIAL_PLATFORMS if p in links]
     ordered += [p for p in links if p not in KNOWN_SOCIAL_PLATFORMS]
     for platform in ordered:
         label = platform.replace("_", " ").title()
         lines.append(f"- {label}: {links[platform]}")
+    lines.append(
+        "If the contact asks for a specific platform (e.g. \"your instagram\"), share only "
+        "that one. If they ask generically for your \"social links\", \"social media\", "
+        "\"socials\", or similar without naming a platform, share ALL of the links listed "
+        "above together in one reply, not just one of them."
+    )
     return "\n".join(lines)
