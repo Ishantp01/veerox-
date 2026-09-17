@@ -24,6 +24,7 @@ from apps.api.config import settings
 from apps.api.core.agent import agent_core, appointment_booked_this_turn
 from apps.api.core.org_credentials import resolve_meta_credentials
 from apps.api.core.org_openai_key import resolve_openai_api_key
+from apps.api.core.tools import mark_not_interested
 from apps.api.core.transcribe import transcribe
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
@@ -56,6 +57,20 @@ class InboundMessage:
     text: str | None = None
     media_id: str | None = None
     media_mime: str | None = None
+    button_payload: str | None = None
+    button_text: str | None = None
+
+
+# Quick-reply button payload/text that means "stop automated follow-ups" —
+# matched case-insensitively against whichever the template button was
+# configured with, since a template's quick-reply payload defaults to the
+# button's visible text when no custom payload was set at template creation.
+_STOP_BUTTON_TRIGGERS = {"stop", "not interested", "unsubscribe"}
+
+
+def _is_stop_button_tap(msg: "InboundMessage") -> bool:
+    candidates = {(msg.button_payload or "").strip().lower(), (msg.button_text or "").strip().lower()}
+    return bool(candidates & _STOP_BUTTON_TRIGGERS)
 
 
 def _normalize_phone(phone: str) -> str:
@@ -91,6 +106,8 @@ def _extract_message(payload: dict[str, Any]) -> InboundMessage | None:
             text: str | None = None
             media_id: str | None = None
             media_mime: str | None = None
+            button_payload: str | None = None
+            button_text: str | None = None
 
             if msg_type == "text":
                 text = (msg.get("text") or {}).get("body")
@@ -104,6 +121,23 @@ def _extract_message(payload: dict[str, Any]) -> InboundMessage | None:
                 voice = msg.get("voice") or {}
                 media_id = voice.get("id")
                 media_mime = voice.get("mime_type")
+            elif msg_type == "button":
+                # A tap on a message-template's Quick Reply button — Meta
+                # echoes the button's configured payload plus its visible
+                # text. Also fed to the agent as plain text (button_text)
+                # so a non-Stop quick-reply still gets a sensible reply.
+                button = msg.get("button") or {}
+                button_payload = button.get("payload")
+                button_text = button.get("text")
+                text = button_text
+            elif msg_type == "interactive":
+                # A tap on a free-form interactive (non-template) button,
+                # e.g. sent via wa_client's own interactive-message path.
+                interactive = msg.get("interactive") or {}
+                button_reply = interactive.get("button_reply") or {}
+                button_payload = button_reply.get("id")
+                button_text = button_reply.get("title")
+                text = button_text
 
             return InboundMessage(
                 id=str(msg_id),
@@ -112,6 +146,8 @@ def _extract_message(payload: dict[str, Any]) -> InboundMessage | None:
                 text=text,
                 media_id=media_id,
                 media_mime=media_mime,
+                button_payload=button_payload,
+                button_text=button_text,
             )
     return None
 
@@ -306,6 +342,26 @@ async def process_inbound(payload: dict[str, Any]) -> None:
                 )
 
             user = await _get_or_create_user(db, org_id, msg.from_phone)
+
+            # A tap on the follow-up template's "Stop" quick-reply button is
+            # handled deterministically here — no LLM call, no risk of the
+            # agent misreading intent — same effect as the AI's own
+            # mark_not_interested tool call or a manual "Not Interested" in
+            # the dashboard (see routers/admin.py's update_lead).
+            if msg.type in {"button", "interactive"} and _is_stop_button_tap(msg):
+                result = await mark_not_interested(
+                    db, reason="tapped_stop_button", user_id=user.id, org_id=org_id
+                )
+                logger.info("whatsapp_stop_button_tapped", from_phone=msg.from_phone, result=result)
+                if meta_creds is not None:
+                    await wa_client.send_text(
+                        meta_creds.access_token,
+                        msg.from_phone,
+                        "Got it — we won't send any more follow-ups. Reach out anytime if you change your mind.",
+                        phone_number_id=phone_number_id,
+                    )
+                return
+
             campaign_target_id = await _find_open_campaign_target(db, msg.from_phone)
             # Commit the user row before the (potentially long) LLM call so a
             # later failure doesn't lose the contact record.
