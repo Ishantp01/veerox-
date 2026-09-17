@@ -67,6 +67,7 @@ from apps.api.db.models import (
     CallCampaign,
     CampaignTarget,
     Conversation,
+    FollowUpTask,
     Lead,
     Message,
     Org,
@@ -1000,6 +1001,17 @@ async def update_lead(
     # caller doesn't have to set it explicitly on every qualification update.
     if updates.get("qualification_status") == "qualified" and lead.qualified_at is None:
         lead.qualified_at = datetime.now(UTC)
+
+    # A manual "Not Interested" (the dashboard's Stop control) must cancel
+    # queued follow-ups the same way core/tools.py::mark_not_interested
+    # already does for the AI-triggered path — otherwise a lead marked lost
+    # here still gets chased by an already-materialized FollowUpTask.
+    if updates.get("status") == "lost":
+        await db.execute(
+            update(FollowUpTask)
+            .where(FollowUpTask.lead_id == lead.id, FollowUpTask.status == "pending")
+            .values(status="cancelled")
+        )
 
     await db.commit()
     await db.refresh(lead)

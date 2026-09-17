@@ -110,7 +110,11 @@ async def _materialize_lead_follow_up_at_tasks() -> None:
         )
         existing_lead_ids = set((await db.execute(existing_lead_ids_stmt)).scalars().all())
 
-        stmt = select(Lead).where(Lead.follow_up_at.is_not(None), Lead.follow_up_at <= datetime.now(UTC))
+        stmt = select(Lead).where(
+            Lead.follow_up_at.is_not(None),
+            Lead.follow_up_at <= datetime.now(UTC),
+            Lead.status != "lost",
+        )
         leads = (await db.execute(stmt)).scalars().all()
 
         created = 0
@@ -318,6 +322,16 @@ async def _execute_task(task_id: UUID) -> None:
         lead = await db.get(Lead, task.lead_id)
         if lead is None:
             await _resolve_task(task_id, "failed")
+            return
+
+        # Last-line safety net: a lead marked "lost" (Stop/Not Interested)
+        # after this task was already materialized must not still be
+        # messaged — the two call sites that create tasks already exclude
+        # "lost" leads going forward, and the status-change handlers cancel
+        # what's pending, but this catches anything that slips through a
+        # race between those.
+        if lead.status == "lost":
+            await _resolve_task(task_id, "cancelled")
             return
 
         if not lead.phone:
