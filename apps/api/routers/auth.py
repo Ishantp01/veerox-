@@ -44,7 +44,9 @@ from apps.api.schemas.auth import (
     ForgotTokenIn,
     ForgotTokenOut,
     LoginIn,
+    LoginOrgChoiceOut,
     MeOut,
+    OrgChoice,
     ProvisionOrgIn,
     ProvisionOrgOut,
     SessionOut,
@@ -237,8 +239,10 @@ async def _record_last_login(account_user_id: UUID) -> None:
             await session.commit()
 
 
-@router.post("/login", response_model=SessionOut)
-async def login(payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: BackgroundTasks) -> SessionOut:
+@router.post("/login", response_model=SessionOut | LoginOrgChoiceOut)
+async def login(
+    payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: BackgroundTasks
+) -> SessionOut | LoginOrgChoiceOut:
     account_user: AccountUser | None
     membership: OrgMembership | None
     org_name: str | None
@@ -258,6 +262,11 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: 
         # savings against a remote DB (see .env), not just fewer local
         # queries. Org.name/license fields ride along in this same query
         # instead of a trailing db.get(Org, ...) after the session is created.
+        # No `.limit(1)` here (unlike before) — a token can match more than
+        # one OrgMembership (routers/team.py's invite_member reuses an
+        # existing account across orgs), and picking one via `.order_by(...
+        # created_at)` silently landed the caller in whichever org they
+        # joined *first*, regardless of which one they meant to use.
         result = await db.execute(
             select(
                 AccountUser,
@@ -271,13 +280,32 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: 
             .outerjoin(Org, Org.id == OrgMembership.org_id)
             .where(AccountUser.token_hash == hash_token(payload.token))
             .order_by(OrgMembership.created_at)
-            .limit(1)
         )
-        row = result.first()
-        if row is None:
-            account_user, membership, org_name = None, None, None
+        rows = result.all()
+        account_user = rows[0][0] if rows else None
+        membership_rows = [r for r in rows if r[1] is not None]
+
+        if payload.org_id is not None:
+            membership_rows = [r for r in membership_rows if r[1].org_id == payload.org_id]
+            if not membership_rows:
+                raise HTTPException(status_code=403, detail="Invalid organization for this account")
+
+        if len(membership_rows) > 1:
+            if account_user is None or not account_user.is_active:
+                raise HTTPException(status_code=401, detail="Invalid login token")
+            return LoginOrgChoiceOut(
+                orgs=[
+                    OrgChoice(org_id=r[1].org_id, org_name=r[2] or "", role=r[1].role)
+                    for r in membership_rows
+                ]
+            )
+
+        if membership_rows:
+            _, membership, org_name, license_status, license_expires_at, enabled_features = (
+                membership_rows[0]
+            )
         else:
-            account_user, membership, org_name, license_status, license_expires_at, enabled_features = row
+            membership, org_name = None, None
 
     if account_user is None or not account_user.is_active:
         raise HTTPException(status_code=401, detail="Invalid login token")

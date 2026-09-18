@@ -6,6 +6,7 @@ from apps.api.db.models.contact import Contact
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.follow_up import FollowUpRule, FollowUpTask
 from apps.api.db.models.lead import Lead
+from apps.api.db.models.lead_status_preset import LeadStatusPreset
 from apps.api.db.models.message import Message
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
@@ -29,6 +30,7 @@ __all__ = [
     "FollowUpRule",
     "FollowUpTask",
     "Lead",
+    "LeadStatusPreset",
     "Message",
     "Org",
     "OrgMembership",

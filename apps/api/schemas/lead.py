@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from apps.api.schemas.conversation import ConversationSummaryOut
 
@@ -77,7 +77,11 @@ class LeadUpdateIn(BaseModel):
     model_dump(exclude_unset=True), so omitting follow_up_at/note leaves them
     untouched while explicitly passing `null` clears them."""
 
-    status: LeadStatus | None = None
+    # A free string rather than the LeadStatus Literal — orgs can add their
+    # own pipeline stages (LeadStatusPreset) on top of the built-in
+    # LEAD_STATUSES, so this can't be a closed set at the type level.
+    # update_lead validates it against LEAD_STATUSES ∪ the org's presets.
+    status: str | None = Field(default=None, max_length=20)
     follow_up_at: datetime | None = None
     follow_up_note: str | None = None
     qualification_status: LeadQualificationStatus | None = None

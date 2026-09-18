@@ -491,7 +491,56 @@ async def test_update_lead_rejects_invalid_status(
         json={"status": "bogus"},
         headers=ADMIN_HEADERS,
     )
-    assert response.status_code == 422
+    # Not a closed Literal anymore — status is validated against
+    # LEAD_STATUSES + the org's LeadStatusPreset rows at the app level
+    # (rather than by Pydantic) so custom statuses can be added without a
+    # code change. An unrecognized value is a 400, not a 422.
+    assert response.status_code == 400
+
+
+async def test_lead_status_preset_crud_and_use_on_lead(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000046")
+    db_session.add(user)
+    await db_session.flush()
+    lead = Lead(org_id=ORG_ID, user_id=user.id, intent="quote")
+    db_session.add(lead)
+    await db_session.commit()
+
+    create_response = await client.post(
+        "/admin/lead-status-presets", json={"name": "Negotiating"}, headers=ADMIN_HEADERS
+    )
+    assert create_response.status_code == 201
+    preset = create_response.json()
+    assert preset["name"] == "Negotiating"
+
+    list_response = await client.get("/admin/lead-status-presets", headers=ADMIN_HEADERS)
+    assert list_response.status_code == 200
+    assert [p["name"] for p in list_response.json()] == ["Negotiating"]
+
+    # A custom status is now a valid value for update_lead.
+    update_response = await client.patch(
+        f"/admin/leads/{lead.id}", json={"status": "Negotiating"}, headers=ADMIN_HEADERS
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["status"] == "Negotiating"
+
+    # Can't collide with a built-in status name.
+    conflict_response = await client.post(
+        "/admin/lead-status-presets", json={"name": "converted"}, headers=ADMIN_HEADERS
+    )
+    assert conflict_response.status_code == 409
+
+    delete_response = await client.delete(
+        f"/admin/lead-status-presets/{preset['id']}", headers=ADMIN_HEADERS
+    )
+    assert delete_response.status_code == 200
+
+    # Deleting the preset doesn't touch the lead's already-set status.
+    refetched = await client.get(f"/admin/leads/{lead.id}", headers=ADMIN_HEADERS)
+    assert refetched.json()["status"] == "Negotiating"
 
 
 async def test_update_lead_404_for_unknown_id(

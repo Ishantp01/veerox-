@@ -9,7 +9,7 @@ import { LogIn, AlertCircle, Sun, Moon } from "lucide-react";
 import Button from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { useAuth } from "@/lib/auth-context";
-import { login as loginRequest } from "@/lib/hooks/useAuthApi";
+import { login as loginRequest, type OrgChoice } from "@/lib/hooks/useAuthApi";
 
 const tokenSchema = z.object({
   loginToken: z.string().trim().min(1, "Token is required"),
@@ -23,7 +23,24 @@ export default function LoginPage() {
   const [showToken, setShowToken] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Set only when this token's account belongs to more than one org — the
+  // user picks one before we resubmit login with that org_id. See
+  // routers/auth.py's login / LoginOrgChoiceOut.
+  const [orgChoices, setOrgChoices] = useState<OrgChoice[] | null>(null);
   const isDark = resolvedTheme === "dark";
+
+  /** Shared by the initial submit and the org-choice picker's "Continue"
+   * click — resolves the same way both times, just with `orgId` set on the
+   * second call once the user has picked one. */
+  async function signInWithOrg(orgId?: string) {
+    const result = await loginRequest(loginToken.trim(), orgId);
+    if (result.requires_org_selection) {
+      setOrgChoices(result.orgs);
+      return;
+    }
+    login(result);
+    router.push("/");
+  }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -36,9 +53,7 @@ export default function LoginPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const session = await loginRequest(loginToken.trim());
-      login(session);
-      router.push("/");
+      await signInWithOrg();
     } catch (err) {
       const status = (err as { status?: number } | undefined)?.status;
       if (status === 401) {
@@ -59,6 +74,18 @@ export default function LoginPage() {
         }
       }
       setError("Couldn't reach the API to sign in. Is the backend running?");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleOrgChoice(orgId: string) {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await signInWithOrg(orgId);
+    } catch {
+      setError("Couldn't sign in to that organization. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -149,63 +176,110 @@ export default function LoginPage() {
             <div className="text-[17px] font-extrabold tracking-wide text-slate-900 dark:text-white">Work Assign Ai</div>
           </div>
 
-          <h2 className="text-xl font-bold text-slate-900 dark:text-white">Sign in</h2>
-          <p className="mt-2 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
-            Enter your organization&apos;s login token, or the shared admin token if you manage the
-            platform.
-          </p>
+          {orgChoices ? (
+            <>
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white">Choose an organization</h2>
+              <p className="mt-2 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
+                Your login token is shared by more than one organization — pick the one you want to
+                sign in to.
+              </p>
 
-          <form onSubmit={handleSubmit} className="mt-7 flex flex-col gap-4" noValidate>
-            <div>
-              <Label htmlFor="loginToken">Login token</Label>
-              <div className="relative">
-                <Input
-                  id="loginToken"
-                  type={showToken ? "text" : "password"}
-                  autoComplete="current-password"
-                  value={loginToken}
-                  onChange={(e) => {
-                    setLoginToken(e.target.value);
-                    setError(null);
-                  }}
-                  placeholder="veerox_live_••••••••••••"
-                  aria-invalid={error ? true : undefined}
-                  className="pr-14 font-mono text-xs"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowToken((s) => !s)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-[11px] text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
-                >
-                  {showToken ? "hide" : "show"}
-                </button>
+              <div className="mt-7 flex flex-col gap-2">
+                {orgChoices.map((org) => (
+                  <button
+                    key={org.org_id}
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => handleOrgChoice(org.org_id)}
+                    className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm shadow-card transition-colors hover:border-primary-300 hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-800 dark:bg-slate-950 dark:hover:border-primary-700 dark:hover:bg-primary-500/10"
+                  >
+                    <span className="font-medium text-slate-800 dark:text-slate-100">{org.org_name}</span>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold capitalize text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                      {org.role}
+                    </span>
+                  </button>
+                ))}
               </div>
-              <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                Tokens are never stored in plain text after sign in.
+
+              {error && (
+                <p className="mt-4 flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 ring-1 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/20">
+                  <AlertCircle size={14} />
+                  {error}
+                </p>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setOrgChoices(null);
+                  setError(null);
+                }}
+                className="mt-5 text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+              >
+                ← Use a different token
+              </button>
+            </>
+          ) : (
+            <>
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white">Sign in</h2>
+              <p className="mt-2 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
+                Enter your organization&apos;s login token, or the shared admin token if you manage the
+                platform.
               </p>
-            </div>
 
-            {error && (
-              <p className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 ring-1 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/20">
-                <AlertCircle size={14} />
-                {error}
-              </p>
-            )}
+              <form onSubmit={handleSubmit} className="mt-7 flex flex-col gap-4" noValidate>
+                <div>
+                  <Label htmlFor="loginToken">Login token</Label>
+                  <div className="relative">
+                    <Input
+                      id="loginToken"
+                      type={showToken ? "text" : "password"}
+                      autoComplete="current-password"
+                      value={loginToken}
+                      onChange={(e) => {
+                        setLoginToken(e.target.value);
+                        setError(null);
+                      }}
+                      placeholder="veerox_live_••••••••••••"
+                      aria-invalid={error ? true : undefined}
+                      className="pr-14 font-mono text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowToken((s) => !s)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-[11px] text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
+                    >
+                      {showToken ? "hide" : "show"}
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                    Tokens are never stored in plain text after sign in.
+                  </p>
+                </div>
 
-            <Button type="submit" variant="primary" className="mt-1 w-full gap-2 py-2.5" loading={submitting}>
-              {!submitting && <LogIn size={15} />} {submitting ? "Signing in…" : "Sign in"}
-            </Button>
-          </form>
+                {error && (
+                  <p className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 ring-1 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/20">
+                    <AlertCircle size={14} />
+                    {error}
+                  </p>
+                )}
 
-          <div className="mt-5 flex items-center justify-between text-xs">
-            <Link
-              href="/forgot-token"
-              className="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
-            >
-              Forgot your token?
-            </Link>
-            <span className="text-slate-400 dark:text-slate-500">No token? Ask your admin.</span>
-          </div>
+                <Button type="submit" variant="primary" className="mt-1 w-full gap-2 py-2.5" loading={submitting}>
+                  {!submitting && <LogIn size={15} />} {submitting ? "Signing in…" : "Sign in"}
+                </Button>
+              </form>
+
+              <div className="mt-5 flex items-center justify-between text-xs">
+                <Link
+                  href="/forgot-token"
+                  className="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                >
+                  Forgot your token?
+                </Link>
+                <span className="text-slate-400 dark:text-slate-500">No token? Ask your admin.</span>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

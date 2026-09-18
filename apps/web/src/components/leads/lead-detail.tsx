@@ -21,6 +21,13 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  Dialog,
+  DialogBody,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogTitle,
+  DialogTrigger,
   EmptyState,
   Input,
   Label,
@@ -33,7 +40,13 @@ import {
   Textarea,
   useToast,
 } from "@/components/ui";
-import { useLead, useUpdateLead } from "@/lib/hooks";
+import {
+  useCreateLeadStatusPreset,
+  useDeleteLeadStatusPreset,
+  useLead,
+  useLeadStatusPresets,
+  useUpdateLead,
+} from "@/lib/hooks";
 import { formatDateTime, formatPhone } from "@/lib/format";
 import type { LeadQualificationStatus, LeadStatus } from "@/lib/types";
 
@@ -67,6 +80,13 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
   const { toast } = useToast();
   const lead = useLead(id);
   const updateLead = useUpdateLead();
+  const { data: statusPresetsData } = useLeadStatusPresets();
+  const statusPresets = statusPresetsData ?? [];
+  const createStatusPreset = useCreateLeadStatusPreset();
+  const deleteStatusPreset = useDeleteLeadStatusPreset();
+  const [manageStatusesOpen, setManageStatusesOpen] = useState(false);
+  const [newStatusName, setNewStatusName] = useState("");
+  const [statusFieldError, setStatusFieldError] = useState<string | null>(null);
 
   const [status, setStatus] = useState<LeadStatus>("new");
   const [followUpAt, setFollowUpAt] = useState("");
@@ -104,6 +124,37 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
         },
       },
     );
+  }
+
+  function handleAddStatusPreset() {
+    const name = newStatusName.trim();
+    if (!name) {
+      setStatusFieldError("Enter a status name");
+      return;
+    }
+    if (name.length > 20) {
+      setStatusFieldError("Keep it under 20 characters");
+      return;
+    }
+    setStatusFieldError(null);
+    createStatusPreset.mutate(
+      { name },
+      {
+        onSuccess: (preset) => {
+          setNewStatusName("");
+          setStatus(preset.name);
+          toast({ title: "Status added", variant: "success" });
+        },
+        onError: (err) => setStatusFieldError(err.message),
+      }
+    );
+  }
+
+  function handleDeleteStatusPreset(presetId: string) {
+    deleteStatusPreset.mutate(presetId, {
+      onError: (err) =>
+        toast({ title: "Couldn't remove status", description: err.message, variant: "error" }),
+    });
   }
 
   function handleSaveTags() {
@@ -229,7 +280,84 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                 <CardContent>
                   <div className="flex flex-col gap-4">
                     <div>
-                      <Label htmlFor="lead-status">Status</Label>
+                      <div className="flex items-center justify-between gap-2">
+                        <Label htmlFor="lead-status">Status</Label>
+                        <Dialog open={manageStatusesOpen} onOpenChange={setManageStatusesOpen}>
+                          <DialogTrigger>
+                            <button
+                              type="button"
+                              className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
+                            >
+                              + Create new status
+                            </button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogTitle>Custom pipeline statuses</DialogTitle>
+                            <DialogBody>
+                              <p className="text-xs text-slate-500 dark:text-slate-400">
+                                Added statuses show up in this dropdown for everyone in your
+                                organization.
+                              </p>
+                              <div className="mt-3 space-y-2">
+                                {statusPresets.length === 0 && (
+                                  <p className="text-xs text-slate-400">
+                                    No custom statuses yet.
+                                  </p>
+                                )}
+                                {statusPresets.map((p) => (
+                                  <div
+                                    key={p.id}
+                                    className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-2.5 dark:border-slate-800"
+                                  >
+                                    <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                                      {p.name}
+                                    </span>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleDeleteStatusPreset(p.id)}
+                                    >
+                                      Delete
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-4 space-y-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+                                <Label htmlFor="new-status-name" required>
+                                  New status name
+                                </Label>
+                                <Input
+                                  id="new-status-name"
+                                  value={newStatusName}
+                                  onChange={(e) => setNewStatusName(e.target.value)}
+                                  placeholder="e.g. Negotiating"
+                                  maxLength={20}
+                                  aria-invalid={statusFieldError ? true : undefined}
+                                />
+                                {statusFieldError && (
+                                  <p className="text-xs text-red-600">{statusFieldError}</p>
+                                )}
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  disabled={createStatusPreset.isPending}
+                                  onClick={handleAddStatusPreset}
+                                >
+                                  {createStatusPreset.isPending ? "Adding..." : "Add status"}
+                                </Button>
+                              </div>
+                            </DialogBody>
+                            <DialogFooter>
+                              <DialogClose>
+                                <Button type="button" variant="ghost">
+                                  Done
+                                </Button>
+                              </DialogClose>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      </div>
                       <Select
                         id="lead-status"
                         value={status}
@@ -239,6 +367,11 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                         {LEAD_STATUS_OPTIONS.map((s) => (
                           <option key={s} value={s}>
                             {LEAD_STATUS_LABELS[s]}
+                          </option>
+                        ))}
+                        {statusPresets.map((p) => (
+                          <option key={p.id} value={p.name}>
+                            {p.name}
                           </option>
                         ))}
                       </Select>

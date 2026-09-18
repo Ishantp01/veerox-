@@ -70,6 +70,7 @@ from apps.api.db.models import (
     Conversation,
     FollowUpTask,
     Lead,
+    LeadStatusPreset,
     Message,
     Org,
     QualificationCriteriaPreset,
@@ -151,6 +152,7 @@ from apps.api.schemas.lead import (
     LeadOut,
     LeadUpdateIn,
 )
+from apps.api.schemas.lead_status_preset import LeadStatusPresetCreateIn, LeadStatusPresetOut
 from apps.api.schemas.reports import ReportsCampaignRow, ReportsTimeseriesPoint
 
 logger = structlog.get_logger(__name__)
@@ -653,7 +655,6 @@ async def summarize_conversation(
     )
 
 
-_LEAD_STATUS_PATTERN = f"^({'|'.join(LEAD_STATUSES)})$"
 _LEAD_QUALIFICATION_STATUS_PATTERN = f"^({'|'.join(LEAD_QUALIFICATION_STATUSES)})$"
 
 
@@ -816,7 +817,11 @@ async def list_leads(
     x_admin_token: str | None = Header(None),
     intent: str | None = Query(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
-    status: str | None = Query(None, pattern=_LEAD_STATUS_PATTERN),
+    # Not pattern-restricted to LEAD_STATUSES like qualification_status below
+    # — orgs can filter by a custom status they've created (LeadStatusPreset),
+    # which isn't known at compile time. An unrecognized value just matches
+    # zero rows, same as any other filter with no matches.
+    status: str | None = Query(None, max_length=20),
     qualification_status: str | None = Query(None, pattern=_LEAD_QUALIFICATION_STATUS_PATTERN),
     tag: str | None = Query(None, description="Filter by a single tag"),
     search: str | None = Query(None, description="Match against intent or tags"),
@@ -996,6 +1001,23 @@ async def update_lead(
     # LeadUpdateIn has no such field, so there is no way to reassign a lead
     # through this endpoint.
     updates = payload.model_dump(exclude_unset=True)
+    if "status" in updates and updates["status"] is not None:
+        new_status = updates["status"]
+        if new_status not in LEAD_STATUSES:
+            preset = (
+                await db.execute(
+                    select(LeadStatusPreset).where(
+                        LeadStatusPreset.org_id == lead.org_id,
+                        LeadStatusPreset.name == new_status,
+                    )
+                )
+            ).scalar_one_or_none()
+            if preset is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown status '{new_status}' — create it first via "
+                    "POST /admin/lead-status-presets",
+                )
     for field, value in updates.items():
         setattr(lead, field, value)
 
@@ -1090,7 +1112,11 @@ async def export_leads_csv(
     x_admin_token: str | None = Header(None),
     intent: str | None = Query(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
-    status: str | None = Query(None, pattern=_LEAD_STATUS_PATTERN),
+    # Not pattern-restricted to LEAD_STATUSES like qualification_status below
+    # — orgs can filter by a custom status they've created (LeadStatusPreset),
+    # which isn't known at compile time. An unrecognized value just matches
+    # zero rows, same as any other filter with no matches.
+    status: str | None = Query(None, max_length=20),
     qualification_status: str | None = Query(None, pattern=_LEAD_QUALIFICATION_STATUS_PATTERN),
     tag: str | None = Query(None, description="Filter by a single tag"),
     search: str | None = Query(None, description="Match against intent or tags"),
@@ -1133,7 +1159,11 @@ async def export_leads_xlsx(
     x_admin_token: str | None = Header(None),
     intent: str | None = Query(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
-    status: str | None = Query(None, pattern=_LEAD_STATUS_PATTERN),
+    # Not pattern-restricted to LEAD_STATUSES like qualification_status below
+    # — orgs can filter by a custom status they've created (LeadStatusPreset),
+    # which isn't known at compile time. An unrecognized value just matches
+    # zero rows, same as any other filter with no matches.
+    status: str | None = Query(None, max_length=20),
     qualification_status: str | None = Query(None, pattern=_LEAD_QUALIFICATION_STATUS_PATTERN),
     tag: str | None = Query(None, description="Filter by a single tag"),
     search: str | None = Query(None, description="Match against intent or tags"),
@@ -2992,6 +3022,69 @@ async def delete_qualification_criteria_preset(
     preset = await db.get(QualificationCriteriaPreset, preset_id)
     if preset is None or preset.org_id != org:
         raise HTTPException(status_code=404, detail="Qualification criteria preset not found")
+    await db.delete(preset)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/lead-status-presets", response_model=list[LeadStatusPresetOut])
+async def list_lead_status_presets(
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> list[LeadStatusPresetOut]:
+    """This org's custom pipeline stages, on top of the built-in
+    new/contacted/qualified/converted/lost (LEAD_STATUSES) — offered
+    alongside them in the lead status dropdown."""
+    result = await db.execute(
+        select(LeadStatusPreset)
+        .where(LeadStatusPreset.org_id == org)
+        .order_by(LeadStatusPreset.created_at)
+    )
+    return [LeadStatusPresetOut.model_validate(p) for p in result.scalars().all()]
+
+
+@router.post("/lead-status-presets", response_model=LeadStatusPresetOut, status_code=201)
+async def create_lead_status_preset(
+    body: LeadStatusPresetCreateIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> LeadStatusPresetOut:
+    """Add a custom status to this org's lead pipeline."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Status name can't be blank")
+    if name in LEAD_STATUSES:
+        raise HTTPException(status_code=409, detail=f"'{name}' is already a built-in status")
+    existing = (
+        await db.execute(
+            select(LeadStatusPreset).where(
+                LeadStatusPreset.org_id == org, LeadStatusPreset.name == name
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return LeadStatusPresetOut.model_validate(existing)
+    preset = LeadStatusPreset(org_id=org, name=name)
+    db.add(preset)
+    await db.commit()
+    await db.refresh(preset)
+    return LeadStatusPresetOut.model_validate(preset)
+
+
+@router.delete("/lead-status-presets/{preset_id}")
+async def delete_lead_status_preset(
+    preset_id: UUID,
+    db: DbDep,
+    org: RequestOrgDep,
+    x_admin_token: str | None = Header(None),
+) -> dict[str, bool]:
+    """Remove a custom status from the dropdown. Leads already set to it keep
+    that status string — it just stops being offered for new picks."""
+    preset = await db.get(LeadStatusPreset, preset_id)
+    if preset is None or preset.org_id != org:
+        raise HTTPException(status_code=404, detail="Lead status preset not found")
     await db.delete(preset)
     await db.commit()
     return {"ok": True}

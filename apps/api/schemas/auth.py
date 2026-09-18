@@ -10,9 +10,32 @@ from apps.api.schemas.org_numbers import OrgPhoneNumberIn
 
 class LoginIn(BaseModel):
     token: str
+    # Required only when this token's account belongs to more than one org
+    # (see routers/team.py's invite_member reusing an existing email across
+    # orgs) — otherwise login can't tell which membership the caller means,
+    # and previously silently picked whichever OrgMembership was created
+    # first regardless of intent. Omitted (the common single-org case)
+    # resolves automatically as before. See LoginOrgChoiceOut below.
+    org_id: UUID | None = None
+
+
+class OrgChoice(BaseModel):
+    org_id: UUID
+    org_name: str
+    role: str
+
+
+class LoginOrgChoiceOut(BaseModel):
+    """Returned instead of SessionOut when a login token's account belongs
+    to more than one org and the request didn't say which — the client
+    re-submits POST /auth/login with the same token plus the chosen org_id."""
+
+    requires_org_selection: bool = True
+    orgs: list[OrgChoice]
 
 
 class SessionOut(BaseModel):
+    requires_org_selection: bool = False
     token: str
     org_id: UUID
     org_name: str

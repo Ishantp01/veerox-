@@ -13,7 +13,7 @@ import type { LeadStatus } from "@/lib/types";
  * Visual treatment per lead status. Color is never the sole signal — each
  * status pairs a color bundle with a Lucide icon (a11y, UI plan §10).
  */
-const STATUS_META: Record<LeadStatus, { label: string; cls: string; icon: LucideIcon }> = {
+const STATUS_META: Record<string, { label: string; cls: string; icon: LucideIcon }> = {
   new: { label: "Leads", cls: "bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700", icon: Circle },
   contacted: { label: "In Progress", cls: "bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-500/15 dark:text-sky-400 dark:ring-sky-500/20", icon: PhoneCall },
   qualified: { label: "Interested", cls: "bg-primary-50 text-primary-700 ring-primary-200 dark:bg-primary-500/15 dark:text-primary-400 dark:ring-primary-500/20", icon: BadgeCheck },
@@ -43,9 +43,18 @@ export interface StatusBadgeProps {
   className?: string;
 }
 
+// Fallback treatment for a custom, org-created status (LeadStatusPreset) —
+// no color/icon assigned to it, so it gets a neutral pill showing its own
+// name rather than silently relabeling it "Leads" like the STATUS_META.new
+// fallback would.
+const CUSTOM_STATUS_META = {
+  cls: "bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700",
+  icon: Circle,
+};
+
 /** Pill describing a lead's CRM stage. */
 export function StatusBadge({ status, className }: StatusBadgeProps) {
-  const meta = STATUS_META[status] ?? STATUS_META.new;
+  const meta = STATUS_META[status] ?? { ...CUSTOM_STATUS_META, label: status };
   const Icon = meta.icon;
   return (
     <span

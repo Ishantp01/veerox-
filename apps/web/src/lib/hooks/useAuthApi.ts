@@ -1,6 +1,21 @@
 import { apiFetch } from "@/lib/api";
 
+export interface OrgChoice {
+  org_id: string;
+  org_name: string;
+  role: "admin" | "member";
+}
+
+/** Returned by POST /auth/login instead of SessionInfo when the token's
+ * account belongs to more than one org — the caller must re-submit with
+ * `org_id` set to one of these choices. See routers/auth.py's login. */
+export interface LoginOrgChoice {
+  requires_org_selection: true;
+  orgs: OrgChoice[];
+}
+
 export interface SessionInfo {
+  requires_org_selection?: false;
   token: string;
   org_id: string;
   org_name: string;
@@ -38,12 +53,15 @@ export interface MeInfo {
   enabled_features: string[] | null;
 }
 
-/** POST /auth/login → SessionInfo. Login token is the sole credential — no
- * email/password; accounts are only ever created by an admin. */
-export function login(loginToken: string): Promise<SessionInfo> {
-  return apiFetch<SessionInfo>("/auth/login", {
+/** POST /auth/login → SessionInfo, or LoginOrgChoice when this token's
+ * account belongs to more than one org and `orgId` wasn't given — the
+ * caller re-submits with one of that response's `orgs[].org_id`. Login
+ * token is the sole credential — no email/password; accounts are only ever
+ * created by an admin. */
+export function login(loginToken: string, orgId?: string): Promise<SessionInfo | LoginOrgChoice> {
+  return apiFetch<SessionInfo | LoginOrgChoice>("/auth/login", {
     method: "POST",
-    body: JSON.stringify({ token: loginToken }),
+    body: JSON.stringify({ token: loginToken, org_id: orgId ?? null }),
   });
 }
 

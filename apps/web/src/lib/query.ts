@@ -48,6 +48,7 @@ export const queryKeys = {
   script: () => ["script"] as const,
   scripts: (channel: "voice" | "whatsapp" = "voice") => ["scripts", channel] as const,
   qualificationCriteriaPresets: () => ["qualification-criteria-presets"] as const,
+  leadStatusPresets: () => ["lead-status-presets"] as const,
   orgNumbers: () => ["org-numbers"] as const,
   settings: () => ["settings"] as const,
   whatsappSettings: () => ["settings", "whatsapp"] as const,

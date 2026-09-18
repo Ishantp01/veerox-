@@ -11,7 +11,7 @@ import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/stat
 import { Button, EmptyState, Input, Pagination, Select, SkeletonRows, Table, useToast } from "@/components/ui";
 import { SESSION_TOKEN_KEY } from "@/lib/api";
 import { downloadCsv } from "@/lib/download-csv";
-import { useLeads } from "@/lib/hooks";
+import { useLeads, useLeadStatusPresets } from "@/lib/hooks";
 import type { LeadStatus } from "@/lib/types";
 
 interface ImportLeadsResult {
@@ -103,6 +103,8 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
   const [channelFilter, setChannelFilter] = useState<"voice" | "whatsapp" | "">(
     initialChannelParam === "voice" || initialChannelParam === "whatsapp" ? initialChannelParam : ""
   );
+  const { data: statusPresetsData } = useLeadStatusPresets();
+  const statusPresets = statusPresetsData ?? [];
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -237,6 +239,11 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
               {LEAD_STATUS_OPTIONS.map((s) => (
                 <option key={s} value={`status:${s}`}>
                   {LEAD_STATUS_LABELS[s]}
+                </option>
+              ))}
+              {statusPresets.map((p) => (
+                <option key={p.id} value={`status:${p.name}`}>
+                  {p.name}
                 </option>
               ))}
             </Select>

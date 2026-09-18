@@ -34,7 +34,17 @@ export interface Message {
   created_at: string;
 }
 
-export type LeadStatus = "new" | "contacted" | "qualified" | "converted" | "lost";
+// The 5 built-ins, plus any string — orgs can add their own pipeline stages
+// (see LeadStatusPreset below), so this can't be a closed literal union.
+// The `string & {}` keeps autocomplete for the built-ins while still
+// accepting arbitrary custom status names.
+export type LeadStatus =
+  | "new"
+  | "contacted"
+  | "qualified"
+  | "converted"
+  | "lost"
+  | (string & {});
 
 // Separate qualification pipeline from `status` — a lead can be
 // status="contacted" while a rep separately works it through this.
@@ -265,6 +275,16 @@ export interface QualificationCriteriaPreset {
   criteria_text: string;
   created_at: string;
   updated_at: string;
+}
+
+// GET/POST/DELETE /admin/lead-status-presets — a custom pipeline stage this
+// org added on top of the built-in LeadStatus values (see
+// apps/api/db/models/lead_status_preset.py). `name` is the exact string
+// written to Lead.status when a lead is set to it.
+export interface LeadStatusPreset {
+  id: string;
+  name: string;
+  created_at: string;
 }
 
 // GET/POST/PATCH/DELETE /admin/whatsapp-assets — one file in the org's
