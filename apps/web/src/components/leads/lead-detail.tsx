@@ -3,17 +3,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, BadgeCheck, CalendarClock, MessageSquare, Save, Tag, UserCircle, Users } from "lucide-react";
+import { ArrowLeft, CalendarClock, MessageSquare, Save, Tag, UserCircle, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { ChannelBadge } from "@/components/conversations/channel-badge";
 import { IntentBadge } from "@/components/leads/intent-badge";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
-import {
-  LEAD_QUALIFICATION_LABELS,
-  LEAD_QUALIFICATION_OPTIONS,
-} from "@/components/leads/qualification-badge";
 import {
   Badge,
   Button,
@@ -27,7 +23,6 @@ import {
   DialogContent,
   DialogFooter,
   DialogTitle,
-  DialogTrigger,
   EmptyState,
   Input,
   Label,
@@ -48,7 +43,7 @@ import {
   useUpdateLead,
 } from "@/lib/hooks";
 import { formatDateTime, formatPhone } from "@/lib/format";
-import type { LeadQualificationStatus, LeadStatus } from "@/lib/types";
+import type { LeadStatus } from "@/lib/types";
 
 /** ISO datetime -> value an <input type="datetime-local"> accepts. */
 function toDatetimeLocal(iso: string | null): string {
@@ -87,13 +82,22 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
   const [manageStatusesOpen, setManageStatusesOpen] = useState(false);
   const [newStatusName, setNewStatusName] = useState("");
   const [statusFieldError, setStatusFieldError] = useState<string | null>(null);
+  // Which follow-up card's status dropdown opened the "create new status"
+  // dialog — all three share one dialog/preset pool, so this is how a newly
+  // created preset gets applied to the right one on success.
+  const [pendingStatusTarget, setPendingStatusTarget] = useState<
+    "followUp1" | "followUp2" | "followUp3"
+  >("followUp1");
 
   const [status, setStatus] = useState<LeadStatus>("new");
   const [followUpAt, setFollowUpAt] = useState("");
   const [followUpNote, setFollowUpNote] = useState("");
-  const [qualificationStatus, setQualificationStatus] = useState<LeadQualificationStatus>("unqualified");
-  const [qualificationScore, setQualificationScore] = useState("");
-  const [qualificationNotes, setQualificationNotes] = useState("");
+  const [followUp2Status, setFollowUp2Status] = useState<LeadStatus>("new");
+  const [followUp2At, setFollowUp2At] = useState("");
+  const [followUp2Note, setFollowUp2Note] = useState("");
+  const [followUp3Status, setFollowUp3Status] = useState<LeadStatus>("new");
+  const [followUp3At, setFollowUp3At] = useState("");
+  const [followUp3Note, setFollowUp3Note] = useState("");
   const [tagsInput, setTagsInput] = useState("");
 
   useEffect(() => {
@@ -101,9 +105,12 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
     setStatus(lead.data.status);
     setFollowUpAt(toDatetimeLocal(lead.data.follow_up_at));
     setFollowUpNote(lead.data.follow_up_note ?? "");
-    setQualificationStatus(lead.data.qualification_status);
-    setQualificationScore(lead.data.qualification_score?.toString() ?? "");
-    setQualificationNotes(lead.data.qualification_notes ?? "");
+    setFollowUp2Status((lead.data.follow_up_2_status as LeadStatus | null) ?? "new");
+    setFollowUp2At(toDatetimeLocal(lead.data.follow_up_2_at));
+    setFollowUp2Note(lead.data.follow_up_2_note ?? "");
+    setFollowUp3Status((lead.data.follow_up_3_status as LeadStatus | null) ?? "new");
+    setFollowUp3At(toDatetimeLocal(lead.data.follow_up_3_at));
+    setFollowUp3Note(lead.data.follow_up_3_note ?? "");
     setTagsInput((lead.data.tags ?? []).join(", "));
   }, [lead.data]);
 
@@ -126,6 +133,11 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
     );
   }
 
+  function openManageStatuses(target: "followUp1" | "followUp2" | "followUp3") {
+    setPendingStatusTarget(target);
+    setManageStatusesOpen(true);
+  }
+
   function handleAddStatusPreset() {
     const name = newStatusName.trim();
     if (!name) {
@@ -142,7 +154,9 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
       {
         onSuccess: (preset) => {
           setNewStatusName("");
-          setStatus(preset.name);
+          if (pendingStatusTarget === "followUp1") setStatus(preset.name as LeadStatus);
+          else if (pendingStatusTarget === "followUp2") setFollowUp2Status(preset.name as LeadStatus);
+          else setFollowUp3Status(preset.name as LeadStatus);
           toast({ title: "Status added", variant: "success" });
         },
         onError: (err) => setStatusFieldError(err.message),
@@ -175,21 +189,34 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
     );
   }
 
-  function handleSaveQualification() {
+  function handleSaveFollowUp2() {
     updateLead.mutate(
       {
         id,
-        qualification_status: qualificationStatus,
-        qualification_score: qualificationScore.trim() ? Number(qualificationScore) : null,
-        qualification_notes: qualificationNotes.trim() ? qualificationNotes.trim() : null,
+        follow_up_2_status: followUp2Status,
+        follow_up_2_at: followUp2At ? new Date(followUp2At).toISOString() : null,
+        follow_up_2_note: followUp2Note.trim() ? followUp2Note.trim() : null,
       },
       {
-        onSuccess: () => {
-          toast({ title: "Review stage updated", variant: "success" });
-        },
-        onError: (err) => {
-          toast({ title: "Update failed", description: err.message, variant: "error" });
-        },
+        onSuccess: () => toast({ title: "Follow up 2 updated", variant: "success" }),
+        onError: (err) =>
+          toast({ title: "Update failed", description: err.message, variant: "error" }),
+      },
+    );
+  }
+
+  function handleSaveFollowUp3() {
+    updateLead.mutate(
+      {
+        id,
+        follow_up_3_status: followUp3Status,
+        follow_up_3_at: followUp3At ? new Date(followUp3At).toISOString() : null,
+        follow_up_3_note: followUp3Note.trim() ? followUp3Note.trim() : null,
+      },
+      {
+        onSuccess: () => toast({ title: "Follow up 3 updated", variant: "success" }),
+        onError: (err) =>
+          toast({ title: "Update failed", description: err.message, variant: "error" }),
       },
     );
   }
@@ -271,7 +298,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                 <CardHeader>
                   <div className="flex items-center gap-2">
                     <CalendarClock size={15} aria-hidden className="text-slate-400" />
-                    <CardTitle>Status &amp; Follow-up</CardTitle>
+                    <CardTitle>Follow up 1</CardTitle>
                   </div>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                     Where this lead sits in your sales pipeline.
@@ -282,15 +309,15 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                     <div>
                       <div className="flex items-center justify-between gap-2">
                         <Label htmlFor="lead-status">Status</Label>
-                        <Dialog open={manageStatusesOpen} onOpenChange={setManageStatusesOpen}>
-                          <DialogTrigger>
-                            <button
-                              type="button"
-                              className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
-                            >
-                              + Create new status
-                            </button>
-                          </DialogTrigger>
+                        <button
+                          type="button"
+                          onClick={() => openManageStatuses("followUp1")}
+                          className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
+                        >
+                          + Create new status
+                        </button>
+                      </div>
+                      <Dialog open={manageStatusesOpen} onOpenChange={setManageStatusesOpen}>
                           <DialogContent>
                             <DialogTitle>Custom pipeline statuses</DialogTitle>
                             <DialogBody>
@@ -357,7 +384,6 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                             </DialogFooter>
                           </DialogContent>
                         </Dialog>
-                      </div>
                       <Select
                         id="lead-status"
                         value={status}
@@ -415,52 +441,61 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
               <Card>
                 <CardHeader>
                   <div className="flex items-center gap-2">
-                    <BadgeCheck size={15} aria-hidden className="text-slate-400" />
-                    <CardTitle>Review Stage</CardTitle>
+                    <CalendarClock size={15} aria-hidden className="text-slate-400" />
+                    <CardTitle>Follow up 2</CardTitle>
                   </div>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    A separate, rep-driven review of whether this lead is worth pursuing —
-                    independent of the pipeline Status above.
-                  </p>
                 </CardHeader>
                 <CardContent>
                   <div className="flex flex-col gap-4">
                     <div>
-                      <Label htmlFor="qualification-status">Review stage</Label>
+                      <div className="flex items-center justify-between gap-2">
+                        <Label htmlFor="follow-up-2-status">Status</Label>
+                        <button
+                          type="button"
+                          onClick={() => openManageStatuses("followUp2")}
+                          className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
+                        >
+                          + Create new status
+                        </button>
+                      </div>
                       <Select
-                        id="qualification-status"
-                        value={qualificationStatus}
-                        onChange={(v) => setQualificationStatus(v as LeadQualificationStatus)}
+                        id="follow-up-2-status"
+                        value={followUp2Status}
+                        onChange={(v) => setFollowUp2Status(v as LeadStatus)}
                         className="w-full"
                       >
-                        {LEAD_QUALIFICATION_OPTIONS.map((s) => (
+                        {LEAD_STATUS_OPTIONS.map((s) => (
                           <option key={s} value={s}>
-                            {LEAD_QUALIFICATION_LABELS[s]}
+                            {LEAD_STATUS_LABELS[s]}
+                          </option>
+                        ))}
+                        {statusPresets.map((p) => (
+                          <option key={p.id} value={p.name}>
+                            {p.name}
                           </option>
                         ))}
                       </Select>
                     </div>
 
                     <div>
-                      <Label htmlFor="qualification-score">Score</Label>
+                      <Label htmlFor="follow-up-2-at">Follow-up date</Label>
                       <input
-                        id="qualification-score"
-                        type="number"
-                        value={qualificationScore}
-                        onChange={(e) => setQualificationScore(e.target.value)}
-                        placeholder="e.g. 80"
+                        id="follow-up-2-at"
+                        type="datetime-local"
+                        value={followUp2At}
+                        onChange={(e) => setFollowUp2At(e.target.value)}
                         className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="qualification-notes">Notes</Label>
+                      <Label htmlFor="follow-up-2-note">Follow-up note</Label>
                       <Textarea
-                        id="qualification-notes"
+                        id="follow-up-2-note"
                         rows={3}
-                        placeholder="Why this lead is (or isn't) qualified…"
-                        value={qualificationNotes}
-                        onChange={(e) => setQualificationNotes(e.target.value)}
+                        placeholder="e.g. Call back after 5pm, wants a demo…"
+                        value={followUp2Note}
+                        onChange={(e) => setFollowUp2Note(e.target.value)}
                       />
                     </div>
 
@@ -468,10 +503,84 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                       variant="primary"
                       className="self-start"
                       loading={updateLead.isPending}
-                      onClick={handleSaveQualification}
+                      onClick={handleSaveFollowUp2}
                     >
                       {!updateLead.isPending && <Save size={15} aria-hidden />}
-                      Save review stage
+                      Save
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <CalendarClock size={15} aria-hidden className="text-slate-400" />
+                    <CardTitle>Follow up 3</CardTitle>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-col gap-4">
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <Label htmlFor="follow-up-3-status">Status</Label>
+                        <button
+                          type="button"
+                          onClick={() => openManageStatuses("followUp3")}
+                          className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
+                        >
+                          + Create new status
+                        </button>
+                      </div>
+                      <Select
+                        id="follow-up-3-status"
+                        value={followUp3Status}
+                        onChange={(v) => setFollowUp3Status(v as LeadStatus)}
+                        className="w-full"
+                      >
+                        {LEAD_STATUS_OPTIONS.map((s) => (
+                          <option key={s} value={s}>
+                            {LEAD_STATUS_LABELS[s]}
+                          </option>
+                        ))}
+                        {statusPresets.map((p) => (
+                          <option key={p.id} value={p.name}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+
+                    <div>
+                      <Label htmlFor="follow-up-3-at">Follow-up date</Label>
+                      <input
+                        id="follow-up-3-at"
+                        type="datetime-local"
+                        value={followUp3At}
+                        onChange={(e) => setFollowUp3At(e.target.value)}
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                      />
+                    </div>
+
+                    <div>
+                      <Label htmlFor="follow-up-3-note">Follow-up note</Label>
+                      <Textarea
+                        id="follow-up-3-note"
+                        rows={3}
+                        placeholder="e.g. Call back after 5pm, wants a demo…"
+                        value={followUp3Note}
+                        onChange={(e) => setFollowUp3Note(e.target.value)}
+                      />
+                    </div>
+
+                    <Button
+                      variant="primary"
+                      className="self-start"
+                      loading={updateLead.isPending}
+                      onClick={handleSaveFollowUp3}
+                    >
+                      {!updateLead.isPending && <Save size={15} aria-hidden />}
+                      Save
                     </Button>
                   </div>
                 </CardContent>

@@ -50,6 +50,12 @@ class LeadOut(BaseModel):
     status: str
     follow_up_at: datetime | None
     follow_up_note: str | None
+    follow_up_2_status: str | None
+    follow_up_2_at: datetime | None
+    follow_up_2_note: str | None
+    follow_up_3_status: str | None
+    follow_up_3_at: datetime | None
+    follow_up_3_note: str | None
     qualification_status: str
     qualification_score: int | None
     qualification_notes: str | None
@@ -84,6 +90,14 @@ class LeadUpdateIn(BaseModel):
     status: str | None = Field(default=None, max_length=20)
     follow_up_at: datetime | None = None
     follow_up_note: str | None = None
+    # Same free-string-validated-against-presets convention as `status`
+    # above — see update_lead's _validate_status_field.
+    follow_up_2_status: str | None = Field(default=None, max_length=20)
+    follow_up_2_at: datetime | None = None
+    follow_up_2_note: str | None = None
+    follow_up_3_status: str | None = Field(default=None, max_length=20)
+    follow_up_3_at: datetime | None = None
+    follow_up_3_note: str | None = None
     qualification_status: LeadQualificationStatus | None = None
     qualification_score: int | None = None
     qualification_notes: str | None = None

@@ -41,6 +41,16 @@ class Lead(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="new")
     follow_up_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     follow_up_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # Two more independent status+date+note follow-up slots, alongside the
+    # "follow up 1" fields above (status/follow_up_at/follow_up_note). All
+    # three share the same status vocabulary (LEAD_STATUSES ∪ this org's
+    # LeadStatusPreset rows) — see routers/admin.py::update_lead.
+    follow_up_2_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    follow_up_2_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    follow_up_2_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    follow_up_3_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    follow_up_3_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    follow_up_3_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     # Explicit qualification workflow, distinct from `status` — a lead can sit
     # in status="contacted" while a rep separately works it through
     # unqualified -> in_review -> qualified/disqualified.

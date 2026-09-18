@@ -68,6 +68,12 @@ export interface Lead {
   status: LeadStatus;
   follow_up_at: string | null;
   follow_up_note: string | null;
+  follow_up_2_status: string | null;
+  follow_up_2_at: string | null;
+  follow_up_2_note: string | null;
+  follow_up_3_status: string | null;
+  follow_up_3_at: string | null;
+  follow_up_3_note: string | null;
   qualification_status: LeadQualificationStatus;
   qualification_score: number | null;
   qualification_notes: string | null;

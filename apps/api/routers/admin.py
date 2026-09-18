@@ -1007,23 +1007,26 @@ async def update_lead(
     # LeadUpdateIn has no such field, so there is no way to reassign a lead
     # through this endpoint.
     updates = payload.model_dump(exclude_unset=True)
-    if "status" in updates and updates["status"] is not None:
-        new_status = updates["status"]
-        if new_status not in LEAD_STATUSES:
-            preset = (
-                await db.execute(
-                    select(LeadStatusPreset).where(
-                        LeadStatusPreset.org_id == lead.org_id,
-                        LeadStatusPreset.name == new_status,
-                    )
+    # "status" plus its two follow-up-2/3 siblings all draw from the same
+    # vocabulary (LEAD_STATUSES ∪ this org's LeadStatusPreset rows).
+    for status_field in ("status", "follow_up_2_status", "follow_up_3_status"):
+        new_status = updates.get(status_field)
+        if new_status is None or new_status in LEAD_STATUSES:
+            continue
+        preset = (
+            await db.execute(
+                select(LeadStatusPreset).where(
+                    LeadStatusPreset.org_id == lead.org_id,
+                    LeadStatusPreset.name == new_status,
                 )
-            ).scalar_one_or_none()
-            if preset is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unknown status '{new_status}' — create it first via "
-                    "POST /admin/lead-status-presets",
-                )
+            )
+        ).scalar_one_or_none()
+        if preset is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown status '{new_status}' — create it first via "
+                "POST /admin/lead-status-presets",
+            )
     for field, value in updates.items():
         setattr(lead, field, value)
 
