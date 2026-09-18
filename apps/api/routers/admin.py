@@ -542,6 +542,10 @@ async def list_conversations(
     payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
+    phone: str | None = Query(
+        None, description="Exact User.phone match — used to find a contact's conversation"
+        " from a context (e.g. a campaign target row) that only has their phone number."
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[dict]:
@@ -569,6 +573,8 @@ async def list_conversations(
         stmt = stmt.where(Conversation.user_id.in_(owned_lead_user_ids(member_scope)))
     if channel:
         stmt = stmt.where(Conversation.channel == channel)
+    if phone:
+        stmt = stmt.where(User.phone == phone)
     stmt = stmt.order_by(Conversation.started_at.desc()).limit(limit).offset(offset)
 
     rows = (await db.execute(stmt)).all()

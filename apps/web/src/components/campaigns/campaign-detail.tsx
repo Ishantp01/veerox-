@@ -2,6 +2,7 @@
 
 import { ArrowLeft, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -17,7 +18,7 @@ import {
 } from "@/components/ui";
 import { ChannelBadge } from "@/components/conversations/channel-badge";
 import { formatDateTime, formatPhone } from "@/lib/format";
-import { useCampaign, useRetryCampaignTarget } from "@/lib/hooks";
+import { findConversationByPhone, useCampaign, useRetryCampaignTarget } from "@/lib/hooks";
 import { CampaignStatusBadge, CampaignTargetStatusBadge } from "./campaign-status-badge";
 
 export interface CampaignDetailProps {
@@ -29,6 +30,34 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
   const { toast } = useToast();
   const { data: campaign, isLoading, isError, error, refetch } = useCampaign(campaignId);
   const retryTarget = useRetryCampaignTarget();
+  const [resolvingTargetId, setResolvingTargetId] = useState<string | null>(null);
+
+  async function openConversation(targetId: string, conversationId: string | null, phone: string) {
+    if (conversationId) {
+      router.push(`/conversations/${conversationId}`);
+      return;
+    }
+    setResolvingTargetId(targetId);
+    try {
+      const conversation = await findConversationByPhone(phone);
+      if (conversation) {
+        router.push(`/conversations/${conversation.id}`);
+      } else {
+        toast({
+          title: "No conversation yet",
+          description: "This contact hasn't replied, so there's nothing to show yet.",
+        });
+      }
+    } catch (err) {
+      toast({
+        title: "Couldn't open conversation",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "error",
+      });
+    } finally {
+      setResolvingTargetId(null);
+    }
+  }
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -91,12 +120,13 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
             </thead>
             <tbody>
               {campaign?.targets.map((t) => {
-                const isCompleted = t.status === "completed" && Boolean(t.conversation_id);
+                const isCompleted = t.status === "completed";
+                const isResolving = resolvingTargetId === t.id;
                 return (
                   <TableRow
                     key={t.id}
-                    onClick={isCompleted ? () => router.push(`/conversations/${t.conversation_id}`) : undefined}
-                    className={isCompleted ? "cursor-pointer" : undefined}
+                    onClick={isCompleted ? () => openConversation(t.id, t.conversation_id, t.phone) : undefined}
+                    className={isCompleted ? `cursor-pointer${isResolving ? " opacity-60" : ""}` : undefined}
                   >
                     <TableCell>
                       <span className="font-semibold text-slate-800 dark:text-slate-100">{t.name ?? "—"}</span>

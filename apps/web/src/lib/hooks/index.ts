@@ -16,6 +16,7 @@ export {
   useConversations,
   useConversationMessages,
   useSummarizeConversation,
+  findConversationByPhone,
   type ConversationFilters,
   type ConversationMessagesOptions,
 } from "./useConversations";

@@ -20,6 +20,21 @@ function buildConversationsPath(filters?: ConversationFilters): string {
 }
 
 /**
+ * Look up the most recent conversation with a contact by their exact phone
+ * number — for contexts (like a campaign target row) that only have the
+ * phone, not a conversation_id. Returns null if they've never messaged/been
+ * called, or that conversation isn't visible to this caller.
+ *
+ * GET /admin/conversations?phone=...&limit=1 → Conversation | null
+ */
+export async function findConversationByPhone(phone: string): Promise<Conversation | null> {
+  const rows = await apiFetch<Conversation[]>(
+    `/admin/conversations?phone=${encodeURIComponent(phone)}&limit=1`
+  );
+  return rows[0] ?? null;
+}
+
+/**
  * Conversation list, newest first. Polls every 10s (POLL.conversationList).
  * Optional `channel` filters server-side; `limit`/`offset` map straight onto
  * the backend query params.
