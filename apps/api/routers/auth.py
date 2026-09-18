@@ -38,7 +38,7 @@ from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
 from apps.api.db.session import AsyncSessionLocal
-from apps.api.deps import CurrentUserDep, DbDep, RedisDep, verify_platform_admin
+from apps.api.deps import CurrentOrgDep, CurrentUserDep, DbDep, RedisDep, verify_platform_admin
 from apps.api.rate_limit import limiter
 from apps.api.schemas.auth import (
     ForgotTokenIn,
@@ -421,11 +421,19 @@ async def logout(redis: RedisDep, x_session_token: str | None = Header(None)) ->
 
 
 @router.get("/me", response_model=MeOut)
-async def me(current_user: CurrentUserDep, db: DbDep) -> MeOut:
+async def me(current_user: CurrentUserDep, org: CurrentOrgDep, db: DbDep) -> MeOut:
     # Org.name/license fields folded into the same round trip via an outer
     # join instead of a trailing db.get(Org, ...) — this endpoint runs on
     # every dashboard hydration/reload, and DB here is a remote Neon
     # instance (see .env).
+    #
+    # Filtered to `org.org_id` (the session's own org, from CurrentOrgDep) —
+    # NOT just `account_user_id` picked by earliest `created_at`. An account
+    # with more than one OrgMembership (routers/team.py's invite_member
+    # reusing an existing email across orgs) would otherwise have every
+    # GET /auth/me silently snap the dashboard back to whichever org that
+    # account joined first, undoing the org the login flow actually chose
+    # (see POST /auth/login's org_id / LoginOrgChoiceOut).
     result = await db.execute(
         select(
             OrgMembership,
@@ -435,8 +443,10 @@ async def me(current_user: CurrentUserDep, db: DbDep) -> MeOut:
             Org.enabled_features,
         )
         .outerjoin(Org, Org.id == OrgMembership.org_id)
-        .where(OrgMembership.account_user_id == current_user.id)
-        .order_by(OrgMembership.created_at)
+        .where(
+            OrgMembership.account_user_id == current_user.id,
+            OrgMembership.org_id == org.org_id,
+        )
     )
     row = result.first()
     if row is None:

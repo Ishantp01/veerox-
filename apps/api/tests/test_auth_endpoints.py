@@ -170,6 +170,75 @@ async def test_login_wrong_token_returns_401(
     assert response.status_code == 401
 
 
+@pytest_asyncio.fixture
+async def account_with_two_orgs(
+    db_session: AsyncSession,
+) -> tuple[AccountUser, str, uuid.UUID, uuid.UUID]:
+    """One account, two OrgMembership rows with different roles — the
+    scenario that used to make login silently pick whichever org was
+    joined first (routers/team.py's invite_member reusing an existing
+    account across orgs). `org_a` is the earlier membership, `org_b` the
+    later one, so a regression back to "always pick earliest" is caught by
+    asserting login resolves to `org_b` when its id is explicitly passed.
+    """
+    org_a = Org(id=uuid.uuid4(), name="First Org")
+    org_b = Org(id=uuid.uuid4(), name="Second Org")
+    db_session.add_all([org_a, org_b])
+    token = generate_login_token()
+    account = AccountUser(email="multi-org@example.com", token_hash=hash_token(token))
+    db_session.add(account)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=org_a.id, account_user_id=account.id, role="admin"))
+    await db_session.commit()
+    # A second, later-created membership in a different org, with a
+    # different role — inserted in its own commit so created_at is strictly
+    # later than org_a's membership above.
+    db_session.add(OrgMembership(org_id=org_b.id, account_user_id=account.id, role="member"))
+    await db_session.commit()
+    return account, token, org_a.id, org_b.id
+
+
+async def test_login_with_multiple_orgs_requires_selection(
+    client: AsyncClient, account_with_two_orgs: tuple[AccountUser, str, uuid.UUID, uuid.UUID]
+) -> None:
+    _, token, org_a_id, org_b_id = account_with_two_orgs
+    response = await client.post("/auth/login", json={"token": token})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["requires_org_selection"] is True
+    returned_org_ids = {org["org_id"] for org in body["orgs"]}
+    assert returned_org_ids == {str(org_a_id), str(org_b_id)}
+    # No session should have been created for this response.
+    assert "token" not in body or body.get("token") is None
+
+
+async def test_login_with_org_id_selects_that_org_not_earliest(
+    client: AsyncClient, account_with_two_orgs: tuple[AccountUser, str, uuid.UUID, uuid.UUID]
+) -> None:
+    _, token, org_a_id, org_b_id = account_with_two_orgs
+    response = await client.post("/auth/login", json={"token": token, "org_id": str(org_b_id)})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["requires_org_selection"] is False
+    assert body["org_id"] == str(org_b_id)
+    assert body["role"] == "member"
+
+    me_response = await client.get("/auth/me", headers={"X-Session-Token": body["token"]})
+    assert me_response.status_code == 200
+    assert me_response.json()["org_id"] == str(org_b_id)
+    assert me_response.json()["role"] == "member"
+
+
+async def test_login_with_unknown_org_id_returns_403(
+    client: AsyncClient, account_with_two_orgs: tuple[AccountUser, str, uuid.UUID, uuid.UUID]
+) -> None:
+    _, token, _org_a_id, _org_b_id = account_with_two_orgs
+    response = await client.post(
+        "/auth/login", json={"token": token, "org_id": str(uuid.uuid4())}
+    )
+    assert response.status_code == 403
+
+
 async def test_me_without_session_token_returns_401(client: AsyncClient) -> None:
     response = await client.get("/auth/me")
     assert response.status_code == 401
