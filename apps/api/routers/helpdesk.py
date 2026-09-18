@@ -10,15 +10,17 @@ resends recent history each turn.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from apps.api.core.llm import chat_completion
 from apps.api.core.prompts import HELP_DESK_SYSTEM_PROMPT
-from apps.api.deps import CurrentOrgDep, DbDep
+from apps.api.deps import CurrentOrgDep, DbDep, require_feature
 from apps.api.db.models.platform_settings import PlatformSettings
 from apps.api.schemas.helpdesk import HelpDeskChatIn, HelpDeskChatOut
 
-router = APIRouter(prefix="/helpdesk", tags=["helpdesk"])
+router = APIRouter(
+    prefix="/helpdesk", tags=["helpdesk"], dependencies=[Depends(require_feature("helpdesk"))]
+)
 
 # Only recent turns are sent to keep the request small and on-topic; the
 # widget itself may hold a longer local history.

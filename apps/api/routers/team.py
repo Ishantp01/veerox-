@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import invalidate_user_sessions
 from apps.api.db.models.account_user import AccountUser
+from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import ORG_MEMBERSHIP_ROLES, OrgMembership
 from apps.api.deps import (
     CurrentOrg,
@@ -145,6 +146,16 @@ async def invite_member(
     role = payload.role
     if role not in ORG_MEMBERSHIP_ROLES:
         raise HTTPException(status_code=400, detail=f"role must be one of {ORG_MEMBERSHIP_ROLES}")
+
+    max_team_members = await db.scalar(select(Org.max_team_members).where(Org.id == org.org_id))
+    if max_team_members is not None:
+        seat_count = await db.scalar(
+            select(func.count()).select_from(OrgMembership).where(OrgMembership.org_id == org.org_id)
+        )
+        if seat_count >= max_team_members:
+            raise HTTPException(
+                status_code=409, detail="Team member limit reached for this organization"
+            )
 
     existing_result = await db.execute(select(AccountUser).where(AccountUser.email == payload.email))
     account_user = existing_result.scalar_one_or_none()

@@ -23,6 +23,7 @@ from apps.api.deps import (
     MemberScopeDep,
     RequestOrgDep,
     owned_lead_ids,
+    require_feature,
     verify_admin_or_session,
 )
 from apps.api.schemas.appointment import (
@@ -33,7 +34,9 @@ from apps.api.schemas.appointment import (
 )
 
 router = APIRouter(
-    prefix="/appointments", tags=["appointments"], dependencies=[Depends(verify_admin_or_session)]
+    prefix="/appointments",
+    tags=["appointments"],
+    dependencies=[Depends(verify_admin_or_session), Depends(require_feature("appointments"))],
 )
 
 _STATUS_PATTERN = f"^({'|'.join(APPOINTMENT_STATUSES)})$"

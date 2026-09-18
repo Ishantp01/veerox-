@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from apps.api.db.models.org import validate_org_features
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn
 
 
@@ -32,6 +33,12 @@ class SessionOut(BaseModel):
     # null for is_platform_org (mirrors that dependency's own exemption).
     license_status: str = "active"
     license_expires_at: str | None = None
+    # Lets the dashboard hide nav items/pages for a feature the org has been
+    # restricted from, same display-only role as license_status above —
+    # deps.py's require_feature is still the real enforcement. null =
+    # unrestricted (every AVAILABLE_ORG_FEATURES key allowed). Always null
+    # for is_platform_org.
+    enabled_features: list[str] | None = None
 
 
 class MeOut(BaseModel):
@@ -45,6 +52,7 @@ class MeOut(BaseModel):
     is_platform_org: bool = False
     license_status: str = "active"
     license_expires_at: str | None = None
+    enabled_features: list[str] | None = None
 
 
 class ProvisionOrgIn(BaseModel):
@@ -81,6 +89,15 @@ class ProvisionOrgIn(BaseModel):
     # Left unset, the org bills against the platform's shared key (see
     # core/org_openai_key.py::resolve_openai_api_key).
     openai_api_key: str | None = None
+
+    # Optional — restricts this org to a subset of AVAILABLE_ORG_FEATURES
+    # from the start (unset = unrestricted) and/or caps its team size (unset
+    # = unlimited). Both are editable later via PATCH /billing/orgs/{id} —
+    # see schemas/billing.py's OrgUpdateIn.
+    enabled_features: list[str] | None = None
+    max_team_members: int | None = None
+
+    _validate_enabled_features = field_validator("enabled_features")(validate_org_features)
 
 
 class ForgotTokenIn(BaseModel):

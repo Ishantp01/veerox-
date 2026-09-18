@@ -16,6 +16,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { PhoneNumberListField, type PhoneNumberEntry } from "./phone-number-list-field";
+import { OrgFeatureChecklist } from "./org-feature-checklist";
 import { useIssueLicense, useProvisionOrg, type ProvisionOrgResult } from "@/lib/hooks/useAdminOrgs";
 import { E164_REGEX, E164_MESSAGE } from "@/lib/phone";
 
@@ -70,6 +71,8 @@ export function NewOrgDialog() {
   const [credentials, setCredentials] = useState(EMPTY_CREDENTIALS);
   const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [licenseDays, setLicenseDays] = useState("30");
+  const [enabledFeatures, setEnabledFeatures] = useState<string[] | null>(null);
+  const [maxTeamMembers, setMaxTeamMembers] = useState("");
   const [result, setResult] = useState<ProvisionOrgResult | null>(null);
   const provisionOrg = useProvisionOrg();
   const issueLicense = useIssueLicense();
@@ -125,6 +128,8 @@ export function NewOrgDialog() {
         meta_whatsapp_business_account_id: credentials.metaBusinessAccountId.trim() || undefined,
         meta_verify_token: credentials.metaVerifyToken.trim() || undefined,
         openai_api_key: credentials.openaiApiKey.trim() || undefined,
+        enabled_features: enabledFeatures,
+        max_team_members: maxTeamMembers.trim() ? Number(maxTeamMembers) : undefined,
       },
       {
         onSuccess: (res) => {
@@ -162,6 +167,8 @@ export function NewOrgDialog() {
       setCredentials(EMPTY_CREDENTIALS);
       setCredentialsOpen(false);
       setLicenseDays("30");
+      setEnabledFeatures(null);
+      setMaxTeamMembers("");
       setResult(null);
       provisionOrg.reset();
       issueLicense.reset();
@@ -305,6 +312,13 @@ export function NewOrgDialog() {
                   the org can still be used, and a license issued later from the Organizations page.
                 </p>
               </div>
+              <OrgFeatureChecklist
+                idPrefix="new-org"
+                enabledFeatures={enabledFeatures}
+                onChangeFeatures={setEnabledFeatures}
+                maxTeamMembers={maxTeamMembers}
+                onChangeMaxTeamMembers={setMaxTeamMembers}
+              />
               <div className="rounded-lg border border-slate-200 dark:border-slate-700">
                 <button
                   type="button"

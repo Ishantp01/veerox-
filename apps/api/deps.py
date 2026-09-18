@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Annotated
 from uuid import UUID
@@ -181,6 +181,46 @@ async def enforce_org_license(db: AsyncSession, org_id: UUID) -> None:
                 "message": "Your organization's license is inactive. Contact the platform admin.",
             },
         )
+
+
+async def is_org_feature_enabled(db: AsyncSession, org_id: UUID, feature: str) -> bool:
+    """False if this org has been explicitly restricted from `feature` — the
+    platform's own operating org is always exempt (same as
+    `is_org_license_active`). `Org.enabled_features` is NULL for every org by
+    default, meaning "unrestricted"; only an explicit list (which may be
+    empty) narrows access. Non-raising so it can be reused outside HTTP
+    routes; `require_feature` below is the route-dependency wrapper."""
+    from apps.api.db.models.org import Org
+
+    if await _org_is_platform_admin_owned(db, org_id):
+        return True
+
+    result = await db.execute(select(Org.enabled_features).where(Org.id == org_id))
+    enabled_features = result.scalar_one_or_none()
+    if enabled_features is None:
+        return True
+    return feature in enabled_features
+
+
+def require_feature(feature: str) -> Callable[[UUID, AsyncSession], Awaitable[None]]:
+    """Dependency factory gating a whole router behind one of
+    db/models/org.py's AVAILABLE_ORG_FEATURES — e.g.
+    `APIRouter(..., dependencies=[Depends(require_feature("crm"))])`. Raises
+    403 if the requesting org has been restricted from this feature by a
+    platform admin (see schemas/billing.py's OrgUpdateIn.enabled_features)."""
+
+    async def _check(org_id: RequestOrgDep, db: DbDep) -> None:
+        if not await is_org_feature_enabled(db, org_id, feature):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "feature_disabled",
+                    "feature": feature,
+                    "message": "This feature is not enabled for your organization. Contact the platform admin.",
+                },
+            )
+
+    return _check
 
 
 async def _resolve_session_membership_org_id(

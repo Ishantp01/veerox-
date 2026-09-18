@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 
 from apps.api.db.models import Lead
-from apps.api.deps import DbDep, RequestOrgDep, verify_admin_or_session
+from apps.api.deps import DbDep, RequestOrgDep, require_feature, verify_admin_or_session
 from apps.api.schemas.lead import LEAD_QUALIFICATION_STATUSES, LEAD_STATUSES
 from apps.api.schemas.sales import (
     ChannelBreakdown,
@@ -15,7 +15,9 @@ from apps.api.schemas.sales import (
 )
 
 router = APIRouter(
-    prefix="/sales", tags=["sales"], dependencies=[Depends(verify_admin_or_session)]
+    prefix="/sales",
+    tags=["sales"],
+    dependencies=[Depends(verify_admin_or_session), Depends(require_feature("sales"))],
 )
 
 

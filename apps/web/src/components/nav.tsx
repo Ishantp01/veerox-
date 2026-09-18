@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { ONBORDA_NAV_IDS } from "@/lib/onboarding/tours";
+import { featureForRoute, isFeatureDisabled } from "@/lib/orgFeatures";
 
 interface NavItem {
   href: string;
@@ -156,6 +157,12 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
         // Mutually exclusive with Support Tickets: the Veerox team triages
         // the queue there and doesn't need to raise tickets to itself.
         if (item.href === "/support" && isPlatformTeam) return false;
+        // Platform admin has restricted this org from the feature backing
+        // this page (apps/api/deps.py's require_feature) — hide it rather
+        // than let it 403. Platform-org sessions are exempt server-side and
+        // always carry enabled_features === null.
+        const feature = featureForRoute(item.href);
+        if (feature && isFeatureDisabled(user?.enabled_features ?? null, feature)) return false;
         return true;
       }),
     }))

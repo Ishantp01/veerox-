@@ -14,6 +14,7 @@ from apps.api.deps import (
     MemberScopeDep,
     RequestOrgDep,
     owned_lead_ids,
+    require_feature,
     verify_admin_or_session,
 )
 from apps.api.schemas.follow_up import (
@@ -23,7 +24,10 @@ from apps.api.schemas.follow_up import (
     FollowUpTaskOut,
 )
 
-router = APIRouter(tags=["follow-ups"], dependencies=[Depends(verify_admin_or_session)])
+router = APIRouter(
+    tags=["follow-ups"],
+    dependencies=[Depends(verify_admin_or_session), Depends(require_feature("follow_ups"))],
+)
 
 
 async def _resolve_header_params(

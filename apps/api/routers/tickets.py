@@ -27,6 +27,7 @@ from apps.api.deps import (
     CurrentOrgDep,
     CurrentUserDep,
     DbDep,
+    require_feature,
     verify_platform_team_member,
 )
 from apps.api.schemas.support_ticket import (
@@ -37,7 +38,9 @@ from apps.api.schemas.support_ticket import (
     TicketStatusUpdateIn,
 )
 
-router = APIRouter(prefix="/tickets", tags=["tickets"])
+router = APIRouter(
+    prefix="/tickets", tags=["tickets"], dependencies=[Depends(require_feature("tickets"))]
+)
 admin_router = APIRouter(
     prefix="/admin/tickets",
     tags=["admin-tickets"],

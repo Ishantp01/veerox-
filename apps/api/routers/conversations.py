@@ -6,11 +6,19 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
 from apps.api.db.models import Conversation, Message
-from apps.api.deps import DbDep, MemberScopeDep, owned_lead_user_ids, verify_admin_or_session
+from apps.api.deps import (
+    DbDep,
+    MemberScopeDep,
+    owned_lead_user_ids,
+    require_feature,
+    verify_admin_or_session,
+)
 from apps.api.schemas.conversation import ConversationOut, MessageOut
 
 router = APIRouter(
-    prefix="/conversations", tags=["conversations"], dependencies=[Depends(verify_admin_or_session)]
+    prefix="/conversations",
+    tags=["conversations"],
+    dependencies=[Depends(verify_admin_or_session), Depends(require_feature("conversations"))],
 )
 
 

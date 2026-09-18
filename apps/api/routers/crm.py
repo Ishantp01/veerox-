@@ -13,7 +13,13 @@ from sqlalchemy.orm import selectinload
 
 from apps.api.core.tools import _normalize_phone
 from apps.api.db.models import Contact
-from apps.api.deps import DbDep, RequestAccountUserDep, RequestOrgDep, verify_admin_or_session
+from apps.api.deps import (
+    DbDep,
+    RequestAccountUserDep,
+    RequestOrgDep,
+    require_feature,
+    verify_admin_or_session,
+)
 from apps.api.routers.admin import (
     _E164_PATTERN,
     _csv_streaming_response,
@@ -29,7 +35,11 @@ from apps.api.schemas.crm import (
     ContactWithLeadsOut,
 )
 
-router = APIRouter(prefix="/crm", tags=["crm"], dependencies=[Depends(verify_admin_or_session)])
+router = APIRouter(
+    prefix="/crm",
+    tags=["crm"],
+    dependencies=[Depends(verify_admin_or_session), Depends(require_feature("crm"))],
+)
 
 _CONTACT_SAMPLE_ROWS = [
     {"name": "Asha Verma", "phone": "+919876543210", "email": "asha@example.com", "company": "Acme Inc."},

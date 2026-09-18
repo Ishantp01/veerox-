@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import JSON, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from apps.api.db.base import Base
@@ -15,6 +15,34 @@ from apps.api.db.models.script import Script
 # set by workers/license_expiry_worker.py, not chosen directly by an admin
 # action (see routers/billing.py's license endpoints).
 ORG_LICENSE_STATUSES = ("active", "suspended", "expired")
+
+# Fixed set of togglable product modules — a platform admin can restrict an
+# org to a subset of these via Org.enabled_features (see deps.py's
+# require_feature). Each key maps 1:1 to one of these routers' prefix/tag.
+# Not user-extensible; unknown keys are rejected by the admin-facing schemas
+# (schemas/billing.py's OrgUpdateIn, schemas/auth.py's ProvisionOrgIn).
+AVAILABLE_ORG_FEATURES = (
+    "crm",
+    "appointments",
+    "follow_ups",
+    "sales",
+    "helpdesk",
+    "tickets",
+    "templates",
+    "conversations",
+)
+
+
+def validate_org_features(features: list[str] | None) -> list[str] | None:
+    """Shared pydantic field_validator body for schemas/billing.py's
+    OrgUpdateIn and schemas/auth.py's ProvisionOrgIn — rejects any key
+    outside AVAILABLE_ORG_FEATURES."""
+    if features is None:
+        return None
+    unknown = sorted(set(features) - set(AVAILABLE_ORG_FEATURES))
+    if unknown:
+        raise ValueError(f"Unknown feature(s): {', '.join(unknown)}")
+    return features
 
 
 class Org(Base):
@@ -45,6 +73,18 @@ class Org(Base):
     # Free-text admin note (e.g. "renewed via bank transfer 2026-09-16") —
     # shown on the Organizations page, purely informational.
     license_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Platform-admin-set restriction on which product modules this org can
+    # use — keys from AVAILABLE_ORG_FEATURES above, enforced per-request by
+    # deps.py's require_feature on each gated router. NULL (the default for
+    # every org today, old and new) means "unrestricted" — distinct from an
+    # explicit `[]`, which means the admin has disabled every module. The
+    # platform's own operating org is always exempt regardless of this value
+    # (see deps.py's _org_is_platform_admin_owned).
+    enabled_features: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Platform-admin-set cap on how many OrgMembership rows this org may
+    # have — enforced in routers/team.py's invite_member. NULL = unlimited
+    # (unchanged default behavior for every org today).
+    max_team_members: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

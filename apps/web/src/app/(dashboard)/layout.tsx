@@ -8,6 +8,7 @@ import { OnboardingTour } from "@/components/onboarding/onboarding-tour";
 import { LicenseLockedScreen } from "@/components/organizations/license-locked-screen";
 import { Spinner } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
+import { featureForRoute, isFeatureDisabled } from "@/lib/orgFeatures";
 
 function FullScreenLoader() {
   return (
@@ -40,6 +41,12 @@ function FullScreenLoader() {
  * hidden from the sidebar (see components/nav.tsx's MEMBER_RESTRICTED_HREFS)
  * and, since a nav link is just UI, also redirected away here in case a
  * member navigates to one of those URLs directly.
+ *
+ * Feature restriction: same idea for a module the platform admin has
+ * disabled for this org (Org.enabled_features / apps/api/deps.py's
+ * require_feature) — components/nav.tsx hides the sidebar item, and this
+ * bounces a direct URL visit back to "/" too (see lib/orgFeatures.ts's
+ * FEATURE_GATED_ROUTES).
  */
 const MEMBER_RESTRICTED_PREFIXES = ["/team", "/settings"];
 
@@ -52,16 +59,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const onRestrictedRoute = MEMBER_RESTRICTED_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
   );
+  const routeFeature = featureForRoute(pathname);
+  const onFeatureDisabledRoute =
+    routeFeature !== null && isFeatureDisabled(user?.enabled_features ?? null, routeFeature);
 
   useEffect(() => {
     if (status === "unauthenticated") {
       router.replace("/login");
       return;
     }
-    if (isRestrictedMember && onRestrictedRoute) {
+    if ((isRestrictedMember && onRestrictedRoute) || onFeatureDisabledRoute) {
       router.replace("/");
     }
-  }, [status, isRestrictedMember, onRestrictedRoute, router]);
+  }, [status, isRestrictedMember, onRestrictedRoute, onFeatureDisabledRoute, router]);
 
   // Auth status is still resolving (/auth/me in flight) — show a spinner
   // rather than a blank screen, since a slow/cold backend can leave this
@@ -69,7 +79,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   if (status === "loading") return <FullScreenLoader />;
   // Unauthenticated: about to redirect to /login, nothing to render.
   if (status !== "authenticated") return null;
-  if (isRestrictedMember && onRestrictedRoute) return null;
+  if ((isRestrictedMember && onRestrictedRoute) || onFeatureDisabledRoute) return null;
 
   const licenseInactive = user?.license_status !== "active";
   if (licenseInactive) {

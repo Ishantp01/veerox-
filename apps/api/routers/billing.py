@@ -127,6 +127,8 @@ def _org_admin_out(
         phone_numbers=[
             OrgPhoneNumberOut.model_validate(n, from_attributes=True) for n in org.phone_numbers
         ],
+        enabled_features=org.enabled_features,
+        max_team_members=org.max_team_members,
     )
 
 

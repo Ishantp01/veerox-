@@ -104,6 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       is_platform_org: session.is_platform_org,
       license_status: session.license_status,
       license_expires_at: session.license_expires_at,
+      enabled_features: session.enabled_features,
     });
     setStatus("authenticated");
   }, [queryClient]);

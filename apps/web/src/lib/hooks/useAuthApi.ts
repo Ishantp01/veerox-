@@ -17,6 +17,11 @@ export interface SessionInfo {
   // Always "active"/null for is_platform_org.
   license_status: "active" | "suspended" | "expired";
   license_expires_at: string | null;
+  // Display-only, same role as license_status above — deps.py's
+  // require_feature is the real enforcement. null = unrestricted (every
+  // feature allowed). Always null for is_platform_org. See
+  // apps/web/src/lib/orgFeatures.ts for the known keys.
+  enabled_features: string[] | null;
 }
 
 export interface MeInfo {
@@ -30,6 +35,7 @@ export interface MeInfo {
   is_platform_org: boolean;
   license_status: "active" | "suspended" | "expired";
   license_expires_at: string | null;
+  enabled_features: string[] | null;
 }
 
 /** POST /auth/login → SessionInfo. Login token is the sole credential — no

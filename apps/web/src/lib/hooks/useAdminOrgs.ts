@@ -17,6 +17,12 @@ export interface AdminOrg {
   created_at: string;
   // Plivo/Twilio/WhatsApp entries alike — see apps/api/db/models/org_phone_number.py.
   phone_numbers: OrgPhoneNumber[];
+  // null = unrestricted (every feature allowed) — see
+  // apps/api/db/models/org.py's AVAILABLE_ORG_FEATURES and deps.py's
+  // require_feature.
+  enabled_features: string[] | null;
+  // null = unlimited — see apps/api/routers/team.py's invite_member.
+  max_team_members: number | null;
 }
 
 // Input shape for one number in ProvisionOrgInput/UpdateOrgInput's
@@ -62,6 +68,10 @@ export interface ProvisionOrgInput {
   // addition to, if changed later) PUT /admin/settings/openai-key. Left
   // unset, the org bills against the platform's shared key.
   openai_api_key?: string;
+  // Optional — restricts the org to a subset of features and/or caps its
+  // team size from the start. Omit both for unrestricted/unlimited.
+  enabled_features?: string[] | null;
+  max_team_members?: number | null;
 }
 
 export interface ProvisionOrgResult {
@@ -132,6 +142,10 @@ export interface UpdateOrgInput {
   meta_access_token?: string;
   meta_whatsapp_business_account_id?: string;
   meta_verify_token?: string;
+  // Omitted = leave the org's current restriction/cap untouched; an
+  // explicit value (including null, to clear it) replaces it.
+  enabled_features?: string[] | null;
+  max_team_members?: number | null;
 }
 
 /**

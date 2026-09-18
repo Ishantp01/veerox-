@@ -15,12 +15,15 @@ from apps.api.core.org_credentials import resolve_meta_credentials
 from apps.api.core.tools import _default_org_id
 from apps.api.core.whatsapp_assets import asset_public_url
 from apps.api.db.models import Org, WhatsAppAsset, WhatsAppTemplate
-from apps.api.deps import DbDep, RedisDep, verify_admin_or_session
+from apps.api.deps import DbDep, RedisDep, require_feature, verify_admin_or_session
 from apps.api.schemas.template import TemplateCreate, TemplateOut, TemplateSyncResult, TemplateUpdateIn
 
 logger = structlog.get_logger(__name__)
 
-router = APIRouter(tags=["templates"], dependencies=[Depends(verify_admin_or_session)])
+router = APIRouter(
+    tags=["templates"],
+    dependencies=[Depends(verify_admin_or_session), Depends(require_feature("templates"))],
+)
 
 # Meta review status (pending/approved/rejected) changes on the order of
 # hours, not seconds — caching it briefly avoids hitting the Graph API on

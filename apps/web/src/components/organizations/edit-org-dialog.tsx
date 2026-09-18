@@ -16,6 +16,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { PhoneNumberListField, type PhoneNumberEntry } from "./phone-number-list-field";
+import { OrgFeatureChecklist } from "./org-feature-checklist";
 import { useUpdateOrgAdmin, type AdminOrg } from "@/lib/hooks/useAdminOrgs";
 import { E164_REGEX, E164_MESSAGE } from "@/lib/phone";
 
@@ -95,6 +96,12 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
   );
   const [credentials, setCredentials] = useState(EMPTY_CREDENTIALS);
   const [credentialsOpen, setCredentialsOpen] = useState(false);
+  const [enabledFeatures, setEnabledFeatures] = useState<string[] | null>(
+    () => org.enabled_features,
+  );
+  const [maxTeamMembers, setMaxTeamMembers] = useState(
+    () => org.max_team_members?.toString() ?? "",
+  );
   const updateOrg = useUpdateOrgAdmin();
   const { toast } = useToast();
 
@@ -148,6 +155,8 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
         meta_access_token: credentials.metaAccessToken.trim() || undefined,
         meta_whatsapp_business_account_id: credentials.metaBusinessAccountId.trim() || undefined,
         meta_verify_token: credentials.metaVerifyToken.trim() || undefined,
+        enabled_features: enabledFeatures,
+        max_team_members: maxTeamMembers.trim() ? Number(maxTeamMembers) : null,
       },
       {
         onSuccess: () => {
@@ -169,6 +178,8 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
       setWhatsappNumbers(whatsappNumbersFromOrg(org));
       setCredentials(EMPTY_CREDENTIALS);
       setCredentialsOpen(false);
+      setEnabledFeatures(org.enabled_features);
+      setMaxTeamMembers(org.max_team_members?.toString() ?? "");
     } else {
       setFieldErrors({});
       updateOrg.reset();
@@ -254,6 +265,13 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
                 </p>
               )}
             </div>
+            <OrgFeatureChecklist
+              idPrefix="edit-org"
+              enabledFeatures={enabledFeatures}
+              onChangeFeatures={setEnabledFeatures}
+              maxTeamMembers={maxTeamMembers}
+              onChangeMaxTeamMembers={setMaxTeamMembers}
+            />
             <PhoneNumberListField
               id="edit-org-plivo-number"
               label="Dedicated Plivo numbers"

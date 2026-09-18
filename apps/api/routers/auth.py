@@ -134,7 +134,11 @@ async def provision_org(
     # No license issued yet on purpose — the org starts "active" with no
     # expiry (never auto-expires) until the platform admin issues its first
     # real license via POST /billing/orgs/{id}/license/issue.
-    org = Org(name=payload.org_name)
+    org = Org(
+        name=payload.org_name,
+        enabled_features=payload.enabled_features,
+        max_team_members=payload.max_team_members,
+    )
     if payload.plivo_auth_id and payload.plivo_auth_token:
         org.plivo_auth_id = payload.plivo_auth_id.strip()
         org.plivo_auth_token_encrypted = encrypt_secret(payload.plivo_auth_token.strip())
@@ -245,6 +249,7 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: 
     # path. Going straight to the dev/admin account skips it.
     license_status = "active"
     license_expires_at: datetime | None = None
+    enabled_features: list[str] | None = None
     if payload.token == settings.admin_token:
         account_user, membership, org_name = await _ensure_default_org_owner(db)
     else:
@@ -254,7 +259,14 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: 
         # queries. Org.name/license fields ride along in this same query
         # instead of a trailing db.get(Org, ...) after the session is created.
         result = await db.execute(
-            select(AccountUser, OrgMembership, Org.name, Org.license_status, Org.license_expires_at)
+            select(
+                AccountUser,
+                OrgMembership,
+                Org.name,
+                Org.license_status,
+                Org.license_expires_at,
+                Org.enabled_features,
+            )
             .outerjoin(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
             .outerjoin(Org, Org.id == OrgMembership.org_id)
             .where(AccountUser.token_hash == hash_token(payload.token))
@@ -265,7 +277,7 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: 
         if row is None:
             account_user, membership, org_name = None, None, None
         else:
-            account_user, membership, org_name, license_status, license_expires_at = row
+            account_user, membership, org_name, license_status, license_expires_at, enabled_features = row
 
     if account_user is None or not account_user.is_active:
         raise HTTPException(status_code=401, detail="Invalid login token")
@@ -274,7 +286,7 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: 
 
     is_platform_org = membership.org_id == DEFAULT_ORG_ID
     if is_platform_org:
-        license_status, license_expires_at = "active", None
+        license_status, license_expires_at, enabled_features = "active", None, None
 
     background_tasks.add_task(_record_last_login, account_user.id)
 
@@ -293,6 +305,7 @@ async def login(payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: 
         is_platform_org=is_platform_org,
         license_status=license_status,
         license_expires_at=license_expires_at.isoformat() if license_expires_at else None,
+        enabled_features=enabled_features,
     )
 
 
@@ -386,7 +399,13 @@ async def me(current_user: CurrentUserDep, db: DbDep) -> MeOut:
     # every dashboard hydration/reload, and DB here is a remote Neon
     # instance (see .env).
     result = await db.execute(
-        select(OrgMembership, Org.name, Org.license_status, Org.license_expires_at)
+        select(
+            OrgMembership,
+            Org.name,
+            Org.license_status,
+            Org.license_expires_at,
+            Org.enabled_features,
+        )
         .outerjoin(Org, Org.id == OrgMembership.org_id)
         .where(OrgMembership.account_user_id == current_user.id)
         .order_by(OrgMembership.created_at)
@@ -394,10 +413,10 @@ async def me(current_user: CurrentUserDep, db: DbDep) -> MeOut:
     row = result.first()
     if row is None:
         raise HTTPException(status_code=403, detail="Account has no org membership")
-    membership, org_name, license_status, license_expires_at = row
+    membership, org_name, license_status, license_expires_at, enabled_features = row
     is_platform_org = membership.org_id == DEFAULT_ORG_ID
     if is_platform_org:
-        license_status, license_expires_at = "active", None
+        license_status, license_expires_at, enabled_features = "active", None, None
     return MeOut(
         org_id=membership.org_id,
         org_name=org_name or "",
@@ -409,4 +428,5 @@ async def me(current_user: CurrentUserDep, db: DbDep) -> MeOut:
         is_platform_org=is_platform_org,
         license_status=license_status,
         license_expires_at=license_expires_at.isoformat() if license_expires_at else None,
+        enabled_features=enabled_features,
     )

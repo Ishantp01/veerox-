@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 
+from apps.api.db.models.org import validate_org_features
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn, OrgPhoneNumberOut
 
 
@@ -29,6 +30,12 @@ class OrgAdminOut(BaseModel):
     # Includes plivo/twilio/whatsapp entries alike — see
     # db/models/org_phone_number.py.
     phone_numbers: list[OrgPhoneNumberOut] = []
+    # NULL = unrestricted (every AVAILABLE_ORG_FEATURES key allowed); an
+    # explicit list (possibly empty) is what the platform admin set via the
+    # Organizations page checklist — see deps.py's require_feature.
+    enabled_features: list[str] | None = None
+    # NULL = unlimited — see routers/team.py's invite_member.
+    max_team_members: int | None = None
 
 
 class OrgUpdateIn(BaseModel):
@@ -69,6 +76,13 @@ class OrgUpdateIn(BaseModel):
     meta_access_token: str | None = None
     meta_whatsapp_business_account_id: str | None = None
     meta_verify_token: str | None = None
+    # Omitted = leave the org's current restriction untouched; an explicit
+    # list (including []) replaces it; explicit null clears any restriction
+    # back to "unrestricted" — see OrgAdminOut.enabled_features.
+    enabled_features: list[str] | None = None
+    max_team_members: int | None = None
+
+    _validate_enabled_features = field_validator("enabled_features")(validate_org_features)
 
 
 class IssueLicenseIn(BaseModel):
