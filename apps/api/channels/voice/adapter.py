@@ -49,7 +49,7 @@ class CallState:
     conversation_id: UUID
     org_id: UUID
     # "plivo" or "twilio" — which outbound WS message dialect to speak back
-    # (see _send_media/_send_clear below). Set from the ?provider= query
+    # (see _send_media below). Set from the ?provider= query
     # param webhook.py put on the stream URL.
     provider: str = "plivo"
     stream_id: str | None = None
@@ -62,9 +62,8 @@ class CallState:
     # the lifetime of one call, copied from settings when the call starts.
     tts_provider: str = "openai"
     # Per-turn ElevenLabs streaming-TTS state, live only between the first
-    # response.text.delta and that response finishing (or being cancelled by
-    # a barge-in) — None the rest of the time. Not used when tts_provider
-    # is "openai".
+    # response.text.delta and that response finishing — None the rest of
+    # the time. Not used when tts_provider is "openai".
     eleven_session: elevenlabs_client.ElevenLabsTTSSession | None = field(default=None, repr=False)
     eleven_forward_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
     eleven_text_buffer: str = ""
@@ -294,15 +293,6 @@ async def _send_media(ws: WebSocket, state: CallState, payload: str) -> None:
     await ws.send_text(json.dumps(message))
 
 
-async def _send_clear(ws: WebSocket, state: CallState) -> None:
-    """Barge-in: tell the provider to drop buffered playback audio."""
-    if state.provider == "twilio":
-        message = {"event": "clear", "streamSid": state.stream_id}
-    else:
-        message = {"event": "clearAudio"}
-    await ws.send_text(json.dumps(message))
-
-
 async def _forward_elevenlabs_audio(call_ws: WebSocket, state: CallState, log: Any) -> None:
     """Background task: drain one ElevenLabsTTSSession's audio queue onto
     the call as it arrives — started as soon as the first text delta opens
@@ -386,26 +376,20 @@ async def handle_openai_event(
             await _send_media(call_ws, state, delta)
 
     elif etype == "input_audio_buffer.speech_started":
+        # The caller started talking while the agent's current answer is
+        # still playing (or before it's even started). This used to be
+        # treated as a barge-in — clearing the provider's playback buffer
+        # and cancelling the in-flight response — which cut the agent off
+        # mid-answer. Now the current answer always finishes: OpenAI's own
+        # turn_detection.interrupt_response=false (session.update above)
+        # keeps generating/speaking it, and the caller's new speech is
+        # simply queued as the next turn once it does. Nothing to do here
+        # except log — greeting_guard_until is now redundant with that but
+        # left in place as a harmless no-op safety net.
         if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
-            # Still inside the opening-greeting window — the callee's
-            # reflexive "hello?" on an outbound call must not clear the
-            # greeting audio before they've heard it. Let the greeting play.
             log.info("voice_greeting_barge_in_suppressed")
             return
-        # Barge-in: the caller started talking over the agent. Clear
-        # whatever's buffered on the provider, and — on the ElevenLabs path
-        # — also cancel the in-flight TTS turn and ask OpenAI to stop
-        # generating more text for it, so stale speech doesn't keep
-        # trickling in after the caller's already talking.
-        await _send_clear(call_ws, state)
-        if state.tts_provider == "elevenlabs" and (
-            state.eleven_session is not None or state.eleven_forward_task is not None
-        ):
-            await _teardown_elevenlabs_turn(state)
-            try:
-                await oai_ws.send(json.dumps({"type": "response.cancel"}))
-            except Exception:  # noqa: BLE001
-                pass
+        log.info("voice_caller_speech_during_response_queued")
 
     elif etype == "conversation.item.input_audio_transcription.completed":
         state.pending_user_transcript = (event.get("transcript") or "").strip()

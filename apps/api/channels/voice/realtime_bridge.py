@@ -7,9 +7,10 @@ second WebSocket to the OpenAI Realtime API and runs two concurrent pumps:
 
   * caller -> OpenAI : caller audio -> ``input_audio_buffer.append``
   * OpenAI -> caller : model audio -> a provider-specific play event, plus
-                       barge-in, tool calls, and transcript persistence
-                       (see ``voice.adapter``, which owns the per-provider
-                       message-shape differences).
+                       queued (never interrupted) turn-taking, tool calls,
+                       and transcript persistence (see ``voice.adapter``,
+                       which owns the per-provider message-shape
+                       differences).
 
 Audio is mu-law 8 kHz on all three legs (Plivo ``contentType=audio/x-mulaw;
 rate=8000``, Twilio's default Media Streams codec, and OpenAI ``g711_ulaw``)
@@ -274,6 +275,18 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
                 "turn_detection": {
                     "type": "semantic_vad",
                     "eagerness": "medium",
+                    # Caller talking mid-answer no longer wipes the
+                    # in-progress response — OpenAI keeps generating and
+                    # speaking it to completion, and the caller's new speech
+                    # is committed as the next turn once the current one's
+                    # response.done arrives (queued, not interrupted). See
+                    # adapter.py's input_audio_buffer.speech_started handler,
+                    # which used to clear playback/cancel the response on
+                    # every barge-in and no longer does.
+                    # UNVERIFIED: interrupt_response is our best-guess field
+                    # name for this GA session shape, not confirmed against a
+                    # live connection — check session.updated doesn't error.
+                    "interrupt_response": False,
                 },
                 "noise_reduction": {"type": "far_field"},
                 "transcription": {"model": "whisper-1"},
