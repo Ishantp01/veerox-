@@ -438,8 +438,8 @@ export function CampaignsView() {
           <CardTitle>New campaign</CardTitle>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
-            <div className="grid gap-4 sm:grid-cols-3">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-6" noValidate>
+            <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <Label htmlFor="campaign-name" required>
                   Campaign name
@@ -463,38 +463,41 @@ export function CampaignsView() {
                 <Label htmlFor="campaign-start-mode" required>
                   When to start
                 </Label>
-                <Select
-                  id="campaign-start-mode"
-                  value={startMode}
-                  onChange={(v) => setStartMode(v as CampaignStartMode)}
-                  className="w-full"
-                >
-                  <option value="draft">Save as draft (start later)</option>
-                  <option value="now">Start now</option>
-                  <option value="scheduled">Schedule for…</option>
-                </Select>
-                {startMode === "scheduled" && (
-                  <>
+                <div className="flex flex-wrap items-start gap-2">
+                  <Select
+                    id="campaign-start-mode"
+                    value={startMode}
+                    onChange={(v) => setStartMode(v as CampaignStartMode)}
+                    className="w-full max-w-xs"
+                  >
+                    <option value="draft">Save as draft (start later)</option>
+                    <option value="now">Start now</option>
+                    <option value="scheduled">Schedule for…</option>
+                  </Select>
+                  {startMode === "scheduled" && (
                     <input
                       type="datetime-local"
                       value={scheduledAt}
                       onChange={(e) => setScheduledAt(e.target.value)}
                       aria-invalid={fieldErrors.scheduledAt ? true : undefined}
                       aria-describedby={fieldErrors.scheduledAt ? "campaign-scheduled-at-error" : undefined}
-                      className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                      className="w-full max-w-xs rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                     />
-                    {fieldErrors.scheduledAt && (
-                      <p id="campaign-scheduled-at-error" className="mt-1.5 text-xs text-red-600">
-                        {fieldErrors.scheduledAt}
-                      </p>
-                    )}
-                  </>
+                  )}
+                </div>
+                {fieldErrors.scheduledAt && (
+                  <p id="campaign-scheduled-at-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.scheduledAt}
+                  </p>
                 )}
               </div>
-              <div>
-                <Label htmlFor="campaign-file" required>
-                  Contact list (.csv or .xlsx)
-                </Label>
+            </div>
+
+            <div className="border-t border-slate-100 pt-5 dark:border-slate-800">
+              <Label htmlFor="campaign-file" required>
+                Contact list (.csv or .xlsx)
+              </Label>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
                 <input
                   ref={fileInputRef}
                   id="campaign-file"
@@ -504,20 +507,9 @@ export function CampaignsView() {
                   onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                   aria-invalid={fieldErrors.file ? true : undefined}
                   aria-describedby={fieldErrors.file ? "campaign-file-error" : undefined}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-800 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:file:bg-slate-800 dark:file:text-slate-200"
+                  className="w-full max-w-sm shrink-0 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-800 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:file:bg-slate-800 dark:file:text-slate-200"
                 />
-                {fieldErrors.file && (
-                  <p id="campaign-file-error" className="mt-1.5 text-xs text-red-600">
-                    {fieldErrors.file}
-                  </p>
-                )}
-                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                  Needs a &quot;phone&quot; column (E.164, e.g. +919876543210), an optional
-                  &quot;name&quot; column, and &quot;call&quot;/&quot;whatsapp&quot; columns (yes/no)
-                  to pick each contact&apos;s channel(s) — a row can be call-only, WhatsApp-only, or
-                  both.
-                </p>
-                <div className="mt-2 flex gap-2">
+                <div className="flex gap-2 sm:mt-0.5">
                   <Button
                     type="button"
                     variant="ghost"
@@ -540,8 +532,20 @@ export function CampaignsView() {
                   </Button>
                 </div>
               </div>
+              {fieldErrors.file && (
+                <p id="campaign-file-error" className="mt-1.5 text-xs text-red-600">
+                  {fieldErrors.file}
+                </p>
+              )}
+              <p className="mt-1.5 max-w-2xl text-xs text-slate-400 dark:text-slate-500">
+                Needs a &quot;phone&quot; column (E.164, e.g. +919876543210), an optional
+                &quot;name&quot; column, and &quot;call&quot;/&quot;whatsapp&quot; columns (yes/no)
+                to pick each contact&apos;s channel(s) — a row can be call-only, WhatsApp-only, or
+                both.
+              </p>
             </div>
-            <div>
+
+            <div className="border-t border-slate-100 pt-5 dark:border-slate-800">
               <div className="flex items-center justify-between gap-2">
                 <Label htmlFor="campaign-criteria" required>
                   Qualification criteria
@@ -668,122 +672,134 @@ export function CampaignsView() {
                 verdict — only prospects it marks interested become CRM leads.
               </p>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <Label htmlFor="campaign-phone-number">Call from (optional)</Label>
-                <Select
-                  id="campaign-phone-number"
-                  value={phoneNumberId}
-                  onChange={setPhoneNumberId}
-                  className="w-full"
-                >
-                  <option value="">Automatic — rotate across all numbers</option>
-                  {phoneNumbers.map((n) => (
-                    <option key={n.id} value={n.id}>
-                      {n.phone_number} ({n.provider}
-                      {n.is_default ? ", primary" : ""})
-                    </option>
-                  ))}
-                </Select>
-                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                  Voice calls only — ignored for WhatsApp contacts in this upload.
-                </p>
-              </div>
-              <div>
-                <Label htmlFor="campaign-script">Script (optional)</Label>
-                <Select id="campaign-script" value={scriptId} onChange={setScriptId} className="w-full">
-                  <option value="">Use org default script</option>
-                  {scripts.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                      {s.is_default ? " (default)" : ""}
-                    </option>
-                  ))}
-                </Select>
-                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                  Voice calls only — ignored for WhatsApp contacts in this upload.
-                </p>
-              </div>
-              <div>
-                <Label htmlFor="campaign-whatsapp-number">Send WhatsApp from (optional)</Label>
-                <Select
-                  id="campaign-whatsapp-number"
-                  value={whatsappNumberId}
-                  onChange={setWhatsappNumberId}
-                  className="w-full"
-                >
-                  <option value="">Use org default WhatsApp number</option>
-                  {whatsappNumbers.map((n) => (
-                    <option key={n.id} value={n.id}>
-                      {n.phone_number}
-                      {n.is_default ? ", default" : ""}
-                    </option>
-                  ))}
-                </Select>
-                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                  WhatsApp contacts only — ignored for voice contacts in this upload.
-                </p>
-              </div>
-              <div>
-                <Label htmlFor="campaign-max-attempts">Call attempts</Label>
-                <Input
-                  id="campaign-max-attempts"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={maxAttempts}
-                  onChange={(e) => setMaxAttempts(e.target.value)}
-                  className="w-full"
-                  aria-invalid={fieldErrors.maxAttempts ? true : undefined}
-                  aria-describedby={
-                    fieldErrors.maxAttempts ? "campaign-max-attempts-error" : undefined
-                  }
-                />
-                {fieldErrors.maxAttempts && (
-                  <p id="campaign-max-attempts-error" className="mt-1.5 text-xs text-red-600">
-                    {fieldErrors.maxAttempts}
+
+            <div className="border-t border-slate-100 pt-5 dark:border-slate-800">
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                Voice &amp; WhatsApp overrides (optional)
+              </p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                  <Label htmlFor="campaign-phone-number">Call from</Label>
+                  <Select
+                    id="campaign-phone-number"
+                    value={phoneNumberId}
+                    onChange={setPhoneNumberId}
+                    className="w-full max-w-xs"
+                  >
+                    <option value="">Automatic — rotate across all numbers</option>
+                    {phoneNumbers.map((n) => (
+                      <option key={n.id} value={n.id}>
+                        {n.phone_number} ({n.provider}
+                        {n.is_default ? ", primary" : ""})
+                      </option>
+                    ))}
+                  </Select>
+                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                    Voice calls only — ignored for WhatsApp contacts in this upload.
                   </p>
-                )}
-                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                  Voice calls only — the most times one contact will ever be called in this
-                  campaign (default 3, minimum 1). A contact who doesn&apos;t pick up is
-                  re-tried until this cap; once a call connects, that contact isn&apos;t
-                  called again.
-                </p>
+                </div>
+                <div>
+                  <Label htmlFor="campaign-script">Script</Label>
+                  <Select id="campaign-script" value={scriptId} onChange={setScriptId} className="w-full max-w-xs">
+                    <option value="">Use org default script</option>
+                    {scripts.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                        {s.is_default ? " (default)" : ""}
+                      </option>
+                    ))}
+                  </Select>
+                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                    Voice calls only — ignored for WhatsApp contacts in this upload.
+                  </p>
+                </div>
+                <div>
+                  <Label htmlFor="campaign-whatsapp-number">Send WhatsApp from</Label>
+                  <Select
+                    id="campaign-whatsapp-number"
+                    value={whatsappNumberId}
+                    onChange={setWhatsappNumberId}
+                    className="w-full max-w-xs"
+                  >
+                    <option value="">Use org default WhatsApp number</option>
+                    {whatsappNumbers.map((n) => (
+                      <option key={n.id} value={n.id}>
+                        {n.phone_number}
+                        {n.is_default ? ", default" : ""}
+                      </option>
+                    ))}
+                  </Select>
+                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                    WhatsApp contacts only — ignored for voice contacts in this upload.
+                  </p>
+                </div>
+                <div>
+                  <Label htmlFor="campaign-max-attempts">Call attempts</Label>
+                  <Input
+                    id="campaign-max-attempts"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={maxAttempts}
+                    onChange={(e) => setMaxAttempts(e.target.value)}
+                    className="w-full max-w-[120px]"
+                    aria-invalid={fieldErrors.maxAttempts ? true : undefined}
+                    aria-describedby={
+                      fieldErrors.maxAttempts ? "campaign-max-attempts-error" : undefined
+                    }
+                  />
+                  {fieldErrors.maxAttempts && (
+                    <p id="campaign-max-attempts-error" className="mt-1.5 text-xs text-red-600">
+                      {fieldErrors.maxAttempts}
+                    </p>
+                  )}
+                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                    Voice calls only — the most times one contact will ever be called in this
+                    campaign (default 3, minimum 1). A contact who doesn&apos;t pick up is
+                    re-tried until this cap; once a call connects, that contact isn&apos;t
+                    called again.
+                  </p>
+                </div>
               </div>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <Label htmlFor="campaign-template">WhatsApp template (optional)</Label>
-                <Select
-                  id="campaign-template"
-                  value={templateId}
-                  onChange={handleTemplateChange}
-                  className="w-full"
-                >
-                  <option value="">No template — send free text (may fail outside 24h reply window)</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name} ({t.language})
-                      {t.param_labels.length > 0 ? ` — ${t.param_labels.length} param(s)` : ""}
-                    </option>
-                  ))}
-                </Select>
-                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                  {templates.length === 0
-                    ? "No Meta-approved templates yet — create and approve one on the WhatsApp Templates page."
-                    : "Used for every WhatsApp contact in this upload — works even for contacts who haven't messaged you recently."}
-                </p>
-              </div>
-              <div>
-                <Label htmlFor="campaign-custom-message">Custom message (optional)</Label>
-                <Textarea
-                  id="campaign-custom-message"
-                  rows={2}
-                  value={customMessage}
-                  onChange={(e) => setCustomMessage(e.target.value)}
-                  placeholder="Sent right after the template — leave blank to send only the template."
-                />
+
+            <div className="border-t border-slate-100 pt-5 dark:border-slate-800">
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                WhatsApp message (optional)
+              </p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="campaign-template">Template</Label>
+                  <Select
+                    id="campaign-template"
+                    value={templateId}
+                    onChange={handleTemplateChange}
+                    className="w-full max-w-xs"
+                  >
+                    <option value="">No template — send free text (may fail outside 24h reply window)</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} ({t.language})
+                        {t.param_labels.length > 0 ? ` — ${t.param_labels.length} param(s)` : ""}
+                      </option>
+                    ))}
+                  </Select>
+                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
+                    {templates.length === 0
+                      ? "No Meta-approved templates yet — create and approve one on the WhatsApp Templates page."
+                      : "Used for every WhatsApp contact in this upload — works even for contacts who haven't messaged you recently."}
+                  </p>
+                </div>
+                <div>
+                  <Label htmlFor="campaign-custom-message">Custom message</Label>
+                  <Textarea
+                    id="campaign-custom-message"
+                    rows={2}
+                    value={customMessage}
+                    onChange={(e) => setCustomMessage(e.target.value)}
+                    placeholder="Sent right after the template — leave blank to send only the template."
+                  />
+                </div>
               </div>
             </div>
             {selectedTemplate?.header_type &&
