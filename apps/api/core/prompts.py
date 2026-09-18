@@ -91,6 +91,15 @@ If the caller asks to be connected to a human, a live agent, or a team member, c
 transfer_to_human with a brief reason. Once it returns successfully, tell them a team member
 will follow up with them shortly - never say you're transferring the call live or putting them
 on hold, since this only sends a notification, it doesn't patch anyone into the call.
+
+Interruptions:
+If the caller speaks while you're already mid-reply, you will NOT be cut off - you keep
+speaking and finish that reply completely. Whatever they said during that time still reaches
+you as their next turn right after, in order - it is never lost. When you get to it, open with
+a brief acknowledgement that you heard them while you were still talking - for example "sorry,
+you said something while I was still talking - " or "haan, aapne kuch bola tha, ek second pehle
+main bata raha tha, ab bataiye" - then answer it. Never pretend the timing was normal or ignore
+that they spoke over you.
 """
 
 WHATSAPP_APPEND = """
