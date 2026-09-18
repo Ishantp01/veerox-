@@ -9,6 +9,7 @@ import {
   DialogTitle,
   DialogBody,
   DialogFooter,
+  Input,
   Label,
   Textarea,
   useToast,
@@ -43,6 +44,7 @@ export function EditAppointmentDialog({ appointment, onClose }: EditAppointmentD
   const [scheduledAt, setScheduledAt] = useState("");
   const [duration, setDuration] = useState("30");
   const [notes, setNotes] = useState("");
+  const [tagsInput, setTagsInput] = useState("");
   const [fieldErrors, setFieldErrors] = useState<EditAppointmentFieldErrors>({});
   const updateAppointment = useUpdateAppointment();
   const { toast } = useToast();
@@ -52,6 +54,7 @@ export function EditAppointmentDialog({ appointment, onClose }: EditAppointmentD
     setScheduledAt(toLocalInputValue(appointment.scheduled_at));
     setDuration(String(appointment.duration_minutes));
     setNotes(appointment.notes ?? "");
+    setTagsInput((appointment.tags ?? []).join(", "));
     setFieldErrors({});
   }, [appointment]);
 
@@ -70,12 +73,18 @@ export function EditAppointmentDialog({ appointment, onClose }: EditAppointmentD
     }
     setFieldErrors({});
 
+    const tags = tagsInput
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+
     updateAppointment.mutate(
       {
         id: appointment.id,
         scheduled_at: new Date(scheduledAt).toISOString(),
         duration_minutes: result.data.duration,
         notes: notes.trim() ? notes.trim() : null,
+        tags: tags.length > 0 ? tags : null,
       },
       {
         onSuccess: () => {
@@ -147,6 +156,18 @@ export function EditAppointmentDialog({ appointment, onClose }: EditAppointmentD
                   {fieldErrors.notes}
                 </p>
               )}
+            </div>
+            <div>
+              <Label htmlFor="edit-appointment-tags">Tags</Label>
+              <Input
+                id="edit-appointment-tags"
+                value={tagsInput}
+                onChange={(e) => setTagsInput(e.target.value)}
+                placeholder="hot, enterprise, needs-demo"
+              />
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-600">
+                Comma-separated.
+              </p>
             </div>
           </DialogBody>
           <DialogFooter>

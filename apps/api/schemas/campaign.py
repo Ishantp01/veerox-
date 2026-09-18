@@ -22,6 +22,7 @@ class CampaignTargetOut(BaseModel):
     status: str
     qualified: bool | None
     disposition_reason: str | None
+    tags: list[str] | None = None
     attempt_count: int
     conversation_id: UUID | None
     created_at: datetime

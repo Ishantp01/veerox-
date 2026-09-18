@@ -1,14 +1,16 @@
 ﻿"use client";
 
-import { ArrowLeft, RotateCcw } from "lucide-react";
+import { ArrowLeft, RotateCcw, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import {
+  Badge,
   Button,
   EmptyState,
+  Input,
   SkeletonRows,
   Table,
   TableCell,
@@ -31,6 +33,17 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
   const { data: campaign, isLoading, isError, error, refetch } = useCampaign(campaignId);
   const retryTarget = useRetryCampaignTarget();
   const [resolvingTargetId, setResolvingTargetId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+
+  const allTargets = campaign?.targets ?? [];
+  const term = search.trim().toLowerCase();
+  const targets = term
+    ? allTargets.filter((t) =>
+        [t.name, t.phone, t.disposition_reason, ...(t.tags ?? [])]
+          .filter(Boolean)
+          .some((f) => f!.toLowerCase().includes(term)),
+      )
+    : allTargets;
 
   async function openConversation(targetId: string, conversationId: string | null, phone: string) {
     if (conversationId) {
@@ -75,7 +88,23 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
         description={campaign ? `Criteria: ${campaign.criteria}` : undefined}
         action={
           campaign && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative">
+                <Search
+                  size={14}
+                  aria-hidden
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                />
+                <Input
+                  id="campaign-target-search"
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search name, number, or tag…"
+                  aria-label="Search contacts by name, number, or tag"
+                  className="w-56 pl-8"
+                />
+              </div>
               {campaign.status === "scheduled" && campaign.scheduled_start_at && (
                 <span className="text-xs text-slate-400 dark:text-slate-500">
                   Starts {formatDateTime(campaign.scheduled_start_at)}
@@ -91,13 +120,13 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
         isLoading={isLoading}
         isError={isError}
         error={error}
-        isEmpty={campaign?.targets.length === 0}
+        isEmpty={targets.length === 0 && !search}
         onRetry={() => refetch()}
         loadingFallback={
           <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
-                <SkeletonRows rows={5} cols={6} />
+                <SkeletonRows rows={5} cols={9} />
               </tbody>
             </Table>
           </div>
@@ -114,12 +143,13 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
                 <TableHeader>Status</TableHeader>
                 <TableHeader>Qualified</TableHeader>
                 <TableHeader>Reason</TableHeader>
+                <TableHeader>Tags</TableHeader>
                 <TableHeader>Called</TableHeader>
                 <TableHeader />
               </TableRow>
             </thead>
             <tbody>
-              {campaign?.targets.map((t) => {
+              {targets.map((t) => {
                 const isCompleted = t.status === "completed";
                 const isResolving = resolvingTargetId === t.id;
                 return (
@@ -151,6 +181,19 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
                     </TableCell>
                     <TableCell className="max-w-xs text-xs text-slate-500">
                       {t.disposition_reason ?? "—"}
+                    </TableCell>
+                    <TableCell>
+                      {t.tags && t.tags.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {t.tags.map((tag) => (
+                            <Badge key={tag} variant="neutral" icon={null}>
+                              {tag}
+                            </Badge>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-xs text-slate-500">{formatDateTime(t.called_at)}</TableCell>
                     <TableCell>

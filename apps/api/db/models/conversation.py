@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, Text, func
+from typing import Any
+
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from apps.api.db.base import Base
@@ -39,3 +41,4 @@ class Conversation(Base):
     # POST /admin/conversations/{id}/summarize (routers/admin.py), not
     # automatically, since not every conversation needs one.
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)

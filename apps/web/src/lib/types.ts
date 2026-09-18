@@ -20,6 +20,7 @@ export interface Conversation {
   // AI-generated summary, produced on demand via POST
   // /admin/conversations/{id}/summarize — null until a rep requests one.
   summary?: string | null;
+  tags?: string[] | null;
 }
 
 export interface Message {
@@ -216,6 +217,7 @@ export interface Appointment {
   status: AppointmentStatus;
   assigned_user_id: string | null;
   notes: string | null;
+  tags: string[] | null;
   created_at: string;
   // Not stored on the appointment itself — resolved server-side from
   // whichever of lead_id/contact_id is set.
@@ -387,6 +389,7 @@ export interface Escalation {
   claimed_by_account_user_id?: string | null;
   claimed_by_name?: string | null;
   claimed_at?: string | null;
+  tags?: string[] | null;
 }
 
 export interface KillSwitchState {
@@ -579,6 +582,7 @@ export interface CampaignTarget {
   conversation_id: string | null;
   created_at: string;
   called_at: string | null;
+  tags: string[] | null;
 }
 
 export interface CampaignDetail extends Campaign {

@@ -1,13 +1,19 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { ArrowLeft, FileText, MessageSquare, Sparkles } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowLeft, FileText, MessageSquare, Save, Sparkles, Tag } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
-import { Button, EmptyState, Skeleton, useToast } from "@/components/ui";
+import { Badge, Button, EmptyState, Input, Skeleton, useToast } from "@/components/ui";
 import { TranscriptBubble } from "@/components/conversations/transcript-bubble";
 import { LiveDot } from "@/components/conversations/live-dot";
-import { useConversations, useConversationMessages, useSummarizeConversation } from "@/lib/hooks";
+import {
+  useConversations,
+  useConversationMessages,
+  useSummarizeConversation,
+  useUpdateConversation,
+} from "@/lib/hooks";
 import { formatDuration, formatRelative } from "@/lib/format";
 
 function TranscriptSkeleton() {
@@ -57,6 +63,27 @@ export function ConversationDetail({ id, backHref, backLabel, channel }: Convers
       onError: (err) =>
         toast({ title: "Could not generate summary", description: err.message, variant: "error" }),
     });
+  }
+
+  const updateConversation = useUpdateConversation();
+  const [tagsInput, setTagsInput] = useState("");
+  useEffect(() => {
+    setTagsInput((conversation?.tags ?? []).join(", "));
+  }, [conversation?.tags]);
+
+  function handleSaveTags() {
+    const tags = tagsInput
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    updateConversation.mutate(
+      { id, tags: tags.length > 0 ? tags : null },
+      {
+        onSuccess: () => toast({ title: "Tags updated", variant: "success" }),
+        onError: (err) =>
+          toast({ title: "Update failed", description: err.message, variant: "error" }),
+      },
+    );
   }
 
   return (
@@ -122,6 +149,41 @@ export function ConversationDetail({ id, backHref, backLabel, channel }: Convers
           </audio>
         </div>
       )}
+
+      <div className="mb-6 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900">
+        <p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+          <Tag size={13} aria-hidden />
+          Tags
+        </p>
+        {conversation?.tags && conversation.tags.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {conversation.tags.map((t) => (
+              <Badge key={t} variant="neutral" icon={null}>
+                {t}
+              </Badge>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <Input
+            value={tagsInput}
+            onChange={(e) => setTagsInput(e.target.value)}
+            placeholder="hot, follow-up, needs-demo"
+            aria-label="Edit conversation tags"
+            className="flex-1"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            loading={updateConversation.isPending}
+            onClick={handleSaveTags}
+          >
+            {!updateConversation.isPending && <Save size={13} aria-hidden />}
+            Save
+          </Button>
+        </div>
+        <p className="mt-1 text-xs text-slate-400 dark:text-slate-600">Comma-separated.</p>
+      </div>
 
       <QueryBoundary
         isLoading={messages.isLoading}

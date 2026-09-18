@@ -6,6 +6,9 @@ import type { Conversation, Message } from "@/lib/types";
 
 export interface ConversationFilters {
   channel?: "voice" | "whatsapp";
+  /** Substring match against the contact's name/phone or tags — the
+   * dashboard's unified conversation search box. */
+  search?: string;
   limit?: number;
   offset?: number;
 }
@@ -13,6 +16,7 @@ export interface ConversationFilters {
 function buildConversationsPath(filters?: ConversationFilters): string {
   const params = new URLSearchParams();
   if (filters?.channel) params.set("channel", filters.channel);
+  if (filters?.search) params.set("search", filters.search);
   if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
   if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
   const qs = params.toString();
@@ -78,6 +82,26 @@ export function useConversationMessages(
     queryFn: () => apiFetch<Message[]>(`/admin/conversations/${id}/messages`),
     enabled: Boolean(id),
     refetchInterval: isLive ? POLL.liveConversation : false,
+  });
+}
+
+/**
+ * Update a conversation's tags — currently the only editable field on one.
+ *
+ * PATCH /admin/conversations/{id} → Conversation
+ */
+export function useUpdateConversation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<Conversation, Error, { id: string; tags: string[] | null }>({
+    mutationFn: ({ id, tags }) =>
+      apiFetch<Conversation>(`/admin/conversations/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ tags }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
   });
 }
 

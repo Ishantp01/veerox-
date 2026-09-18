@@ -142,7 +142,12 @@ from apps.api.schemas.campaign import (
     CampaignTargetOut,
     CampaignUpdateIn,
 )
-from apps.api.schemas.conversation import ConversationOut, ConversationSummaryOut, MessageOut
+from apps.api.schemas.conversation import (
+    ConversationOut,
+    ConversationSummaryOut,
+    ConversationUpdateIn,
+    MessageOut,
+)
 from apps.api.schemas.lead import (
     LEAD_QUALIFICATION_STATUSES,
     LEAD_STATUSES,
@@ -546,6 +551,10 @@ async def list_conversations(
         None, description="Exact User.phone match — used to find a contact's conversation"
         " from a context (e.g. a campaign target row) that only has their phone number."
     ),
+    search: str | None = Query(
+        None, description="Substring match against the contact's name/phone or this"
+        " conversation's tags — the dashboard's unified conversation search box."
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[dict]:
@@ -575,6 +584,14 @@ async def list_conversations(
         stmt = stmt.where(Conversation.channel == channel)
     if phone:
         stmt = stmt.where(User.phone == phone)
+    if search:
+        stmt = stmt.where(
+            or_(
+                User.name.ilike(f"%{search}%"),
+                User.phone.ilike(f"%{search}%"),
+                cast(Conversation.tags, String).ilike(f"%{search}%"),
+            )
+        )
     stmt = stmt.order_by(Conversation.started_at.desc()).limit(limit).offset(offset)
 
     rows = (await db.execute(stmt)).all()
@@ -588,6 +605,33 @@ async def list_conversations(
         }
         for conv, count, phone, name in rows
     ]
+
+
+@router.patch("/conversations/{conversation_id}", response_model=ConversationOut)
+async def update_conversation(
+    conversation_id: UUID,
+    payload: ConversationUpdateIn,
+    db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    session_payload: SessionPayloadDep,
+    x_admin_token: str | None = Header(None),
+) -> ConversationOut:
+    """Tag a conversation — the only editable field on one from the dashboard."""
+    conversation = await _guard_conversation_access(
+        db, await db.get(Conversation, conversation_id), scope_org_id, org, session_payload
+    )
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(conversation, field, value)
+    await db.commit()
+    await db.refresh(conversation)
+
+    user = await db.get(User, conversation.user_id)
+    return ConversationOut(
+        **ConversationOut.model_validate(conversation).model_dump(exclude={"user_phone", "user_name"}),
+        user_phone=user.phone if user else None,
+        user_name=user.name if user else None,
+    )
 
 
 @router.get("/conversations/{conversation_id}/messages")
@@ -1752,6 +1796,10 @@ async def _create_campaign_from_rows(
                 )
                 continue
             row_status = candidate
+        # Optional "tags" column — comma-separated, same free-form convention
+        # as Lead.tags. Carried onto the Lead a qualified target becomes,
+        # either here (auto_qualify) or later via core/tools.py::qualify_lead.
+        row_tags = [t.strip() for t in row.get("tags", "").split(",") if t.strip()] or None
         db.add(
             CampaignTarget(
                 campaign_id=campaign.id,
@@ -1759,6 +1807,7 @@ async def _create_campaign_from_rows(
                 name=row_name,
                 phone=normalized,
                 channel=channel,
+                tags=row_tags,
             )
         )
         if auto_qualify:
@@ -1772,6 +1821,7 @@ async def _create_campaign_from_rows(
                     intent="imported",
                     channel=channel,
                     status=row_status,
+                    tags=row_tags,
                 )
             )
         seen_channels.add(channel)

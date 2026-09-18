@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Inbox } from "lucide-react";
+import { Inbox, Search } from "lucide-react";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import {
   Badge,
   EmptyState,
+  Input,
   Pagination,
   SkeletonRows,
   Table,
@@ -36,25 +37,57 @@ const PAGE_SIZE = 20;
 
 export function ConversationsTable({ channel, detailBasePath }: ConversationsTableProps) {
   const router = useRouter();
-  // Reset to page 1 whenever the channel filter changes — an offset from
-  // the previous filter's result set wouldn't make sense against this one.
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  // Debounced the same way the Leads page's search box is — avoids firing a
+  // request per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  // Reset to page 1 whenever the channel filter or search term changes — an
+  // offset from the previous filter's result set wouldn't make sense against
+  // this one.
   const [page, setPage] = useState(0);
   useEffect(() => {
     setPage(0);
-  }, [channel]);
+  }, [channel, search]);
 
-  const conversations = useConversations({ channel, limit: PAGE_SIZE, offset: page * PAGE_SIZE });
+  const conversations = useConversations({
+    channel,
+    search: search || undefined,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+  });
 
   const rows = conversations.data ?? [];
   const columns = channel
-    ? (["Live", "Client", "Started", "Ended", "# Messages"] as const)
-    : (["Live", "Client", "Channel", "Started", "Ended", "# Messages"] as const);
+    ? (["Live", "Client", "Tags", "Started", "Ended", "# Messages"] as const)
+    : (["Live", "Client", "Channel", "Tags", "Started", "Ended", "# Messages"] as const);
 
   return (
-    <div
-      data-tour="page-table"
-      className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900"
-    >
+    <div>
+      <div className="relative mb-3 w-full max-w-xs">
+        <Search
+          size={14}
+          aria-hidden
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+        />
+        <Input
+          id="conversation-search"
+          type="search"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search name, number, or tag…"
+          aria-label="Search conversations by name, number, or tag"
+          className="w-full pl-8"
+        />
+      </div>
+      <div
+        data-tour="page-table"
+        className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900"
+      >
       <Table>
         <thead>
           <TableRow isHeader>
@@ -103,6 +136,19 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
                       <ChannelBadge channel={c.channel} />
                     </TableCell>
                   )}
+                  <TableCell>
+                    {c.tags && c.tags.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {c.tags.map((t) => (
+                          <Badge key={t} variant="neutral" icon={null}>
+                            {t}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-xs text-slate-500">
                     {formatDateTime(c.started_at)}
                   </TableCell>
@@ -129,6 +175,7 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
           className="border-t border-slate-200/80 dark:border-slate-800"
         />
       )}
+      </div>
     </div>
   );
 }

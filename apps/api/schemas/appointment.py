@@ -23,6 +23,7 @@ class AppointmentCreate(BaseModel):
     duration_minutes: int = 30
     assigned_user_id: UUID | None = None
     notes: str | None = None
+    tags: list[str] | None = None
 
 
 class AppointmentOut(BaseModel):
@@ -37,6 +38,7 @@ class AppointmentOut(BaseModel):
     status: AppointmentStatus
     assigned_user_id: UUID | None
     notes: str | None
+    tags: list[str] | None
     created_at: datetime
     # Not columns on `appointments` itself — resolved by the router from
     # whichever of lead_id/contact_id is set (Lead takes priority when a
@@ -54,3 +56,4 @@ class AppointmentUpdateIn(BaseModel):
     status: AppointmentStatus | None = None
     assigned_user_id: UUID | None = None
     notes: str | None = None
+    tags: list[str] | None = None

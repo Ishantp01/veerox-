@@ -1078,6 +1078,7 @@ async def qualify_lead(
             channel=channel,
             status="qualified",
             metadata_={"campaign_id": str(target.campaign_id), "reason": reason},
+            tags=target.tags,
         )
         db.add(lead)
         await db.flush()

@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from typing import Any
+
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from apps.api.db.base import Base
@@ -19,6 +21,11 @@ class CampaignTarget(Base):
     org_id: Mapped[UUID] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Free-form tags, same convention as Lead.tags — set from an optional
+    # "tags" column on the uploaded CSV/xlsx (comma-separated), carried onto
+    # the Lead a qualified target becomes (see core/tools.py::qualify_lead
+    # and admin.py::_create_campaign_from_rows' auto_qualify path).
+    tags: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     # "voice" or "whatsapp" — which worker (campaign_dialer.py /
     # whatsapp_dispatcher.py) owns this specific target. A row that resolves
     # to both channels on upload produces two CampaignTarget rows (one per

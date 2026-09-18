@@ -16,6 +16,7 @@ export {
   useConversations,
   useConversationMessages,
   useSummarizeConversation,
+  useUpdateConversation,
   findConversationByPhone,
   type ConversationFilters,
   type ConversationMessagesOptions,

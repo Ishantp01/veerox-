@@ -18,6 +18,7 @@ class ConversationOut(BaseModel):
     recording_url: str | None = None
     recording_duration_secs: float | None = None
     summary: str | None = None
+    tags: list[str] | None = None
     # The WhatsApp/voice contact's phone number and name (User.phone /
     # User.name — see db/models/user.py) — not on the Conversation row itself,
     # so callers join User and pass these in explicitly (they default to None
@@ -32,6 +33,13 @@ class ConversationSummaryOut(ConversationOut):
     lead-detail conversation-history list)."""
 
     message_count: int
+
+
+class ConversationUpdateIn(BaseModel):
+    """Partial update — currently just tags, the only editable field on a
+    conversation from the dashboard (see admin.py's update_conversation)."""
+
+    tags: list[str] | None = None
 
 
 class MessageOut(BaseModel):

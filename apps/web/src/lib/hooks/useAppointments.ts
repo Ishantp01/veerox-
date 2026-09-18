@@ -33,6 +33,7 @@ export interface AppointmentCreateInput {
   scheduled_at: string;
   duration_minutes?: number;
   notes?: string | null;
+  tags?: string[] | null;
 }
 
 /** POST /appointments → Appointment */
@@ -57,6 +58,7 @@ export interface AppointmentUpdateInput {
   scheduled_at?: string;
   duration_minutes?: number;
   notes?: string | null;
+  tags?: string[] | null;
 }
 
 /** PATCH /appointments/{id} → Appointment */
