@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { PageHeader } from "@/components/layout/page-header";
@@ -13,10 +13,11 @@ import {
   TableCell,
   TableHeader,
   TableRow,
+  useToast,
 } from "@/components/ui";
 import { ChannelBadge } from "@/components/conversations/channel-badge";
 import { formatDateTime, formatPhone } from "@/lib/format";
-import { useCampaign } from "@/lib/hooks";
+import { useCampaign, useRetryCampaignTarget } from "@/lib/hooks";
 import { CampaignStatusBadge, CampaignTargetStatusBadge } from "./campaign-status-badge";
 
 export interface CampaignDetailProps {
@@ -25,7 +26,9 @@ export interface CampaignDetailProps {
 
 export function CampaignDetail({ campaignId }: CampaignDetailProps) {
   const router = useRouter();
+  const { toast } = useToast();
   const { data: campaign, isLoading, isError, error, refetch } = useCampaign(campaignId);
+  const retryTarget = useRetryCampaignTarget();
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -83,38 +86,73 @@ export function CampaignDetail({ campaignId }: CampaignDetailProps) {
                 <TableHeader>Qualified</TableHeader>
                 <TableHeader>Reason</TableHeader>
                 <TableHeader>Called</TableHeader>
+                <TableHeader />
               </TableRow>
             </thead>
             <tbody>
-              {campaign?.targets.map((t) => (
-                <TableRow key={t.id}>
-                  <TableCell>
-                    <span className="font-semibold text-slate-800 dark:text-slate-100">{t.name ?? "—"}</span>
-                  </TableCell>
-                  <TableCell>
-                    <span className="font-mono text-xs text-slate-600 dark:text-slate-400">{formatPhone(t.phone)}</span>
-                  </TableCell>
-                  <TableCell>
-                    <ChannelBadge channel={t.channel} />
-                  </TableCell>
-                  <TableCell>
-                    <CampaignTargetStatusBadge status={t.status} />
-                  </TableCell>
-                  <TableCell>
-                    {t.qualified === null ? (
-                      <span className="text-slate-400">—</span>
-                    ) : t.qualified ? (
-                      <span className="font-semibold text-emerald-600">Yes</span>
-                    ) : (
-                      <span className="text-slate-500">No</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="max-w-xs text-xs text-slate-500">
-                    {t.disposition_reason ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-xs text-slate-500">{formatDateTime(t.called_at)}</TableCell>
-                </TableRow>
-              ))}
+              {campaign?.targets.map((t) => {
+                const isCompleted = t.status === "completed" && Boolean(t.conversation_id);
+                return (
+                  <TableRow
+                    key={t.id}
+                    onClick={isCompleted ? () => router.push(`/conversations/${t.conversation_id}`) : undefined}
+                    className={isCompleted ? "cursor-pointer" : undefined}
+                  >
+                    <TableCell>
+                      <span className="font-semibold text-slate-800 dark:text-slate-100">{t.name ?? "—"}</span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="font-mono text-xs text-slate-600 dark:text-slate-400">{formatPhone(t.phone)}</span>
+                    </TableCell>
+                    <TableCell>
+                      <ChannelBadge channel={t.channel} />
+                    </TableCell>
+                    <TableCell>
+                      <CampaignTargetStatusBadge status={t.status} />
+                    </TableCell>
+                    <TableCell>
+                      {t.qualified === null ? (
+                        <span className="text-slate-400">—</span>
+                      ) : t.qualified ? (
+                        <span className="font-semibold text-emerald-600">Yes</span>
+                      ) : (
+                        <span className="text-slate-500">No</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="max-w-xs text-xs text-slate-500">
+                      {t.disposition_reason ?? "—"}
+                    </TableCell>
+                    <TableCell className="text-xs text-slate-500">{formatDateTime(t.called_at)}</TableCell>
+                    <TableCell>
+                      {t.status === "failed" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          loading={retryTarget.isPending && retryTarget.variables?.targetId === t.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            retryTarget.mutate(
+                              { campaignId, targetId: t.id },
+                              {
+                                onSuccess: () =>
+                                  toast({ title: "Retry queued", variant: "success" }),
+                                onError: (err) =>
+                                  toast({
+                                    title: "Couldn't retry",
+                                    description: err.message,
+                                    variant: "error",
+                                  }),
+                              },
+                            );
+                          }}
+                        >
+                          <RotateCcw size={13} aria-hidden /> Retry
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </tbody>
           </Table>
         </div>

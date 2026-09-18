@@ -82,6 +82,7 @@ export {
   useCreateCampaign,
   usePauseCampaign,
   useResumeCampaign,
+  useRetryCampaignTarget,
   useScheduleCampaign,
   useUpdateCampaign,
   type CreateCampaignInput,

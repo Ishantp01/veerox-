@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch, SESSION_TOKEN_KEY } from "@/lib/api";
 import { POLL, queryKeys } from "@/lib/query";
-import type { Campaign, CampaignCreateResult, CampaignDetail } from "@/lib/types";
+import type { Campaign, CampaignCreateResult, CampaignDetail, CampaignTarget } from "@/lib/types";
 
 /**
  * Campaign list, newest first. Polls every 5s (POLL.campaigns) so progress
@@ -195,6 +195,26 @@ export function useUpdateCampaign() {
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: ["campaigns"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.campaign(id) });
+    },
+  });
+}
+
+/**
+ * Re-queue a single failed target for another attempt.
+ *
+ * POST /admin/campaigns/{campaignId}/targets/{targetId}/retry → CampaignTarget
+ */
+export function useRetryCampaignTarget() {
+  const queryClient = useQueryClient();
+
+  return useMutation<CampaignTarget, Error, { campaignId: string; targetId: string }>({
+    mutationFn: ({ campaignId, targetId }) =>
+      apiFetch<CampaignTarget>(`/admin/campaigns/${campaignId}/targets/${targetId}/retry`, {
+        method: "POST",
+      }),
+    onSuccess: (_, { campaignId }) => {
+      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.campaign(campaignId) });
     },
   });
 }

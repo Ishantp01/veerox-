@@ -2313,6 +2313,50 @@ async def schedule_campaign(
     return CampaignStatusUpdateOut(id=campaign.id, status=campaign.status)
 
 
+@router.post(
+    "/campaigns/{campaign_id}/targets/{target_id}/retry",
+    response_model=CampaignTargetOut,
+)
+async def retry_campaign_target(
+    campaign_id: UUID,
+    target_id: UUID,
+    db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
+    x_admin_token: str | None = Header(None),
+) -> CampaignTargetOut:
+    """Re-queue a single failed target for another attempt.
+
+    Resets it back to ``pending`` with a fresh ``attempt_count`` so it isn't
+    immediately skipped by the dialer/dispatcher's ``attempt_count <
+    max_attempts`` claim filter (see workers/campaign_dialer.py and
+    workers/whatsapp_dispatcher.py). Also flips a 'completed'/'paused'
+    campaign back to 'running' — both claim loops only ever pick up targets
+    of a running campaign, so a fully-finished campaign would otherwise sit
+    forever without retrying this one target.
+    """
+    campaign = _guard_campaign_access(
+        await db.get(CallCampaign, campaign_id), scope_org_id, org, payload
+    )
+    target = await db.get(CampaignTarget, target_id)
+    if target is None or target.campaign_id != campaign.id:
+        raise HTTPException(status_code=404, detail="target not found")
+    if target.status != "failed":
+        raise HTTPException(status_code=400, detail="only a failed target can be retried")
+
+    target.status = "pending"
+    target.attempt_count = 0
+    target.disposition_reason = None
+    if campaign.status in ("completed", "paused"):
+        campaign.status = "running"
+        campaign.scheduled_start_at = None
+
+    await db.commit()
+    await db.refresh(target)
+    return CampaignTargetOut.model_validate(target)
+
+
 @router.get("/settings")
 async def get_settings(
     x_admin_token: str | None = Header(None),
