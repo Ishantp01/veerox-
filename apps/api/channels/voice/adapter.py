@@ -85,6 +85,15 @@ class CallState:
     # before they hear any of it. Cleared to 0 once the greeting response
     # actually finishes, so normal barge-in resumes for the rest of the call.
     greeting_guard_until: float = 0.0
+    # True between a response.created and its matching response.done — lets
+    # the speech_started handler below tell whether the caller started
+    # talking while the agent was actively generating/speaking a response.
+    response_active: bool = False
+    # Set when the caller talked over an in-progress response; consumed (and
+    # cleared) by the input_audio_buffer.committed handler, which is what
+    # actually fires the next response.create — create_response=False in
+    # session.update means nothing else creates it automatically.
+    interrupted_mid_response: bool = False
 
 
 def realtime_tools() -> list[dict[str, Any]]:
@@ -382,14 +391,49 @@ async def handle_openai_event(
         # and cancelling the in-flight response — which cut the agent off
         # mid-answer. Now the current answer always finishes: OpenAI's own
         # turn_detection.interrupt_response=false (session.update above)
-        # keeps generating/speaking it, and the caller's new speech is
-        # simply queued as the next turn once it does. Nothing to do here
-        # except log — greeting_guard_until is now redundant with that but
-        # left in place as a harmless no-op safety net.
+        # keeps generating/speaking it, and the caller's new speech becomes
+        # the next turn once it does — see input_audio_buffer.committed
+        # below, which is what actually fires that next response and (when
+        # response_active is True right here) tells the model to acknowledge
+        # the overlap first. greeting_guard_until is now redundant with the
+        # interrupt_response setting but left in place as a harmless no-op
+        # safety net.
         if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
             log.info("voice_greeting_barge_in_suppressed")
             return
-        log.info("voice_caller_speech_during_response_queued")
+        if state.response_active:
+            state.interrupted_mid_response = True
+            log.info("voice_caller_spoke_over_response")
+
+    elif etype == "response.created":
+        state.response_active = True
+
+    elif etype == "input_audio_buffer.committed":
+        # create_response=False (session.update above) means nothing else
+        # triggers the next response — this is the one place we do, so it's
+        # also the one place that can attach a one-off instruction to that
+        # specific response without touching the persisted session
+        # instructions used every other turn.
+        if state.interrupted_mid_response:
+            state.interrupted_mid_response = False
+            await oai_ws.send(
+                json.dumps(
+                    {
+                        "type": "response.create",
+                        "response": {
+                            "instructions": (
+                                f"{state.base_instructions}\n\n"
+                                "The caller just spoke while you were still talking. "
+                                "Start this reply by briefly acknowledging that (in the "
+                                "language you've been using) and restating in your own "
+                                "words the question they just asked - then answer it."
+                            ),
+                        },
+                    }
+                )
+            )
+        else:
+            await oai_ws.send(json.dumps({"type": "response.create"}))
 
     elif etype == "conversation.item.input_audio_transcription.completed":
         state.pending_user_transcript = (event.get("transcript") or "").strip()
@@ -465,6 +509,7 @@ async def handle_openai_event(
         log.info("voice_tool_dispatched", tool=name)
 
     elif etype == "response.done":
+        state.response_active = False
         # The opening greeting has finished playing — lift the barge-in
         # suppression so normal interruption works for the rest of the call.
         state.greeting_guard_until = 0.0
@@ -472,5 +517,5 @@ async def handle_openai_event(
     elif etype == "error":
         log.warning("openai_realtime_error", error=event.get("error"))
 
-    elif etype not in ("session.created", "session.updated", "response.created"):
+    elif etype not in ("session.created", "session.updated"):
         log.info("voice_openai_event_unhandled", etype=etype)

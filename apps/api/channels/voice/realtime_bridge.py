@@ -287,6 +287,15 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
                     # name for this GA session shape, not confirmed against a
                     # live connection — check session.updated doesn't error.
                     "interrupt_response": False,
+                    # We create every response ourselves now (adapter.py's
+                    # input_audio_buffer.committed handler) instead of
+                    # letting the server auto-fire one the instant a turn
+                    # commits — that's the only hook that lets us inject a
+                    # one-off "you were just talked over, acknowledge it"
+                    # instruction on the specific turn that follows an
+                    # interruption, and a plain response.create the rest of
+                    # the time otherwise.
+                    "create_response": False,
                 },
                 "noise_reduction": {"type": "far_field"},
                 "transcription": {"model": "whisper-1"},
