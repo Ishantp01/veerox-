@@ -148,7 +148,6 @@ export function CampaignsView() {
   const [customMessage, setCustomMessage] = useState("");
   const [scriptId, setScriptId] = useState("");
   const [phoneNumberId, setPhoneNumberId] = useState("");
-  const [whatsappScriptId, setWhatsappScriptId] = useState("");
   const [whatsappNumberId, setWhatsappNumberId] = useState("");
   const [maxAttempts, setMaxAttempts] = useState("3");
   const [fieldErrors, setFieldErrors] = useState<CampaignFieldErrors>({});
@@ -159,8 +158,6 @@ export function CampaignsView() {
 
   const { data: scriptsData } = useScripts("voice");
   const scripts = scriptsData ?? [];
-  const { data: whatsappScriptsData } = useScripts("whatsapp");
-  const whatsappScripts = whatsappScriptsData ?? [];
   const { data: orgNumbersData } = useOrgNumbers();
   const allOrgNumbers = orgNumbersData?.phone_numbers ?? [];
   const phoneNumbers = allOrgNumbers.filter((n) => n.provider !== "whatsapp");
@@ -267,21 +264,6 @@ export function CampaignsView() {
     );
   }
 
-  function handleWhatsappScriptChange(campaignId: string, newScriptId: string) {
-    updateCampaign.mutate(
-      { id: campaignId, whatsappScriptId: newScriptId || null },
-      {
-        onSuccess: () =>
-          toast({
-            title: "Script updated",
-            description: "New WhatsApp sends on this campaign will use it.",
-            variant: "success",
-          }),
-        onError: (err) => toast({ title: "Couldn't update script", description: err.message, variant: "error" }),
-      }
-    );
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
@@ -360,7 +342,6 @@ export function CampaignsView() {
         customMessage: customMessage.trim() || undefined,
         scriptId: scriptId || undefined,
         phoneNumberId: phoneNumberId || undefined,
-        whatsappScriptId: whatsappScriptId || undefined,
         whatsappNumberId: whatsappNumberId || undefined,
         maxAttempts: Number(maxAttempts),
       },
@@ -395,7 +376,6 @@ export function CampaignsView() {
           setCustomMessage("");
           setScriptId("");
           setPhoneNumberId("");
-          setWhatsappScriptId("");
           setWhatsappNumberId("");
           setMaxAttempts("3");
           setFieldErrors({});
@@ -745,26 +725,6 @@ export function CampaignsView() {
                 </p>
               </div>
               <div>
-                <Label htmlFor="campaign-whatsapp-script">WhatsApp script (optional)</Label>
-                <Select
-                  id="campaign-whatsapp-script"
-                  value={whatsappScriptId}
-                  onChange={setWhatsappScriptId}
-                  className="w-full"
-                >
-                  <option value="">Use org default WhatsApp script</option>
-                  {whatsappScripts.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                      {s.is_default ? " (default)" : ""}
-                    </option>
-                  ))}
-                </Select>
-                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                  WhatsApp contacts only — ignored for voice contacts in this upload.
-                </p>
-              </div>
-              <div>
                 <Label htmlFor="campaign-max-attempts">Call attempts</Label>
                 <Input
                   id="campaign-max-attempts"
@@ -1006,23 +966,6 @@ export function CampaignsView() {
                           >
                             <option value="">Org default</option>
                             {scripts.map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.name}
-                              </option>
-                            ))}
-                          </Select>
-                        )}
-                        {c.channel !== "voice" && (
-                          <Select
-                            id={`campaign-whatsapp-script-${c.id}`}
-                            value={c.whatsapp_script_id ?? ""}
-                            onChange={(value) => handleWhatsappScriptChange(c.id, value)}
-                            disabled={updateCampaign.isPending}
-                            className="w-40 text-xs"
-                            aria-label={c.channel === "mixed" ? "WhatsApp script" : "Script"}
-                          >
-                            <option value="">Org default</option>
-                            {whatsappScripts.map((s) => (
                               <option key={s.id} value={s.id}>
                                 {s.name}
                               </option>
