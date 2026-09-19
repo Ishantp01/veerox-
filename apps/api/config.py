@@ -90,6 +90,8 @@ class Settings(BaseSettings):
 
     # Brevo transactional email (forgot-token delivery only, for now).
     brevo_api_key: str | None = None
+    # Where the "Go to sign in" button in emails points.
+    app_login_url: str = "https://app.workassignai.com/login"
     brevo_sender_email: str = "no-reply@veerox.ai"
     brevo_sender_name: str = "Veerox"
 

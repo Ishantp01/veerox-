@@ -34,6 +34,7 @@ async def send_email(
     subject: str,
     html_content: str,
     to_name: str | None = None,
+    text_content: str | None = None,
 ) -> dict[str, Any]:
     """Send a transactional email via ``POST /smtp/email``.
 
@@ -46,6 +47,8 @@ async def send_email(
         "subject": subject,
         "htmlContent": html_content,
     }
+    if text_content:
+        payload["textContent"] = text_content
     try:
         r = await _http.post(
             url,

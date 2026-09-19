@@ -37,7 +37,11 @@ async def _stub_brevo_email(monkeypatch: pytest.MonkeyPatch) -> None:
     from apps.api.routers import auth as auth_module
 
     async def _fake_send_email(
-        to_email: str, subject: str, html_content: str, to_name: str | None = None
+        to_email: str,
+        subject: str,
+        html_content: str,
+        to_name: str | None = None,
+        text_content: str | None = None,
     ) -> dict:
         return {"messageId": "fake"}
 
@@ -260,7 +264,11 @@ async def test_forgot_token_by_email_rotates_token_and_sends_email(
     sent: list[tuple[str, str]] = []
 
     async def _capture_send_email(
-        to_email: str, subject: str, html_content: str, to_name: str | None = None
+        to_email: str,
+        subject: str,
+        html_content: str,
+        to_name: str | None = None,
+        text_content: str | None = None,
     ) -> dict:
         sent.append((to_email, html_content))
         return {"messageId": "fake"}
@@ -325,7 +333,11 @@ async def test_forgot_token_unknown_identifier_returns_generic_message(
     calls = {"email": 0, "sms": 0}
 
     async def _send_email(
-        to_email: str, subject: str, html_content: str, to_name: str | None = None
+        to_email: str,
+        subject: str,
+        html_content: str,
+        to_name: str | None = None,
+        text_content: str | None = None,
     ) -> dict:
         calls["email"] += 1
         return {}
@@ -360,7 +372,11 @@ async def test_forgot_token_inactive_account_treated_as_not_found(
     calls = {"email": 0}
 
     async def _send_email(
-        to_email: str, subject: str, html_content: str, to_name: str | None = None
+        to_email: str,
+        subject: str,
+        html_content: str,
+        to_name: str | None = None,
+        text_content: str | None = None,
     ) -> dict:
         calls["email"] += 1
         return {}

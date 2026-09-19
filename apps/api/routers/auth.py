@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from apps.api.channels.email import brevo_client
+from apps.api.channels.email import templates as email_templates
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice.org_numbers import get_default_numbers, replace_org_phone_numbers
 from apps.api.channels.voice.plivo_provisioning import fire_and_forget_register_org_plivo_numbers
@@ -384,11 +385,14 @@ async def forgot_token(
 
         try:
             if is_email:
+                html, text = email_templates.login_token_email(
+                    login_token, settings.app_login_url
+                )
                 await brevo_client.send_email(
                     account_user.email,
                     "Your new Veerox login token",
-                    f"<p>Your new login token: <b>{login_token}</b></p>"
-                    "<p>Your previous token no longer works.</p>",
+                    html,
+                    text_content=text,
                 )
             elif account_user.mobile:
                 # This account_user has no org_id column of its own — resolve
