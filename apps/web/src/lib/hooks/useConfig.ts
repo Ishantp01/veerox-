@@ -86,6 +86,38 @@ export function useUpdateCallingSettings() {
   });
 }
 
+export interface CountryCodeSettings {
+  default_country_code: string;
+}
+
+/** GET /admin/settings/country-code → CountryCodeSettings (org admins only) */
+export function useCountryCodeSettings() {
+  return useQuery<CountryCodeSettings>({
+    queryKey: queryKeys.countryCodeSettings(),
+    queryFn: () => apiFetch<CountryCodeSettings>("/admin/settings/country-code"),
+  });
+}
+
+/**
+ * Change the prefix added to numbers this org enters without one. Only
+ * affects numbers entered from now on.
+ *
+ * PUT /admin/settings/country-code → CountryCodeSettings
+ */
+export function useUpdateCountryCodeSettings() {
+  const queryClient = useQueryClient();
+  return useMutation<CountryCodeSettings, Error, CountryCodeSettings>({
+    mutationFn: (body) =>
+      apiFetch<CountryCodeSettings>("/admin/settings/country-code", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKeys.countryCodeSettings(), data);
+    },
+  });
+}
+
 /**
  * Read-only status of this org's own OpenAI key — `configured` plus a
  * masked preview (e.g. "sk-...ab12"). The real key is never returned once

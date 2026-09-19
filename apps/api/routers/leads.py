@@ -3,7 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
-from apps.api.db.models import Lead
+from apps.api.core.phone import normalize_phone
+from apps.api.db.models import Lead, Org
 from apps.api.deps import DbDep, RequestOrgDep, verify_admin_or_session
 from apps.api.schemas.lead import LeadCreate, LeadOut
 
@@ -28,11 +29,16 @@ async def list_leads(
 
 @router.post("", response_model=LeadOut, status_code=201)
 async def create_lead(payload: LeadCreate, db: DbDep, org_id: RequestOrgDep) -> Lead:
+    org_row = await db.get(Org, org_id)
     lead = Lead(
         org_id=org_id,
         user_id=payload.user_id,
         name=payload.name,
-        phone=payload.phone,
+        phone=(
+            normalize_phone(payload.phone, org_row.default_country_code if org_row else None)
+            if payload.phone
+            else payload.phone
+        ),
         intent=payload.intent,
         metadata_=payload.metadata_,
     )

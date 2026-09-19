@@ -31,6 +31,7 @@ from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice.org_numbers import get_default_whatsapp_number_id, get_rotating_numbers
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
+from apps.api.core.phone import normalize_phone
 from apps.api.core.org_credentials import (
     resolve_meta_credentials,
     resolve_plivo_credentials,
@@ -460,6 +461,17 @@ def _normalize_phone(phone: str) -> str:
     return cleaned
 
 
+async def _org_phone(db: AsyncSession, org_id: UUID, phone: str) -> str:
+    """A customer-typed number, with the org's default country code added when
+    it was given without one (core/phone.py). A number that was already
+    international keeps its original form, so it still matches users stored
+    by the WhatsApp/voice adapters."""
+    org = await db.get(Org, org_id)
+    cleaned = _normalize_phone(phone)
+    full = normalize_phone(phone, org.default_country_code if org else None)
+    return cleaned if cleaned.lstrip("+") == full.lstrip("+") else full
+
+
 def _format_display_time(time_str: str) -> str:
     """Render a 24-hour ``HH:MM`` time (the LLM's tool-call format) as
     12-hour clock time for customer-facing WhatsApp templates, e.g.
@@ -492,9 +504,10 @@ async def _get_or_create_user_by_phone(
     safe under concurrent first-contact events; on collision SQLAlchemy will
     surface an IntegrityError which the caller can choose to handle.
     """
-    normalized = _normalize_phone(phone)
-    stmt = select(User).where(User.org_id == org_id, User.phone == normalized)
-    existing = (await db.execute(stmt)).scalar_one_or_none()
+    normalized = await _org_phone(db, org_id, phone)
+    digits = normalized.lstrip("+")
+    stmt = select(User).where(User.org_id == org_id, User.phone.in_([digits, f"+{digits}"]))
+    existing = (await db.execute(stmt)).scalars().first()
     if existing is not None:
         if name and not existing.name:
             existing.name = name
@@ -531,6 +544,7 @@ async def capture_lead(
     genuinely has no org context to give (e.g. CLI/test invocations).
     """
     org_id = org_id or _default_org_id()
+    phone = await _org_phone(db, org_id, phone)
     redis = get_redis_pool()
     key = _lead_dedupe_key(org_id, phone, intent)
 
@@ -1159,10 +1173,10 @@ async def lookup_customer(
     ``{"found": False}`` when no row matches.
     """
     org_id = org_id or _default_org_id()
-    normalized = _normalize_phone(phone)
+    digits = (await _org_phone(db, org_id, phone)).lstrip("+")
 
-    user_stmt = select(User).where(User.org_id == org_id, User.phone == normalized)
-    user = (await db.execute(user_stmt)).scalar_one_or_none()
+    user_stmt = select(User).where(User.org_id == org_id, User.phone.in_([digits, f"+{digits}"]))
+    user = (await db.execute(user_stmt)).scalars().first()
     if user is None:
         return {"found": False}
 
@@ -1342,7 +1356,7 @@ async def send_whatsapp_message(
     if meta_creds is None:
         return {"status": "error", "reason": "whatsapp_not_configured"}
 
-    normalized = _normalize_phone(target_phone)
+    normalized = normalize_phone(target_phone, org.default_country_code if org else None)
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
     try:
@@ -1444,7 +1458,7 @@ async def send_whatsapp_file(
     if meta_creds is None:
         return {"status": "error", "reason": "whatsapp_not_configured"}
 
-    normalized = _normalize_phone(target_phone)
+    normalized = normalize_phone(target_phone, org.default_country_code if org else None)
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
     try:
@@ -1527,7 +1541,7 @@ async def send_whatsapp_template(
     if meta_creds is None:
         return {"status": "error", "reason": "whatsapp_not_configured"}
 
-    normalized = _normalize_phone(target_phone)
+    normalized = normalize_phone(target_phone, org.default_country_code if org else None)
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
     # A media header (IMAGE/VIDEO/DOCUMENT) has no {{1}} — the header IS the
@@ -1652,8 +1666,8 @@ async def initiate_ai_call(
     if not target_phone:
         return {"status": "error", "reason": "no_phone_number_available"}
 
-    normalized = _normalize_phone(target_phone)
     org = await db.get(Org, org_id)
+    normalized = normalize_phone(target_phone, org.default_country_code if org else None)
     plivo_creds = resolve_plivo_credentials(org)
     twilio_creds = resolve_twilio_credentials(org)
 

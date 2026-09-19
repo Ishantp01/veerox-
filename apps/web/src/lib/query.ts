@@ -53,6 +53,7 @@ export const queryKeys = {
   settings: () => ["settings"] as const,
   whatsappSettings: () => ["settings", "whatsapp"] as const,
   callingSettings: () => ["settings", "calling"] as const,
+  countryCodeSettings: () => ["settings", "country-code"] as const,
   openaiKeySettings: () => ["settings", "openai-key"] as const,
   plivoCredentialsSettings: () => ["settings", "plivo-credentials"] as const,
   twilioCredentialsSettings: () => ["settings", "twilio-credentials"] as const,

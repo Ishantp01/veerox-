@@ -114,6 +114,7 @@ def _org_admin_out(
     return OrgAdminOut(
         id=str(org.id),
         name=org.name,
+        default_country_code=org.default_country_code,
         license_status=org.license_status,
         license_expires_at=_as_aware_utc(org.license_expires_at).isoformat() if org.license_expires_at else None,
         license_issued_at=_as_aware_utc(org.license_issued_at).isoformat() if org.license_issued_at else None,
@@ -233,6 +234,8 @@ async def update_org(
             org_row.meta_verify_token_encrypted = encrypt_secret(payload.meta_verify_token.strip())
         meta_creds_changed = True
 
+    if fields.get("default_country_code") is None:
+        fields.pop("default_country_code", None)  # NOT NULL column — null means "leave as is"
     if "name" in fields:
         name = (fields["name"] or "").strip()
         if not name:

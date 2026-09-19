@@ -46,6 +46,7 @@ from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
 from apps.api.core.crypto import decrypt_secret, encrypt_secret, mask_secret
 from apps.api.core.llm import chat_completion
+from apps.api.core.phone import normalize_phone
 from apps.api.core.org_credentials import (
     resolve_meta_credentials,
     resolve_plivo_credentials,
@@ -100,6 +101,8 @@ from apps.api.redis_client import ERROR_COUNTER_KEY_FMT
 from apps.api.schemas.admin import (
     CallingSettingsIn,
     CallingSettingsOut,
+    CountryCodeSettingsIn,
+    CountryCodeSettingsOut,
     KillSwitchIn,
     KillSwitchOut,
     MetaCredentialsSettingsIn,
@@ -583,7 +586,10 @@ async def list_conversations(
     if channel:
         stmt = stmt.where(Conversation.channel == channel)
     if phone:
-        stmt = stmt.where(User.phone == phone)
+        # WhatsApp/voice adapters store User.phone without the leading "+"
+        # while campaign targets/CRM keep it — match either form.
+        phone_digits = re.sub(r"\D", "", phone)
+        stmt = stmt.where(User.phone.in_([phone_digits, f"+{phone_digits}"]))
     if search:
         stmt = stmt.where(
             or_(
@@ -1662,6 +1668,13 @@ def _campaign_out(
     )
 
 
+async def _org_country_code(db: AsyncSession, org_id: UUID) -> str | None:
+    """The org's default dialing prefix (Org.default_country_code), for
+    core/phone.py::normalize_phone."""
+    org_row = await db.get(Org, org_id)
+    return org_row.default_country_code if org_row else None
+
+
 async def _create_campaign_from_rows(
     db: DbDep,
     *,
@@ -1749,19 +1762,22 @@ async def _create_campaign_from_rows(
     # the chosen number of times. Keyed by (phone, channel) so a contact can
     # still be both a voice and a WhatsApp target.
     seen_targets: set[tuple[str, str]] = set()
+    country_code = await _org_country_code(db, org_id)
     for row_num, row, channel in rows:
         phone = row.get("phone", "")
         if not phone:
             errors.append({"row": row_num, "reason": "missing phone"})
             continue
-        normalized = _normalize_phone(phone)
+        # A number without an international prefix gets the org's default
+        # country code (set at org creation) instead of being rejected.
+        normalized = normalize_phone(phone, country_code)
         if not _E164_PATTERN.match(normalized):
             errors.append(
                 {
                     "row": row_num,
                     "reason": (
-                        f"phone '{phone}' must include a country code in E.164 format, "
-                        "e.g. +919876543210"
+                        f"phone '{phone}' is not a valid phone number "
+                        f"(numbers without a country code get {country_code or '+91'} added)"
                     ),
                 }
             )
@@ -2551,6 +2567,44 @@ async def update_calling_settings(
         answer_webhook_url=f"{settings.public_base_url.rstrip('/')}/voice/answer",
         preferred_provider=record.preferred_voice_provider,
     )
+
+
+@router.get("/settings/country-code", response_model=CountryCodeSettingsOut)
+async def get_country_code_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> CountryCodeSettingsOut:
+    """This org's default dialing prefix (set at org creation, editable here
+    by the org admin) — see core/phone.py. Org-admin-only, like the calling
+    provider setting: a `role=="member"` caller is refused."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can view the country code")
+    record = await db.get(Org, org)
+    return CountryCodeSettingsOut(
+        default_country_code=record.default_country_code if record else "+91"
+    )
+
+
+@router.put("/settings/country-code", response_model=CountryCodeSettingsOut)
+async def update_country_code_settings(
+    body: CountryCodeSettingsIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> CountryCodeSettingsOut:
+    """Change the prefix added to numbers entered without one. Only affects
+    numbers entered from now on — already-stored numbers are left untouched."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change the country code")
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    record.default_country_code = body.default_country_code
+    await db.commit()
+    return CountryCodeSettingsOut(default_country_code=record.default_country_code)
 
 
 @router.get("/settings/openai-key", response_model=OpenAIKeySettingsOut)
@@ -3489,6 +3543,7 @@ async def outbound_whatsapp(
     behaviour — useful for local development without Meta credentials.
     """
     org_id = org
+    payload.phone = normalize_phone(payload.phone, await _org_country_code(db, org_id))
 
     # Find or create the recipient user under the default org.
     user_stmt = select(User).where(User.org_id == org_id, User.phone == payload.phone)
@@ -3681,6 +3736,7 @@ async def outbound_call(
     ``channels/voice/webhook.py`` — which currently speaks a test message.
     """
     org_id = org
+    payload.to_phone = normalize_phone(payload.to_phone, await _org_country_code(db, org_id))
 
     # A member calling this customer takes ownership of their lead so the
     # voice conversation (created later by the realtime bridge, keyed on the

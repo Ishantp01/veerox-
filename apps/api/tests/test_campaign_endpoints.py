@@ -420,13 +420,14 @@ async def test_create_campaign_rejects_script_from_another_org(
     assert "script_id" in response.json()["detail"]
 
 
-async def test_create_campaign_rejects_phone_without_country_code(
+async def test_create_campaign_prepends_org_country_code_to_local_numbers(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """Plivo dials `to` verbatim — a bare 10-digit number never rings, so
-    campaign uploads must be validated the same way the Dial page is."""
+    """Plivo dials `to` verbatim, so every stored target must be E.164. A
+    number typed without a prefix gets the org's default_country_code; one
+    that's unusable even after that is a per-row error."""
     await _seed_org(db_session)
-    csv_body = "name,phone\nBad Number,9179609988\nGood Number,+919179609988\n"
+    csv_body = "name,phone\nLocal,9179609988\nIntl,+14155552671\nJunk,12\n"
 
     response = await client.post(
         "/admin/campaigns",
@@ -437,13 +438,33 @@ async def test_create_campaign_rejects_phone_without_country_code(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["imported"] == 1
+    assert body["imported"] == 2
     assert body["skipped"] == 1
-    assert "country code" in body["errors"][0]["reason"]
+    assert "not a valid phone number" in body["errors"][0]["reason"]
 
     targets = (await db_session.execute(select(CampaignTarget))).scalars().all()
-    assert len(targets) == 1
-    assert targets[0].phone == "+919179609988"
+    assert sorted(t.phone for t in targets) == ["+14155552671", "+919179609988"]
+
+
+async def test_create_campaign_uses_the_orgs_own_country_code(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A US org's local numbers get +1, not the +91 default."""
+    db_session.add(Org(id=ORG_ID, name="US Org", default_country_code="+1"))
+    await db_session.commit()
+    csv_body = "name,phone\nLocal,4155552671\nTrunk,04155552672\n"
+
+    response = await client.post(
+        "/admin/campaigns",
+        data={"name": "US list", "criteria": "n/a", "channel": "voice"},
+        files={"file": ("leads.csv", csv_body, "text/csv")},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["imported"] == 2
+    targets = (await db_session.execute(select(CampaignTarget))).scalars().all()
+    assert sorted(t.phone for t in targets) == ["+14155552671", "+14155552672"]
 
 
 async def test_create_campaign_dedupes_repeated_phone_in_upload(

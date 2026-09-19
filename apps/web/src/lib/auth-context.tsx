@@ -17,6 +17,8 @@ interface AuthContextValue {
   /** Persists the shared admin token for owner-org access. */
   loginAdmin: (token: string) => Promise<void>;
   logout: () => void;
+  /** Merges fields into the cached user (e.g. after changing the org country code). */
+  updateUser: (patch: Partial<MeInfo>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -105,6 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       license_status: session.license_status,
       license_expires_at: session.license_expires_at,
       enabled_features: session.enabled_features,
+      default_country_code: session.default_country_code,
     });
     setStatus("authenticated");
   }, [queryClient]);
@@ -130,9 +133,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     router.push("/login");
   }, [router, queryClient]);
 
+  const updateUser = useCallback(
+    (patch: Partial<MeInfo>) => setUser((prev) => (prev ? { ...prev, ...patch } : prev)),
+    []
+  );
+
   const value = useMemo(
-    () => ({ status, isAuthenticated: status === "authenticated", user, login, loginAdmin, logout }),
-    [status, user, login, loginAdmin, logout]
+    () => ({
+      status,
+      isAuthenticated: status === "authenticated",
+      user,
+      login,
+      loginAdmin,
+      logout,
+      updateUser,
+    }),
+    [status, user, login, loginAdmin, logout, updateUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

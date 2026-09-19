@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { UserPlus } from "lucide-react";
 import { z } from "zod";
 import {
@@ -15,11 +15,18 @@ import {
   Label,
   useToast,
 } from "@/components/ui";
-import { useCreateContact } from "@/lib/hooks";
+import { useCreateContact, useOrgCountryCode } from "@/lib/hooks";
+import { PHONE_MESSAGE, isValidPhone, normalizePhone } from "@/lib/phone";
 
-const EMPTY = { name: "", phone: "+91", email: "", company: "" };
+type ContactForm = { name: string; phone: string; email: string; company: string };
 
-const contactSchema = z.object({
+function emptyForm(countryCode: string): ContactForm {
+  return { name: "", phone: countryCode, email: "", company: "" };
+}
+
+// Factory so the phone check can add the org's default country code.
+function buildContactSchema(countryCode: string) {
+  return z.object({
   name: z
     .string()
     .trim()
@@ -28,25 +35,29 @@ const contactSchema = z.object({
   phone: z
     .string()
     .trim()
-    .regex(/^\+\d{8,15}$/, "Enter a valid E.164 number, e.g. +919876543210"),
+    .refine((v) => isValidPhone(v, countryCode), PHONE_MESSAGE),
   email: z.string().trim().email().optional().or(z.literal("")),
   company: z
     .string()
     .trim()
     .refine((v) => !/^\d+$/.test(v), "Company name cannot be only numbers")
     .optional(),
-});
+  });
+}
 
-type ContactFieldErrors = Partial<Record<keyof typeof EMPTY, string>>;
+type ContactFieldErrors = Partial<Record<keyof ContactForm, string>>;
 
 export function NewContactDialog() {
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState(EMPTY);
+  const countryCode = useOrgCountryCode();
+  const contactSchema = useMemo(() => buildContactSchema(countryCode), [countryCode]);
+  const EMPTY = useMemo(() => emptyForm(countryCode), [countryCode]);
+  const [form, setForm] = useState<ContactForm>(EMPTY);
   const [fieldErrors, setFieldErrors] = useState<ContactFieldErrors>({});
   const createContact = useCreateContact();
   const { toast } = useToast();
 
-  function validateField(key: keyof typeof EMPTY, nextForm: typeof EMPTY) {
+  function validateField(key: keyof ContactForm, nextForm: ContactForm) {
     const result = contactSchema.safeParse(nextForm);
     if (result.success) {
       setFieldErrors((prev) => ({ ...prev, [key]: undefined }));
@@ -56,7 +67,7 @@ export function NewContactDialog() {
     setFieldErrors((prev) => ({ ...prev, [key]: issue?.message }));
   }
 
-  function updateField(key: keyof typeof EMPTY, value: string) {
+  function updateField(key: keyof ContactForm, value: string) {
     const next = { ...form, [key]: value };
     setForm(next);
     validateField(key, next);
@@ -68,7 +79,7 @@ export function NewContactDialog() {
     if (!result.success) {
       const errors: ContactFieldErrors = {};
       for (const issue of result.error.issues) {
-        const key = issue.path[0] as keyof typeof EMPTY;
+        const key = issue.path[0] as keyof ContactForm;
         if (!errors[key]) errors[key] = issue.message;
       }
       setFieldErrors(errors);
@@ -78,7 +89,7 @@ export function NewContactDialog() {
     createContact.mutate(
       {
         name: form.name || null,
-        phone: form.phone,
+        phone: normalizePhone(form.phone, countryCode),
         email: form.email || null,
         company: form.company || null,
       },
@@ -117,7 +128,7 @@ export function NewContactDialog() {
                 maxLength={16}
                 value={form.phone}
                 onChange={(e) => updateField("phone", e.target.value)}
-                placeholder="+91XXXXXXXXXX"
+                placeholder={`${countryCode}XXXXXXXXXX`}
                 aria-invalid={fieldErrors.phone ? true : undefined}
                 aria-describedby={fieldErrors.phone ? "contact-phone-error" : undefined}
               />

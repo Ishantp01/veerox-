@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Pencil } from "lucide-react";
 import { z } from "zod";
 import {
@@ -15,26 +15,28 @@ import {
   Label,
   useToast,
 } from "@/components/ui";
-import { useUpdateContact } from "@/lib/hooks";
+import { useOrgCountryCode, useUpdateContact } from "@/lib/hooks";
 import type { Contact } from "@/lib/types";
-import { E164_MESSAGE, E164_REGEX } from "@/lib/phone";
+import { PHONE_MESSAGE, isValidPhone, normalizePhone } from "@/lib/phone";
 
-const editContactSchema = z.object({
+function buildEditContactSchema(countryCode: string) {
+  return z.object({
   name: z
     .string()
     .trim()
     .min(1, "Name is required")
     .regex(/^[A-Za-z\s'.-]+$/, "Name should only contain letters"),
-  phone: z.string().trim().regex(E164_REGEX, E164_MESSAGE),
+  phone: z.string().trim().refine((v) => isValidPhone(v, countryCode), PHONE_MESSAGE),
   email: z.string().trim().email().optional().or(z.literal("")),
   company: z
     .string()
     .trim()
     .refine((v) => !/^\d+$/.test(v), "Company name cannot be only numbers")
     .optional(),
-});
+  });
+}
 
-type EditContactForm = z.infer<typeof editContactSchema>;
+type EditContactForm = z.infer<ReturnType<typeof buildEditContactSchema>>;
 type ContactFieldErrors = Partial<Record<keyof EditContactForm, string>>;
 
 function formFromContact(contact: Contact): EditContactForm {
@@ -50,6 +52,8 @@ function formFromContact(contact: Contact): EditContactForm {
  * unique within the org — a conflict surfaces as an inline error on submit. */
 export function EditContactDialog({ contact }: { contact: Contact }) {
   const [open, setOpen] = useState(false);
+  const countryCode = useOrgCountryCode();
+  const editContactSchema = useMemo(() => buildEditContactSchema(countryCode), [countryCode]);
   const [form, setForm] = useState<EditContactForm>(() => formFromContact(contact));
   const [fieldErrors, setFieldErrors] = useState<ContactFieldErrors>({});
   const updateContact = useUpdateContact();
@@ -88,7 +92,7 @@ export function EditContactDialog({ contact }: { contact: Contact }) {
       {
         id: contact.id,
         name: parsed.data.name.trim(),
-        phone: parsed.data.phone.trim(),
+        phone: normalizePhone(parsed.data.phone, countryCode),
         email: parsed.data.email?.trim() || null,
         company: parsed.data.company?.trim() || null,
       },
@@ -151,7 +155,7 @@ export function EditContactDialog({ contact }: { contact: Contact }) {
                 maxLength={16}
                 value={form.phone}
                 onChange={(e) => updateField("phone", e.target.value.replace(/[^\d+]/g, ""))}
-                placeholder="+91XXXXXXXXXX"
+                placeholder={`${countryCode}XXXXXXXXXX`}
                 aria-invalid={fieldErrors.phone ? true : undefined}
                 aria-describedby={fieldErrors.phone ? "edit-contact-phone-error" : undefined}
               />

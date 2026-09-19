@@ -11,8 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from apps.api.core.tools import _normalize_phone
-from apps.api.db.models import Contact
+from apps.api.core.phone import normalize_phone
+from apps.api.db.models import Contact, Org
 from apps.api.deps import (
     DbDep,
     RequestAccountUserDep,
@@ -34,6 +34,11 @@ from apps.api.schemas.crm import (
     ContactUpdateIn,
     ContactWithLeadsOut,
 )
+
+async def _org_country_code(db, org_id: UUID) -> str | None:
+    org_row = await db.get(Org, org_id)
+    return org_row.default_country_code if org_row else None
+
 
 router = APIRouter(
     prefix="/crm",
@@ -78,7 +83,7 @@ async def create_contact(
     contact = Contact(
         org_id=org_id,
         name=payload.name,
-        phone=payload.phone,
+        phone=normalize_phone(payload.phone, await _org_country_code(db, org_id)),
         email=payload.email,
         company=payload.company,
         tags=payload.tags,
@@ -166,6 +171,7 @@ async def import_contacts_file(
         )
     )
     existing_by_phone = {c.phone: c for c in own_result.scalars().all()}
+    country_code = await _org_country_code(db, org_id)
 
     imported = 0
     updated = 0
@@ -175,14 +181,14 @@ async def import_contacts_file(
         if not phone:
             errors.append(ContactImportError(row=row_num, reason="missing phone"))
             continue
-        normalized = _normalize_phone(phone)
+        normalized = normalize_phone(phone, country_code)
         if not _E164_PATTERN.match(normalized):
             errors.append(
                 ContactImportError(
                     row=row_num,
                     reason=(
-                        f"phone '{phone}' must include a country code in E.164 format, "
-                        "e.g. +919876543210"
+                        f"phone '{phone}' is not a valid phone number "
+                        f"(numbers without a country code get {country_code or '+91'} added)"
                     ),
                 )
             )
@@ -261,6 +267,8 @@ async def update_contact(
     fields = payload.model_dump(exclude_unset=True)
     if "phone" in fields and not fields["phone"]:
         raise HTTPException(status_code=400, detail="Phone cannot be empty")
+    if fields.get("phone"):
+        fields["phone"] = normalize_phone(fields["phone"], await _org_country_code(db, org_id))
     for field, value in fields.items():
         setattr(contact, field, value)
     try:

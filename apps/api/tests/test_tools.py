@@ -127,8 +127,8 @@ async def test_capture_lead_persists_row_and_returns_ok(
     rows = (await db_session.execute(select(Lead))).scalars().all()
     assert len(rows) == 1
     assert rows[0].intent == "gym membership"
-    # Phone normalised — non-digits stripped.
-    assert rows[0].phone == "9876543210"
+    # A local number typed in chat gets the org's default country code (+91).
+    assert rows[0].phone == "+919876543210"
 
 
 async def test_capture_lead_idempotent_within_window(

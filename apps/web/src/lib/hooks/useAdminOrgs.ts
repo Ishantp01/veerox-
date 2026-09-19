@@ -5,6 +5,7 @@ import type { OrgPhoneNumber } from "@/lib/types";
 export interface AdminOrg {
   id: string;
   name: string;
+  default_country_code: string;
   license_status: "active" | "suspended" | "expired";
   license_expires_at: string | null;
   license_issued_at: string | null;
@@ -43,6 +44,8 @@ export function useAdminOrgs() {
 
 export interface ProvisionOrgInput {
   org_name: string;
+  // Dialing prefix applied to every number this org enters without one.
+  default_country_code?: string;
   email: string;
   full_name?: string;
   mobile: string;
@@ -122,6 +125,7 @@ export function useRegenerateAdminToken() {
 export interface UpdateOrgInput {
   orgId: string;
   name?: string;
+  default_country_code?: string;
   admin_email?: string;
   admin_name?: string;
   admin_mobile?: string;

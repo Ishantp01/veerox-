@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from apps.api.core.phone import validate_country_code
 from apps.api.db.models.org import validate_org_features
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn
 
@@ -62,6 +63,8 @@ class SessionOut(BaseModel):
     # unrestricted (every AVAILABLE_ORG_FEATURES key allowed). Always null
     # for is_platform_org.
     enabled_features: list[str] | None = None
+    # The org's dialing prefix — pre-fills/normalizes phone inputs in the dashboard.
+    default_country_code: str = "+91"
 
 
 class MeOut(BaseModel):
@@ -76,10 +79,14 @@ class MeOut(BaseModel):
     license_status: str = "active"
     license_expires_at: str | None = None
     enabled_features: list[str] | None = None
+    default_country_code: str = "+91"
 
 
 class ProvisionOrgIn(BaseModel):
     org_name: str
+    # Dialing prefix (e.g. "+91") applied to every number this org enters
+    # without an international prefix — see core/phone.py.
+    default_country_code: str = "+91"
     email: EmailStr
     full_name: str | None = None
     # E.164 mobile number the login token is SMS'd to (see
@@ -121,6 +128,11 @@ class ProvisionOrgIn(BaseModel):
     max_team_members: int | None = None
 
     _validate_enabled_features = field_validator("enabled_features")(validate_org_features)
+
+    @field_validator("default_country_code")
+    @classmethod
+    def _validate_country_code(cls, value: str) -> str:
+        return validate_country_code(value)
 
 
 class ForgotTokenIn(BaseModel):

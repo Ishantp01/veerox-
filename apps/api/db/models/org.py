@@ -130,6 +130,12 @@ class Org(Base):
     # dispatcher) via `initiate_call`'s `preferred_provider` kwarg — see
     # routers/admin.py's PUT /admin/settings/calling.
     preferred_voice_provider: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Dialing prefix (e.g. "+91") set when the org is created. Any phone
+    # number a user types/uploads without an international prefix gets this
+    # prepended — see core/phone.py::normalize_phone.
+    default_country_code: Mapped[str] = mapped_column(
+        String(6), nullable=False, server_default="+91"
+    )
     # Which approved WhatsApp template the human-handoff notification sends
     # (core/tools.py::transfer_to_human), chosen on the /whatsapp/settings
     # page. The template must have exactly two body variables: {{1}} the

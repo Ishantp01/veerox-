@@ -808,7 +808,7 @@ async def test_import_leads_csv_reports_row_errors(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     await _seed_org(db_session)
-    csv_body = "name,phone,status\nNo Phone,,new\nBad Format,9179609989,new\n"
+    csv_body = "name,phone,status\nNo Phone,,new\nBad Format,123,new\n"
 
     response = await client.post(
         "/admin/leads/import",
@@ -823,7 +823,7 @@ async def test_import_leads_csv_reports_row_errors(
     assert body["skipped"] == 2
     reasons = {e["reason"] for e in body["errors"]}
     assert "missing phone" in reasons
-    assert any("country code" in r for r in reasons)
+    assert any("not a valid phone number" in r for r in reasons)
 
 
 async def test_import_leads_csv_unrouted_rows_reported_not_defaulted(
@@ -1123,7 +1123,7 @@ async def test_import_leads_bulk_json_reports_row_errors(
 
     response = await client.post(
         "/admin/leads/bulk",
-        json={"leads": [{"name": "Bad Format", "phone": "9179609990"}]},
+        json={"leads": [{"name": "Bad Format", "phone": "123"}]},
         headers=ADMIN_HEADERS,
     )
 
@@ -1131,7 +1131,7 @@ async def test_import_leads_bulk_json_reports_row_errors(
     body = response.json()
     assert body["imported"] == 0
     assert body["skipped"] == 1
-    assert "country code" in body["errors"][0]["reason"]
+    assert "not a valid phone number" in body["errors"][0]["reason"]
 
 
 async def test_stats_includes_whatsapp_and_per_channel_leads(

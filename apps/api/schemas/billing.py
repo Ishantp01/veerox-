@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, EmailStr, field_validator
 
+from apps.api.core.phone import validate_country_code
 from apps.api.db.models.org import validate_org_features
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn, OrgPhoneNumberOut
 
@@ -17,6 +18,7 @@ class RegenerateAdminTokenOut(BaseModel):
 class OrgAdminOut(BaseModel):
     id: str
     name: str
+    default_country_code: str = "+91"
     license_status: str
     license_expires_at: str | None = None
     license_issued_at: str | None = None
@@ -63,6 +65,7 @@ class OrgUpdateIn(BaseModel):
     encrypted, so the form always starts blank for these)."""
 
     name: str | None = None
+    default_country_code: str | None = None
     admin_email: EmailStr | None = None
     admin_name: str | None = None
     admin_mobile: str | None = None
@@ -83,6 +86,11 @@ class OrgUpdateIn(BaseModel):
     max_team_members: int | None = None
 
     _validate_enabled_features = field_validator("enabled_features")(validate_org_features)
+
+    @field_validator("default_country_code")
+    @classmethod
+    def _validate_country_code(cls, value: str | None) -> str | None:
+        return None if value is None else validate_country_code(value)
 
 
 class IssueLicenseIn(BaseModel):

@@ -44,6 +44,7 @@ import { downloadCsv } from "@/lib/download-csv";
 import { formatDateTime } from "@/lib/format";
 import {
   useClientPagination,
+  useOrgCountryCode,
   useCampaigns,
   useCreateCampaign,
   useCreateQualificationCriteriaPreset,
@@ -125,6 +126,7 @@ const START_MODE_BUTTON_LABEL: Record<CampaignStartMode, string> = {
 export function CampaignsView() {
   const router = useRouter();
   const { toast } = useToast();
+  const countryCode = useOrgCountryCode();
   const [channelFilter, setChannelFilter] = useState<"voice" | "whatsapp" | "">("");
   const { data, isLoading, isError, error, refetch } = useCampaigns(channelFilter || undefined);
   const campaigns = data ?? [];
@@ -538,8 +540,8 @@ export function CampaignsView() {
                 </p>
               )}
               <p className="mt-1.5 max-w-2xl text-xs text-slate-400 dark:text-slate-500">
-                Needs a &quot;phone&quot; column (E.164, e.g. +919876543210), an optional
-                &quot;name&quot; column, and &quot;call&quot;/&quot;whatsapp&quot; columns (yes/no)
+                Needs a &quot;phone&quot; column (numbers without a country code get {countryCode} added
+                automatically), optional &quot;name&quot; and &quot;tags&quot; columns, and &quot;call&quot;/&quot;whatsapp&quot; columns (yes/no)
                 to pick each contact&apos;s channel(s) — a row can be call-only, WhatsApp-only, or
                 both.
               </p>

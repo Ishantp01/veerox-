@@ -138,6 +138,7 @@ async def provision_org(
     # real license via POST /billing/orgs/{id}/license/issue.
     org = Org(
         name=payload.org_name,
+        default_country_code=payload.default_country_code,
         enabled_features=payload.enabled_features,
         max_team_members=payload.max_team_members,
     )
@@ -254,6 +255,7 @@ async def login(
     license_status = "active"
     license_expires_at: datetime | None = None
     enabled_features: list[str] | None = None
+    default_country_code = "+91"
     if payload.token == settings.admin_token:
         account_user, membership, org_name = await _ensure_default_org_owner(db)
     else:
@@ -275,6 +277,7 @@ async def login(
                 Org.license_status,
                 Org.license_expires_at,
                 Org.enabled_features,
+                Org.default_country_code,
             )
             .outerjoin(OrgMembership, OrgMembership.account_user_id == AccountUser.id)
             .outerjoin(Org, Org.id == OrgMembership.org_id)
@@ -301,9 +304,16 @@ async def login(
             )
 
         if membership_rows:
-            _, membership, org_name, license_status, license_expires_at, enabled_features = (
-                membership_rows[0]
-            )
+            (
+                _,
+                membership,
+                org_name,
+                license_status,
+                license_expires_at,
+                enabled_features,
+                org_country_code,
+            ) = membership_rows[0]
+            default_country_code = org_country_code or "+91"
         else:
             membership, org_name = None, None
 
@@ -334,6 +344,7 @@ async def login(
         license_status=license_status,
         license_expires_at=license_expires_at.isoformat() if license_expires_at else None,
         enabled_features=enabled_features,
+        default_country_code=default_country_code,
     )
 
 
@@ -441,6 +452,7 @@ async def me(current_user: CurrentUserDep, org: CurrentOrgDep, db: DbDep) -> MeO
             Org.license_status,
             Org.license_expires_at,
             Org.enabled_features,
+            Org.default_country_code,
         )
         .outerjoin(Org, Org.id == OrgMembership.org_id)
         .where(
@@ -451,7 +463,14 @@ async def me(current_user: CurrentUserDep, org: CurrentOrgDep, db: DbDep) -> MeO
     row = result.first()
     if row is None:
         raise HTTPException(status_code=403, detail="Account has no org membership")
-    membership, org_name, license_status, license_expires_at, enabled_features = row
+    (
+        membership,
+        org_name,
+        license_status,
+        license_expires_at,
+        enabled_features,
+        default_country_code,
+    ) = row
     is_platform_org = membership.org_id == DEFAULT_ORG_ID
     if is_platform_org:
         license_status, license_expires_at, enabled_features = "active", None, None
@@ -467,4 +486,5 @@ async def me(current_user: CurrentUserDep, org: CurrentOrgDep, db: DbDep) -> MeO
         license_status=license_status,
         license_expires_at=license_expires_at.isoformat() if license_expires_at else None,
         enabled_features=enabled_features,
+        default_country_code=default_country_code or "+91",
     )

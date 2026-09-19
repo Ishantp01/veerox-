@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -19,28 +19,33 @@ import {
   useToast,
 } from "@/components/ui";
 import { CallAnalyticsPanel } from "@/components/calling/call-analytics-panel";
-import { useOrgNumbers, useOutboundCall } from "@/lib/hooks";
+import { useOrgCountryCode, useOrgNumbers, useOutboundCall } from "@/lib/hooks";
+import { PHONE_MESSAGE, isValidPhone, normalizePhone } from "@/lib/phone";
 
 const PROVIDER_LABEL: Record<"plivo" | "twilio", string> = {
   plivo: "Plivo",
   twilio: "Twilio",
 };
 
-const dialSchema = z.object({
-  // E.164-ish: a leading "+" followed by 8–15 digits.
-  to_phone: z
-    .string()
-    .trim()
-    .regex(/^\+\d{8,15}$/, "Enter a valid E.164 number, e.g. +919876543210"),
-});
-
-type DialForm = z.infer<typeof dialSchema>;
+type DialForm = { to_phone: string };
 
 export default function CallingDialPage() {
   const { toast } = useToast();
   const [callSid, setCallSid] = useState<string | null>(null);
   const outboundCall = useOutboundCall();
   const { data: orgNumbers } = useOrgNumbers();
+  const countryCode = useOrgCountryCode();
+  // A number typed without a country code gets the org's default one.
+  const dialSchema = useMemo(
+    () =>
+      z.object({
+        to_phone: z
+          .string()
+          .trim()
+          .refine((v) => isValidPhone(v, countryCode), PHONE_MESSAGE),
+      }),
+    [countryCode],
+  );
 
   // Only worth letting someone choose when the org actually has a dedicated
   // number on both providers — otherwise there's nothing to pick between,
@@ -56,14 +61,14 @@ export default function CallingDialPage() {
     formState: { errors },
   } = useForm<DialForm>({
     resolver: zodResolver(dialSchema),
-    defaultValues: { to_phone: "+91" },
+    defaultValues: { to_phone: countryCode },
     mode: "onChange",
   });
 
   const onSubmit = handleSubmit((values) => {
     setCallSid(null);
     outboundCall.mutate(
-      { to_phone: values.to_phone, provider: hasBothProviders ? provider : undefined },
+      { to_phone: normalizePhone(values.to_phone, countryCode), provider: hasBothProviders ? provider : undefined },
       {
         onSuccess: (res) => {
           setCallSid(res.call_sid);
@@ -120,7 +125,7 @@ export default function CallingDialPage() {
                   id="to_phone"
                   type="tel"
                   inputMode="tel"
-                  placeholder="+919876543210"
+                  placeholder={`${countryCode}9876543210`}
                   autoComplete="tel"
                   maxLength={16}
                   className="font-mono"
@@ -136,7 +141,7 @@ export default function CallingDialPage() {
                   </p>
                 ) : (
                   <p id="to_phone-hint" className="mt-1.5 text-xs text-slate-400">
-                    Include the country code, e.g. +91 for India.
+                    Country code is optional — {countryCode} is added automatically.
                   </p>
                 )}
               </div>

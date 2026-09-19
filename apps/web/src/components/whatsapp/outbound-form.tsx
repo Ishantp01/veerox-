@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -19,16 +19,26 @@ import {
   useToast,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { useOutboundWhatsApp, useOrgNumbers, useTemplates, useWhatsappAssets } from "@/lib/hooks";
+import {
+  useOrgCountryCode,
+  useOutboundWhatsApp,
+  useOrgNumbers,
+  useTemplates,
+  useWhatsappAssets,
+} from "@/lib/hooks";
+import { PHONE_MESSAGE, isValidPhone, normalizePhone } from "@/lib/phone";
 import { ContactPicker } from "@/components/crm/contact-picker";
 import type { Contact, Template } from "@/lib/types";
 
-const whatsappSchema = z
+// Factory so the phone check can add the org's default country code to a
+// number typed without one (see lib/phone.ts).
+function buildWhatsappSchema(countryCode: string) {
+  return z
   .object({
     phone: z
       .string()
       .trim()
-      .regex(/^\+\d{8,15}$/, "Enter a valid E.164 number, e.g. +919876543210"),
+      .refine((v) => isValidPhone(v, countryCode), PHONE_MESSAGE),
     phoneNumberId: z.string().optional(),
     mode: z.enum(["text", "template"]),
     text: z.string().trim().optional(),
@@ -54,8 +64,9 @@ const whatsappSchema = z
       });
     }
   });
+}
 
-type WhatsAppForm = z.infer<typeof whatsappSchema>;
+type WhatsAppForm = z.infer<ReturnType<typeof buildWhatsappSchema>>;
 
 export interface OutboundWhatsAppFormProps {
   /** Pre-fills the phone field, e.g. when arriving from a user detail page. */
@@ -72,6 +83,8 @@ export interface OutboundWhatsAppFormProps {
  */
 export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppFormProps) {
   const { toast } = useToast();
+  const countryCode = useOrgCountryCode();
+  const whatsappSchema = useMemo(() => buildWhatsappSchema(countryCode), [countryCode]);
   const [lastMessageId, setLastMessageId] = useState<string | null>(null);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
@@ -106,7 +119,7 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
     resolver: zodResolver(whatsappSchema),
     mode: "onChange",
     defaultValues: {
-      phone: defaultPhone || "+91",
+      phone: defaultPhone || countryCode,
       phoneNumberId: "",
       mode: "text",
       text: "",
@@ -158,7 +171,7 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
     outboundWhatsApp.mutate(
       values.mode === "template"
         ? {
-            phone: values.phone,
+            phone: normalizePhone(values.phone, countryCode),
             phone_number_id: values.phoneNumberId || undefined,
             template_name: values.templateName,
             template_lang: values.templateLang || "en_US",
@@ -178,7 +191,7 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
                 : undefined,
           }
         : {
-            phone: values.phone,
+            phone: normalizePhone(values.phone, countryCode),
             phone_number_id: values.phoneNumberId || undefined,
             text: values.text,
           },
@@ -252,23 +265,27 @@ export function OutboundWhatsAppForm({ defaultPhone = "" }: OutboundWhatsAppForm
 
           <div>
             <Label htmlFor="phone" required>
-              Phone (E.164)
+              Phone
             </Label>
             <Input
               id="phone"
               type="tel"
               inputMode="tel"
               autoComplete="tel"
-              placeholder="+919876543210"
-              maxLength={16}
+              placeholder={`${countryCode}9876543210`}
+              maxLength={20}
               className="font-mono"
               aria-invalid={errors.phone ? true : undefined}
               aria-describedby={errors.phone ? "phone-error" : undefined}
               {...register("phone")}
             />
-            {errors.phone && (
+            {errors.phone ? (
               <p id="phone-error" className="mt-1.5 text-xs text-red-600">
                 {errors.phone.message}
+              </p>
+            ) : (
+              <p className="mt-1.5 text-xs text-slate-400">
+                Country code is optional — {countryCode} is added automatically.
               </p>
             )}
           </div>

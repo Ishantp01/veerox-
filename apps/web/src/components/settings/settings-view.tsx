@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Bot, ChevronRight, KeyRound, Phone, Users } from "lucide-react";
+import { Bot, ChevronRight, Globe, KeyRound, Phone, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -18,6 +18,8 @@ import {
 } from "@/components/ui";
 import {
   useCallingSettings,
+  useCountryCodeSettings,
+  useUpdateCountryCodeSettings,
   useDeleteMetaCredentialsSettings,
   useDeletePlivoCredentialsSettings,
   useDeleteTwilioCredentialsSettings,
@@ -33,6 +35,7 @@ import {
   useWhatsAppSettings,
 } from "@/lib/hooks";
 import { useAuth } from "@/lib/auth-context";
+import { CountryCodeField } from "@/components/common/country-code-field";
 import { ScriptLibrary } from "./script-library";
 
 interface CollapsibleSectionProps {
@@ -136,6 +139,78 @@ function ProviderPreference() {
               ))}
             </Select>
           </div>
+        </div>
+      )}
+    </QueryBoundary>
+  );
+}
+
+/**
+ * The org's default dialing prefix — added automatically to any number typed
+ * or uploaded without one (calling, WhatsApp, contacts, campaigns). Only
+ * affects numbers entered from now on; stored numbers are left as they are.
+ */
+function CountryCodeSection() {
+  const countryCode = useCountryCodeSettings();
+  const updateCountryCode = useUpdateCountryCodeSettings();
+  const { updateUser } = useAuth();
+  const { toast } = useToast();
+  const current = countryCode.data?.default_country_code;
+  const [draft, setDraft] = useState<string | null>(null);
+  const value = draft ?? current ?? "";
+
+  function handleSave() {
+    updateCountryCode.mutate(
+      { default_country_code: value },
+      {
+        onSuccess: (data) => {
+          updateUser({ default_country_code: data.default_country_code });
+          setDraft(null);
+          toast({ title: "Country code saved", variant: "success" });
+        },
+        onError: (err) =>
+          toast({
+            title: "Could not save country code",
+            description: err.message,
+            variant: "error",
+          }),
+      }
+    );
+  }
+
+  return (
+    <QueryBoundary
+      isLoading={countryCode.isLoading}
+      isError={countryCode.isError}
+      error={countryCode.error}
+      onRetry={() => countryCode.refetch()}
+      loadingFallback={<Skeleton className="h-20 w-full rounded-xl" />}
+    >
+      {current && (
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Added automatically to any phone number entered without a country code — in
+            calling, WhatsApp, contacts and campaign uploads. Changing it only affects numbers
+            entered from now on; numbers already saved stay as they are.
+          </p>
+          <div className="max-w-xs">
+            <CountryCodeField
+              id="default-country-code"
+              value={value}
+              onChange={setDraft}
+              disabled={updateCountryCode.isPending}
+            />
+          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            className="self-start"
+            loading={updateCountryCode.isPending}
+            disabled={value === current}
+            onClick={handleSave}
+          >
+            Save country code
+          </Button>
         </div>
       )}
     </QueryBoundary>
@@ -633,6 +708,16 @@ export function SettingsView({ title, description, channel }: SettingsViewProps)
             icon={<Users size={15} aria-hidden className="text-slate-400" />}
           >
             <HandoffTemplatePreference />
+          </CollapsibleSection>
+        )}
+
+        {isOrgAdmin && (
+          <CollapsibleSection
+            title="Country Code"
+            icon={<Globe size={15} aria-hidden className="text-slate-400" />}
+            defaultOpen
+          >
+            <CountryCodeSection />
           </CollapsibleSection>
         )}
 

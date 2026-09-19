@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Search, User, UserPlus, X } from "lucide-react";
 import { Button, Input } from "@/components/ui";
-import { useContacts, useCreateContact } from "@/lib/hooks";
+import { useContacts, useCreateContact, useOrgCountryCode } from "@/lib/hooks";
+import { PHONE_MESSAGE, isValidPhone, normalizePhone } from "@/lib/phone";
 import { formatPhone } from "@/lib/format";
 import type { Contact } from "@/lib/types";
 
@@ -12,7 +13,6 @@ const SEARCH_DEBOUNCE_MS = 250;
 // Same E.164-ish shape new-contact-dialog.tsx validates on the standalone
 // "New Contact" form — kept identical so a number rejected there is
 // rejected here too.
-const PHONE_PATTERN = /^\+\d{8,15}$/;
 
 export interface ContactPickerProps {
   value: Contact | null;
@@ -23,6 +23,7 @@ export interface ContactPickerProps {
 /** Searchable contact combobox backed by GET /crm/contacts?q=. Shared by the
  * appointments booking form and the WhatsApp send page. */
 export function ContactPicker({ value, onChange, placeholder }: ContactPickerProps) {
+  const countryCode = useOrgCountryCode();
   const [qInput, setQInput] = useState("");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
@@ -54,16 +55,16 @@ export function ContactPicker({ value, onChange, placeholder }: ContactPickerPro
   const results = q ? (data ?? []) : [];
 
   function startAddNew() {
-    setNewPhone(/^[+\d]/.test(q) ? q : "+91");
+    setNewPhone(/^[+\d]/.test(q) ? q : countryCode);
     setNewName(/^[+\d]/.test(q) ? "" : q);
     setAddError(null);
     setAddingNew(true);
   }
 
   function handleCreateNew() {
-    const phone = newPhone.trim();
-    if (!PHONE_PATTERN.test(phone)) {
-      setAddError("Enter a valid E.164 number, e.g. +919876543210");
+    const phone = normalizePhone(newPhone, countryCode);
+    if (!isValidPhone(newPhone, countryCode)) {
+      setAddError(PHONE_MESSAGE);
       return;
     }
     createContact.mutate(
@@ -141,7 +142,7 @@ export function ContactPicker({ value, onChange, placeholder }: ContactPickerPro
                     maxLength={16}
                     value={newPhone}
                     onChange={(e) => setNewPhone(e.target.value)}
-                    placeholder="+91XXXXXXXXXX"
+                    placeholder={`${countryCode}XXXXXXXXXX`}
                   />
                   <Input
                     value={newName}

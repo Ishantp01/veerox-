@@ -18,7 +18,8 @@ import {
 import { PhoneNumberListField, type PhoneNumberEntry } from "./phone-number-list-field";
 import { OrgFeatureChecklist } from "./org-feature-checklist";
 import { useIssueLicense, useProvisionOrg, type ProvisionOrgResult } from "@/lib/hooks/useAdminOrgs";
-import { E164_REGEX, E164_MESSAGE } from "@/lib/phone";
+import { CountryCodeField } from "@/components/common/country-code-field";
+import { DEFAULT_COUNTRY_CODE, E164_REGEX, E164_MESSAGE } from "@/lib/phone";
 
 const EMPTY = {
   orgName: "",
@@ -64,6 +65,7 @@ type OrgFieldErrors = Partial<Record<keyof typeof EMPTY, string>>;
 export function NewOrgDialog() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
+  const [countryCode, setCountryCode] = useState(DEFAULT_COUNTRY_CODE);
   const [fieldErrors, setFieldErrors] = useState<OrgFieldErrors>({});
   const [plivoNumbers, setPlivoNumbers] = useState<PhoneNumberEntry[]>([]);
   const [twilioNumbers, setTwilioNumbers] = useState<PhoneNumberEntry[]>([]);
@@ -110,6 +112,7 @@ export function NewOrgDialog() {
     provisionOrg.mutate(
       {
         org_name: form.orgName.trim(),
+        default_country_code: countryCode,
         email: form.email.trim(),
         full_name: form.fullName.trim() || undefined,
         mobile: form.mobile.trim(),
@@ -160,6 +163,7 @@ export function NewOrgDialog() {
     setOpen(next);
     if (!next) {
       setForm(EMPTY);
+      setCountryCode(DEFAULT_COUNTRY_CODE);
       setFieldErrors({});
       setPlivoNumbers([]);
       setTwilioNumbers([]);
@@ -242,6 +246,13 @@ export function NewOrgDialog() {
                     {fieldErrors.orgName}
                   </p>
                 )}
+              </div>
+              <div>
+                <CountryCodeField id="org-country-code" value={countryCode} onChange={setCountryCode} />
+                <p className="mt-1 text-xs text-slate-400">
+                  Added automatically to any phone number this organization enters without one
+                  (calling, WhatsApp, contacts, campaigns).
+                </p>
               </div>
               <div>
                 <Label htmlFor="admin-email">Admin email *</Label>

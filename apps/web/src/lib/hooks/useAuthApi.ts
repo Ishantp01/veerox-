@@ -37,6 +37,8 @@ export interface SessionInfo {
   // feature allowed). Always null for is_platform_org. See
   // apps/web/src/lib/orgFeatures.ts for the known keys.
   enabled_features: string[] | null;
+  // The org's dialing prefix (e.g. "+91") — see apps/web/src/lib/phone.ts.
+  default_country_code: string;
 }
 
 export interface MeInfo {
@@ -51,6 +53,7 @@ export interface MeInfo {
   license_status: "active" | "suspended" | "expired";
   license_expires_at: string | null;
   enabled_features: string[] | null;
+  default_country_code: string;
 }
 
 /** POST /auth/login → SessionInfo, or LoginOrgChoice when this token's

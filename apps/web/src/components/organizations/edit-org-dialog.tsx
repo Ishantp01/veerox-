@@ -18,6 +18,7 @@ import {
 import { PhoneNumberListField, type PhoneNumberEntry } from "./phone-number-list-field";
 import { OrgFeatureChecklist } from "./org-feature-checklist";
 import { useUpdateOrgAdmin, type AdminOrg } from "@/lib/hooks/useAdminOrgs";
+import { CountryCodeField } from "@/components/common/country-code-field";
 import { E164_REGEX, E164_MESSAGE } from "@/lib/phone";
 
 const editOrgSchema = z.object({
@@ -86,6 +87,7 @@ function whatsappNumbersFromOrg(org: AdminOrg): PhoneNumberEntry[] {
 export function EditOrgDialog({ org }: { org: AdminOrg }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<EditOrgForm>(() => formFromOrg(org));
+  const [countryCode, setCountryCode] = useState(org.default_country_code);
   const [fieldErrors, setFieldErrors] = useState<OrgFieldErrors>({});
   const [plivoNumbers, setPlivoNumbers] = useState<PhoneNumberEntry[]>(() => numbersFromOrg(org, "plivo"));
   const [twilioNumbers, setTwilioNumbers] = useState<PhoneNumberEntry[]>(() =>
@@ -138,6 +140,7 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
       {
         orgId: org.id,
         name: parsed.data.orgName.trim(),
+        default_country_code: countryCode,
         admin_email: parsed.data.adminEmail.trim(),
         admin_name: parsed.data.adminName?.trim() ?? "",
         admin_mobile: parsed.data.adminMobile?.trim() ?? "",
@@ -214,6 +217,13 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
               )}
             </div>
             <div>
+                <CountryCodeField id="edit-org-country-code" value={countryCode} onChange={setCountryCode} />
+                <p className="mt-1 text-xs text-slate-400">
+                  Added automatically to any phone number this organization enters without one
+                  (calling, WhatsApp, contacts, campaigns).
+                </p>
+              </div>
+              <div>
               <Label htmlFor="edit-org-admin-email">Admin email *</Label>
               <Input
                 id="edit-org-admin-email"

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from apps.api.core.phone import validate_country_code
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn, OrgPhoneNumberOut
 from apps.api.schemas.whatsapp_common import TemplateButtonSendParam  # re-exported for existing importers
 
@@ -194,6 +195,19 @@ class CallingSettingsIn(BaseModel):
             "Omit/null to go back to automatic ordering."
         ),
     )
+
+
+class CountryCodeSettingsOut(BaseModel):
+    default_country_code: str
+
+
+class CountryCodeSettingsIn(BaseModel):
+    default_country_code: str
+
+    @field_validator("default_country_code")
+    @classmethod
+    def _validate(cls, value: str) -> str:
+        return validate_country_code(value)
 
 
 class OpenAIKeySettingsOut(BaseModel):
