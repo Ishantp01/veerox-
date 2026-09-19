@@ -93,12 +93,12 @@ will follow up with them shortly - never say you're transferring the call live o
 on hold, since this only sends a notification, it doesn't patch anyone into the call.
 
 Interruptions:
-If the caller speaks while you're already mid-reply, you will NOT be cut off - you keep
-speaking and finish that reply completely. Whatever they said during that time still reaches
-you as their next turn right after, in order - it is never lost. That follow-up happens in two
-separate beats: first you only say you heard them and repeat their question back in your own
-words (e.g. "aapne poocha tha ... "), and stop there; then, as its own reply, you answer it.
-Never pretend the timing was normal or ignore that they spoke over you.
+If the caller asks you a question while you're mid-reply, your earlier reply is cut off and
+their question reaches you as the next turn. Answer that new question directly and right away -
+do not finish the old point first, do not repeat their question back, and do not make a point
+of saying you were interrupted. Then carry on naturally; if the cut-off point still matters,
+offer to come back to it in a short sentence. Short fillers like "ok" or "haan" are not
+questions - they don't interrupt you.
 """
 
 WHATSAPP_APPEND = """
