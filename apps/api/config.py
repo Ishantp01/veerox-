@@ -71,16 +71,16 @@ class Settings(BaseSettings):
     # real question while it is still talking (channels/voice/turn_controller.py).
     # Any failure falls back to the older duration-based rules; set false to
     # turn it off entirely (saves the extra connection per call).
-    # What the agent does when the caller asks a real question while it is still
-    # talking. "answer_now": stop and answer (default). "finish_first": pause,
-    # say it heard them and will answer after this point, finish the point, read
-    # their question back, then answer it.
-    voice_interruption_mode: str = "answer_now"
     voice_live_turn_detection: bool = True
     voice_live_transcribe_model: str = "gpt-live-transcribe"
     # gpt-live-transcribe streaming delay: minimal|low|medium|high|xhigh —
     # measured ~1s lower lag at "minimal" than the default.
     voice_live_transcribe_delay: str = "minimal"
+    # What the agent does when the caller asks a real question while it is still
+    # talking. "finish_first" (default): pause, say it heard them and will answer
+    # after this point, finish the point, read their question back, then answer
+    # it. "answer_now": stop and answer straight away.
+    voice_interruption_mode: str = "finish_first"
     elevenlabs_api_key: str | None = None
     elevenlabs_voice_id: str = "CwhRBWXzGAHq8TQ4Fs17"
     # Low-latency model — eleven_multilingual_v2 sounds better but is too

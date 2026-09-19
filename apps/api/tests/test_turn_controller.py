@@ -85,6 +85,13 @@ def test_is_backchannel_keeps_old_behaviour() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _answer_now_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The product default is finish_first; most tests below exercise the
+    immediate-answer path, so pin it here. finish_first tests re-set it."""
+    monkeypatch.setattr(adapter.settings, "voice_interruption_mode", "answer_now")
+
+
 class _FakeOai:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
@@ -431,10 +438,10 @@ def _instructions(oai: _FakeOai, index: int = -1) -> str:
     return oai.sent[index]["response"]["instructions"]
 
 
-def test_answer_now_is_the_default_mode() -> None:
+def test_finish_first_is_the_default_mode() -> None:
     from apps.api.config import Settings
 
-    assert Settings.model_fields["voice_interruption_mode"].default == "answer_now"
+    assert Settings.model_fields["voice_interruption_mode"].default == "finish_first"
 
 
 async def test_finish_first_real_question_does_not_cut_the_agent(finish_first: None) -> None:
