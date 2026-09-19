@@ -94,6 +94,50 @@ class CallState:
     # actually fires the next response.create — create_response=False in
     # session.update means nothing else creates it automatically.
     interrupted_mid_response: bool = False
+    # Caller finished speaking (input_audio_buffer.committed) while a response
+    # was still playing — the reply is held until that response.done instead
+    # of firing a second response.create on top of the active one.
+    reply_pending: bool = False
+    # The pending reply should be the "I heard you, you asked X" beat.
+    restate_next: bool = False
+    # The restate-only response is in flight; its response.done fires the
+    # separate answer response so the two never run together.
+    answer_after_restate: bool = False
+
+
+async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
+    """Send the held-back reply for the caller's last turn.
+
+    Normal turn: a plain response.create. If the caller talked over the
+    previous answer, it is split in two beats: this one only says "I heard
+    you" and repeats their question; the answer follows as its own response
+    once this one's response.done arrives (see the handler).
+    """
+    state.reply_pending = False
+    state.response_active = True
+    if state.restate_next:
+        state.restate_next = False
+        state.answer_after_restate = True
+        await oai_ws.send(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "response": {
+                        "instructions": (
+                            f"{state.base_instructions}\n\n"
+                            "The caller spoke while you were still talking, and you have "
+                            "now finished your earlier point. In the language you've been "
+                            "using, say briefly that you heard them, then repeat their "
+                            "question back in your own words (e.g. \"aapne poocha tha ...\"). "
+                            "Do NOT answer it yet and do not call any tools - stop right "
+                            "after repeating the question."
+                        ),
+                    },
+                }
+            )
+        )
+    else:
+        await oai_ws.send(json.dumps({"type": "response.create"}))
 
 
 def realtime_tools() -> list[dict[str, Any]]:
@@ -416,24 +460,12 @@ async def handle_openai_event(
         # instructions used every other turn.
         if state.interrupted_mid_response:
             state.interrupted_mid_response = False
-            await oai_ws.send(
-                json.dumps(
-                    {
-                        "type": "response.create",
-                        "response": {
-                            "instructions": (
-                                f"{state.base_instructions}\n\n"
-                                "The caller just spoke while you were still talking. "
-                                "Start this reply by briefly acknowledging that (in the "
-                                "language you've been using) and restating in your own "
-                                "words the question they just asked - then answer it."
-                            ),
-                        },
-                    }
-                )
-            )
-        else:
-            await oai_ws.send(json.dumps({"type": "response.create"}))
+            state.restate_next = True
+        state.reply_pending = True
+        # Still speaking the earlier answer: hold the reply, response.done
+        # below fires it once that answer has fully finished.
+        if not state.response_active:
+            await _fire_pending_reply(oai_ws, state)
 
     elif etype == "conversation.item.input_audio_transcription.completed":
         state.pending_user_transcript = (event.get("transcript") or "").strip()
@@ -513,6 +545,29 @@ async def handle_openai_event(
         # The opening greeting has finished playing — lift the barge-in
         # suppression so normal interruption works for the rest of the call.
         state.greeting_guard_until = 0.0
+        if state.answer_after_restate:
+            state.answer_after_restate = False
+            # Restate beat is done. If the caller spoke again meanwhile, the
+            # pending reply restates that newer question instead.
+            if not state.reply_pending:
+                state.response_active = True
+                await oai_ws.send(
+                    json.dumps(
+                        {
+                            "type": "response.create",
+                            "response": {
+                                "instructions": (
+                                    f"{state.base_instructions}\n\n"
+                                    "You just repeated back the caller's question. Now "
+                                    "answer it fully, in the language you've been using."
+                                ),
+                            },
+                        }
+                    )
+                )
+                return
+        if state.reply_pending:
+            await _fire_pending_reply(oai_ws, state)
 
     elif etype == "error":
         log.warning("openai_realtime_error", error=event.get("error"))
