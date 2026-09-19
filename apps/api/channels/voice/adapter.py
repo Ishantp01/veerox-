@@ -103,6 +103,9 @@ class CallState:
     # The restate-only response is in flight; its response.done fires the
     # separate answer response so the two never run together.
     answer_after_restate: bool = False
+    # Transcripts of everything the caller said while the agent was talking,
+    # so the repeat-back beat can quote every question, not just the last.
+    overlap_transcripts: list[str] = field(default_factory=list)
 
 
 async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
@@ -118,24 +121,30 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
     if state.restate_next:
         state.restate_next = False
         state.answer_after_restate = True
+        heard = "; ".join(f'"{t}"' for t in state.overlap_transcripts)
+        hint = f" What they said (transcript): {heard}." if heard else ""
         await oai_ws.send(
             json.dumps(
                 {
                     "type": "response.create",
                     "response": {
+                        "tool_choice": "none",
                         "instructions": (
                             f"{state.base_instructions}\n\n"
-                            "The caller spoke while you were still talking, and you have "
-                            "now finished your earlier point. In the language you've been "
-                            "using, say briefly that you heard them, then repeat their "
-                            "question back in your own words (e.g. \"aapne poocha tha ...\"). "
-                            "Do NOT answer it yet and do not call any tools - stop right "
-                            "after repeating the question."
+                            "IMPORTANT - this reply is ONLY a read-back. The caller spoke "
+                            "while you were still talking, and you have now finished your "
+                            "earlier point. In the language you've been using, say you "
+                            "heard them and tell them what they asked, e.g. \"aapne "
+                            "poocha tha ki ... aur ... ok.\" Cover EVERY question or "
+                            f"request they made while you were talking.{hint} Do NOT "
+                            "answer, explain or give any information yet - end right after "
+                            "repeating what they asked."
                         ),
                     },
                 }
             )
         )
+        state.overlap_transcripts = []
     else:
         await oai_ws.send(json.dumps({"type": "response.create"}))
 
@@ -469,6 +478,10 @@ async def handle_openai_event(
 
     elif etype == "conversation.item.input_audio_transcription.completed":
         state.pending_user_transcript = (event.get("transcript") or "").strip()
+        if state.pending_user_transcript and (
+            state.interrupted_mid_response or state.restate_next or state.reply_pending
+        ):
+            state.overlap_transcripts.append(state.pending_user_transcript)
         log.info("voice_user_transcript", text=state.pending_user_transcript)
         if not state.language_hint_sent:
             state.language_hint_sent = True
@@ -558,8 +571,9 @@ async def handle_openai_event(
                             "response": {
                                 "instructions": (
                                     f"{state.base_instructions}\n\n"
-                                    "You just repeated back the caller's question. Now "
-                                    "answer it fully, in the language you've been using."
+                                    "You just read back what the caller asked. Now answer "
+                                    "ALL of those questions, one after another, fully, in "
+                                    "the language you've been using."
                                 ),
                             },
                         }
