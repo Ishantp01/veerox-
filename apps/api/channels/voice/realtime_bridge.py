@@ -272,9 +272,16 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
                 # latency at the cost of a somewhat higher chance of the
                 # agent barging in on a caller who paused mid-sentence — see
                 # CHANGES_voice_latency.md for the tradeoff writeup.
+                # Turn end: server_vad with a short silence window, so the
+                # reply starts ~0.4s after the caller stops (semantic_vad
+                # could hold the turn open for seconds). The old reason for
+                # semantic_vad — not treating "ok"/"haan" as a turn — is now
+                # handled by adapter.py (early-cut timer + backchannel filter).
                 "turn_detection": {
-                    "type": "semantic_vad",
-                    "eagerness": "medium",
+                    "type": "server_vad",
+                    "threshold": 0.5,
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 400,
                     # Caller talking mid-answer no longer wipes the
                     # in-progress response — OpenAI keeps generating and
                     # speaking it to completion, and the caller's new speech

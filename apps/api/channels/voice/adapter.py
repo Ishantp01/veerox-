@@ -126,6 +126,10 @@ class CallState:
     # yet — the ack waits briefly for these so a filler word ("ok") can be
     # recognised and ignored before the agent reacts to it.
     transcripts_outstanding: int = 0
+    # True from input_audio_buffer.speech_started to speech_stopped, so the
+    # early-cut timer can tell whether the caller is still talking.
+    caller_speaking: bool = False
+    cut_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
 
 
 # Pause between the caller finishing their question and the agent cutting in
@@ -138,6 +142,11 @@ TRANSCRIPT_WAIT_SECONDS = 4.0
 # answer off and is answered straight away (no ack / read-back). False: the
 # older behaviour — pause, "I heard you", resume, read-back, then answer.
 ANSWER_IMMEDIATELY = True
+# The agent stops talking once the caller has kept speaking this long over it
+# — real questions run longer than a filler ("ok", "haan ji"), and it means
+# the agent is already quiet by the time the caller finishes, so the answer
+# needn't wait for the transcript.
+EARLY_CUT_SECONDS = 0.8
 # Silence between the read-back finishing and the answer starting.
 ANSWER_GAP_SECONDS = 1.0
 # mu-law at 8kHz, one byte per sample.
@@ -250,6 +259,23 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
         await oai_ws.send(json.dumps({"type": "response.cancel"}))
     else:
         await _send_ack(oai_ws, state)
+
+
+async def _cut_if_still_speaking(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
+    """Stop the agent talking once the caller has spoken over it for
+    EARLY_CUT_SECONDS. The answer itself is sent by the normal reply path when
+    their turn commits (the agent is no longer busy by then, so it fires at
+    once with no transcript wait)."""
+    await asyncio.sleep(EARLY_CUT_SECONDS)
+    if not (state.caller_speaking and _agent_busy(state)):
+        return
+    if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
+        return
+    log.info("voice_early_cut", still_generating=state.response_active)
+    await _teardown_elevenlabs_turn(state)
+    await _send_clear(call_ws, state)
+    if state.response_active:
+        await oai_ws.send(json.dumps({"type": "response.cancel"}))
 
 
 async def _answer_after_readback(oai_ws: Any, state: CallState) -> None:
@@ -660,9 +686,17 @@ async def handle_openai_event(
         if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
             log.info("voice_greeting_barge_in_suppressed")
             return
+        state.caller_speaking = True
         if _agent_busy(state):
             state.interrupted_mid_response = True
             log.info("voice_caller_spoke_over_response")
+            if ANSWER_IMMEDIATELY and (state.cut_task is None or state.cut_task.done()):
+                state.cut_task = asyncio.create_task(
+                    _cut_if_still_speaking(oai_ws, call_ws, state, log)
+                )
+
+    elif etype == "input_audio_buffer.speech_stopped":
+        state.caller_speaking = False
 
     elif etype == "response.created":
         state.response_active = True
@@ -676,7 +710,7 @@ async def handle_openai_event(
         state.transcripts_outstanding += 1
         if state.interrupted_mid_response:
             state.interrupted_mid_response = False
-            state.restate_next = True
+            state.restate_next = not ANSWER_IMMEDIATELY
         state.reply_pending = True
         # Still speaking the earlier answer: hold the reply, response.done
         # below fires it once that answer has fully finished.
