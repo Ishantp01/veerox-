@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.voice import elevenlabs_client
 from apps.api.channels.voice import language_detect
+from apps.api.channels.voice import turn_controller
 from apps.api.config import settings
 from apps.api.core.memory import persist_turn
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
@@ -130,6 +131,20 @@ class CallState:
     # early-cut timer can tell whether the caller is still talking.
     caller_speaking: bool = False
     cut_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
+    # Live partial-transcript path (turn_controller.LiveTranscriber). ``live``
+    # is None until (and unless) its connection comes up.
+    live: Any = field(default=None, repr=False)
+    oai_ws: Any = field(default=None, repr=False)
+    openai_api_key: str | None = field(default=None, repr=False)
+    # Text streamed for the caller's current utterance (reset on speech_started).
+    utterance_text: str = ""
+    # monotonic deadline until which live text may still trigger a cut of the
+    # agent's speech; 0 = not judging.
+    cut_eval_deadline: float = 0.0
+    live_llm_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
+    live_llm_calls: int = 0
+    live_llm_last_words: int = 0
+    live_llm_said_filler: bool = False
 
 
 # Pause between the caller finishing their question and the agent cutting in
@@ -147,6 +162,16 @@ ANSWER_IMMEDIATELY = True
 # the agent is already quiet by the time the caller finishes, so the answer
 # needn't wait for the transcript.
 EARLY_CUT_SECONDS = 0.8
+# With the live transcriber up, the agent is cut off by what the caller SAYS
+# (see handle_live_delta), not by how long they talk. If no verdict has
+# formed after this long of overlapping speech, cut anyway unless the text
+# so far is known to be filler.
+LIVE_FALLBACK_CUT_SECONDS = 2.5
+# Live text lags speech by up to ~1s, so keep judging for this long after
+# the caller stops speaking.
+LIVE_EVAL_TAIL_SECONDS = 3.0
+# At most this many LLM filler/real checks per caller utterance.
+LIVE_LLM_MAX_CALLS = 3
 # Silence between the read-back finishing and the answer starting.
 ANSWER_GAP_SECONDS = 1.0
 # mu-law at 8kHz, one byte per sample.
@@ -161,27 +186,9 @@ def _agent_busy(state: CallState) -> bool:
     return state.response_active or _is_playing(state)
 
 
-_BACKCHANNEL_WORDS = frozenset(
-    {
-        "ok", "okay", "okk", "k", "kk", "hmm", "hm", "hmmm", "mm", "mmm", "mhm", "uh", "um",
-        "uhh", "umm", "oh", "ohh", "ah", "aah", "haan", "han", "haa", "ha", "hanji", "haanji",
-        "ji", "achha", "accha", "acha", "achcha", "theek", "thik", "tik", "hai", "sahi",
-        "right", "yes", "yeah", "yep", "yup", "sure", "fine", "alright", "all", "good", "nice",
-        "cool", "great", "got", "it", "i", "see", "understood", "bilkul", "samajh", "gaya",
-        "gayi", "sir", "madam", "mam", "ma'am", "अच्छा", "ठीक", "है", "हां", "हाँ", "हा",
-        "जी", "हम्म", "ओके", "ओके।", "सही", "बिल्कुल", "समझ", "गया", "गई",
-    }
-)
-_MAX_BACKCHANNEL_WORDS = 4
-
-
-def _is_backchannel(text: str) -> bool:
-    """True for empty/noise transcripts and short filler acknowledgments
-    ("ok", "theek hai", "accha", "haan ji") — not real questions."""
-    words = [w for w in (t.strip(".,!?;:।|\"'“”‘’()-…") for t in text.lower().split()) if w]
-    if not words:
-        return True
-    return len(words) <= _MAX_BACKCHANNEL_WORDS and all(w in _BACKCHANNEL_WORDS for w in words)
+# The filler-word list and classifier live in turn_controller.py; kept under
+# the old name because the whisper-transcript path below still uses it.
+_is_backchannel = turn_controller.is_backchannel
 
 
 async def _send_clear(ws: WebSocket, state: CallState) -> None:
@@ -261,21 +268,98 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
         await _send_ack(oai_ws, state)
 
 
-async def _cut_if_still_speaking(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
-    """Stop the agent talking once the caller has spoken over it for
-    EARLY_CUT_SECONDS. The answer itself is sent by the normal reply path when
-    their turn commits (the agent is no longer busy by then, so it fires at
-    once with no transcript wait)."""
-    await asyncio.sleep(EARLY_CUT_SECONDS)
-    if not (state.caller_speaking and _agent_busy(state)):
+def _live_ready(state: CallState) -> bool:
+    return state.live is not None and state.live.healthy
+
+
+async def _cut_now(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, reason: str) -> None:
+    """Stop the agent mid-speech: drop queued audio, cancel the in-flight
+    response, and make sure the caller's turn gets answered."""
+    if not _agent_busy(state):
         return
     if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
         return
-    log.info("voice_early_cut", still_generating=state.response_active)
+    state.cut_eval_deadline = 0.0
+    log.info("voice_agent_cut", reason=reason, still_generating=state.response_active)
     await _teardown_elevenlabs_turn(state)
     await _send_clear(call_ws, state)
+    if not state.caller_speaking:
+        # Their turn already ended (its reply may have been dropped as filler
+        # earlier); make sure it is answered now.
+        state.reply_pending = True
     if state.response_active:
+        # response.done for the cancelled response fires the pending reply.
         await oai_ws.send(json.dumps({"type": "response.cancel"}))
+    elif state.reply_pending:
+        _schedule_reply(oai_ws, state)
+
+
+async def _cut_if_still_speaking(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
+    """Duration-based fallback (no live transcript): stop the agent once the
+    caller has spoken over it for EARLY_CUT_SECONDS. The answer itself is sent
+    by the normal reply path when their turn commits (the agent is no longer
+    busy by then, so it fires at once with no transcript wait)."""
+    await asyncio.sleep(EARLY_CUT_SECONDS)
+    if not state.caller_speaking:
+        return
+    await _cut_now(oai_ws, call_ws, state, log, "duration")
+
+
+async def _live_fallback_cut(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
+    """Live path safety net: the caller has been talking over the agent for
+    LIVE_FALLBACK_CUT_SECONDS with no verdict — cut unless the text so far is
+    known filler."""
+    await asyncio.sleep(LIVE_FALLBACK_CUT_SECONDS)
+    if not state.caller_speaking or state.live_llm_said_filler:
+        return
+    if turn_controller.classify_partial(state.utterance_text) == "filler":
+        return
+    await _cut_now(oai_ws, call_ws, state, log, "live_fallback")
+
+
+def _drop_filler_reply(state: CallState) -> None:
+    """The caller's turn was only a filler: don't answer it after the agent
+    finishes talking."""
+    if not state.caller_speaking:
+        state.reply_pending = False
+        state.restate_next = False
+        state.interrupted_mid_response = False
+
+
+async def _live_llm_check(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
+    text = state.utterance_text
+    real = await turn_controller.llm_is_real_turn(text, state.openai_api_key)
+    log.info("voice_live_llm_verdict", text=text, real=real)
+    if real is None or time.monotonic() >= state.cut_eval_deadline:
+        return
+    if real:
+        await _cut_now(oai_ws, call_ws, state, log, "live_llm_real")
+    else:
+        state.live_llm_said_filler = True
+        _drop_filler_reply(state)
+
+
+async def handle_live_delta(
+    delta: str, call_ws: WebSocket, oai_ws: Any, state: CallState, log: Any
+) -> None:
+    """A partial-transcript fragment of what the caller is saying. While the
+    agent is talking, decide from the words so far whether to cut it off."""
+    state.utterance_text += delta
+    if time.monotonic() >= state.cut_eval_deadline or not _agent_busy(state):
+        return
+    verdict = turn_controller.classify_partial(state.utterance_text)
+    if verdict == "real":
+        log.info("voice_live_verdict", verdict=verdict, text=state.utterance_text)
+        await _cut_now(oai_ws, call_ws, state, log, "live_real")
+    elif verdict == "filler":
+        _drop_filler_reply(state)
+    else:
+        words = len(state.utterance_text.split())
+        busy = state.live_llm_task is not None and not state.live_llm_task.done()
+        if not busy and state.live_llm_calls < LIVE_LLM_MAX_CALLS and words > state.live_llm_last_words:
+            state.live_llm_calls += 1
+            state.live_llm_last_words = words
+            state.live_llm_task = asyncio.create_task(_live_llm_check(oai_ws, call_ws, state, log))
 
 
 async def _answer_after_readback(oai_ws: Any, state: CallState) -> None:
@@ -687,16 +771,32 @@ async def handle_openai_event(
             log.info("voice_greeting_barge_in_suppressed")
             return
         state.caller_speaking = True
+        state.utterance_text = ""
+        state.live_llm_calls = 0
+        state.live_llm_last_words = 0
+        state.live_llm_said_filler = False
         if _agent_busy(state):
             state.interrupted_mid_response = True
-            log.info("voice_caller_spoke_over_response")
+            log.info("voice_caller_spoke_over_response", live=_live_ready(state))
             if ANSWER_IMMEDIATELY and (state.cut_task is None or state.cut_task.done()):
-                state.cut_task = asyncio.create_task(
-                    _cut_if_still_speaking(oai_ws, call_ws, state, log)
-                )
+                if _live_ready(state):
+                    # Judge by the words as they stream in; this is only the
+                    # safety net if no verdict forms.
+                    state.cut_eval_deadline = time.monotonic() + 60.0
+                    state.cut_task = asyncio.create_task(
+                        _live_fallback_cut(oai_ws, call_ws, state, log)
+                    )
+                else:
+                    state.cut_task = asyncio.create_task(
+                        _cut_if_still_speaking(oai_ws, call_ws, state, log)
+                    )
 
     elif etype == "input_audio_buffer.speech_stopped":
         state.caller_speaking = False
+        if state.cut_eval_deadline:
+            state.cut_eval_deadline = min(
+                state.cut_eval_deadline, time.monotonic() + LIVE_EVAL_TAIL_SECONDS
+            )
 
     elif etype == "response.created":
         state.response_active = True
@@ -718,6 +818,7 @@ async def handle_openai_event(
             _schedule_reply(oai_ws, state)
         if (
             _agent_busy(state)
+            and not _live_ready(state)
             and state.ack_stage is None
             and (state.ack_task is None or state.ack_task.done())
             and not (state.greeting_guard_until and time.monotonic() < state.greeting_guard_until)

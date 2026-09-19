@@ -66,6 +66,16 @@ class Settings(BaseSettings):
     # ElevenLabs' streaming TTS instead — real latency/cost tradeoff, opt-in
     # only, never flip this without ELEVENLABS_API_KEY set.
     voice_tts_provider: str = "openai"
+    # Live turn-taking: a second OpenAI connection streams partial transcripts of
+    # the caller's speech so the agent can tell a filler ("haan", "ok") from a
+    # real question while it is still talking (channels/voice/turn_controller.py).
+    # Any failure falls back to the older duration-based rules; set false to
+    # turn it off entirely (saves the extra connection per call).
+    voice_live_turn_detection: bool = True
+    voice_live_transcribe_model: str = "gpt-live-transcribe"
+    # gpt-live-transcribe streaming delay: minimal|low|medium|high|xhigh —
+    # measured ~1s lower lag at "minimal" than the default.
+    voice_live_transcribe_delay: str = "minimal"
     elevenlabs_api_key: str | None = None
     elevenlabs_voice_id: str = "CwhRBWXzGAHq8TQ4Fs17"
     # Low-latency model — eleven_multilingual_v2 sounds better but is too

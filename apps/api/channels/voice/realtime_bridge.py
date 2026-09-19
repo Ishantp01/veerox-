@@ -35,6 +35,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from apps.api.channels.voice import adapter as voice_adapter
+from apps.api.channels.voice.turn_controller import LiveTranscriber
 from apps.api.config import settings
 from apps.api.core.prompts import (
     OUTBOUND_CALL_PROMPT,
@@ -331,6 +332,38 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
     return {"type": "session.update", "session": session}
 
 
+async def _start_live_transcriber(
+    state: "voice_adapter.CallState", org_id: UUID, call_ws: WebSocket, log: Any
+) -> None:
+    """Bring up the live partial-transcript connection in the background. If
+    anything fails the call simply keeps the duration-based turn-taking."""
+    try:
+        async with AsyncSessionLocal() as db:
+            state.openai_api_key = resolve_openai_api_key(await db.get(Org, org_id))
+
+        async def on_delta(delta: str) -> None:
+            # oai is bound by the time deltas flow: audio is only fed once the
+            # call pumps run, which is after oai exists.
+            await voice_adapter.handle_live_delta(delta, call_ws, state.oai_ws, state, log)
+
+        transcriber = LiveTranscriber(state.openai_api_key, on_delta, log)
+        if await transcriber.start():
+            state.live = transcriber
+        else:
+            await transcriber.close()
+    except Exception as exc:  # noqa: BLE001 — must never affect the call
+        log.warning("voice_live_transcriber_setup_failed", error=str(exc))
+
+
+async def _stop_live_transcriber(state: "voice_adapter.CallState", start_task: Any) -> None:
+    if start_task is not None and not start_task.done():
+        start_task.cancel()
+        await asyncio.gather(start_task, return_exceptions=True)
+    live, state.live = state.live, None
+    if live is not None:
+        await live.close()
+
+
 @router.websocket("/voice/stream")
 async def voice_stream(ws: WebSocket) -> None:
     """Bridge a single Plivo/Twilio call to an OpenAI Realtime session."""
@@ -447,6 +480,11 @@ async def voice_stream(ws: WebSocket) -> None:
         )
         if stream_id:
             state.stream_id = stream_id
+        live_start_task = (
+            asyncio.create_task(_start_live_transcriber(state, resolved_org_id, ws, log))
+            if settings.voice_live_turn_detection
+            else None
+        )
         if campaign_target_id is not None:
             # Proof the call actually connected — tells the hangup webhook
             # (campaign_dialer.handle_call_ended) not to re-dial this person
@@ -465,6 +503,7 @@ async def voice_stream(ws: WebSocket) -> None:
             # ran concurrently with the work above instead of after it.
             oai = await oai_connect_task
         state.base_instructions = instructions
+        state.oai_ws = oai
 
         try:
             if precall is None:
@@ -500,6 +539,8 @@ async def voice_stream(ws: WebSocket) -> None:
                         if event == "media":
                             payload = (msg.get("media") or {}).get("payload")
                             if payload:
+                                if state.live is not None:
+                                    state.live.feed(payload)
                                 await oai.send(
                                     json.dumps(
                                         {
@@ -556,6 +597,7 @@ async def voice_stream(ws: WebSocket) -> None:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
         finally:
+            await _stop_live_transcriber(state, live_start_task)
             # pump_call_to_openai already closes oai in its own finally on
             # the normal path — this is a safety net for the (unusual) case
             # where something above raised before the pumps ever started.
