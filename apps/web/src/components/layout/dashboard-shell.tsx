@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 import Nav from "@/components/nav";
 import { Topbar } from "@/components/layout/topbar";
+import { FollowUpDuePopup } from "@/components/follow-up-tasks/follow-up-due-popup";
 import { EmergencyEscalationPopup } from "@/components/escalations/emergency-escalation-popup";
 
 /**
@@ -30,6 +31,10 @@ export function DashboardShell({ children }: { children: ReactNode }) {
           full-screen takeover) so it doesn't stop whatever the team member
           is doing. */}
       <EmergencyEscalationPopup />
+      {/* Bottom-right reminder for lead follow-ups that have come due —
+          admins see the whole org's, members only their claimed leads
+          (scoped server-side). */}
+      <FollowUpDuePopup />
     </div>
   );
 }

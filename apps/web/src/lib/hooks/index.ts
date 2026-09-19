@@ -28,6 +28,12 @@ export {
   type LeadFilters,
   type LeadUpdateInput,
 } from "./useLeads";
+export {
+  useLeadFollowUps,
+  useUpdateLeadFollowUp,
+  followUpKey,
+  type LeadFollowUp,
+} from "./useLeadFollowUps";
 export { useEscalations, useClaimEscalation, type EscalationFilters } from "./useEscalations";
 export { useKillSwitch, useSetKillSwitch } from "./useKillSwitch";
 export {

@@ -14,7 +14,7 @@ import { UrgencyBadge } from "./urgency-badge";
 const SNOOZE_MS = 60 * 1000;
 
 /** Two-tone alert beep via the Web Audio API — no audio asset to ship. */
-function playAlertSound() {
+export function playAlertSound() {
   try {
     const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctx) return;

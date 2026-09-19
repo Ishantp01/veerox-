@@ -68,6 +68,7 @@ export const queryKeys = {
     ["appointments", filters ?? {}] as const,
   followUpRules: () => ["follow-up-rules"] as const,
   followUpTasks: (filters?: { status?: string }) => ["follow-up-tasks", filters ?? {}] as const,
+  leadFollowUps: (filters?: { due?: boolean }) => ["lead-follow-ups", filters ?? {}] as const,
   templates: (filters?: { active?: boolean }) => ["whatsapp-templates", filters ?? {}] as const,
   whatsappAssets: () => ["whatsapp-assets"] as const,
   platformSettings: () => ["platform-settings"] as const,
@@ -85,4 +86,6 @@ export const POLL = {
   conversationList: 4_000,
   leads: 10_000,
   campaigns: 3_000,
+  leadFollowUps: 30_000,
+  leadFollowUpsDue: 20_000,
 } as const;
