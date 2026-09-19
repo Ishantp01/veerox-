@@ -153,6 +153,13 @@ class CallState:
     # finish_first mode: a real question was recognised while the caller was
     # still speaking; the pause-and-acknowledge starts once their turn ends.
     finish_first_pending: bool = False
+    # Text and audio length of the response currently playing / last played, so
+    # a paused answer can be resumed from roughly where the caller stopped
+    # hearing it (finish_first mode).
+    resp_text: str = ""
+    resp_audio_seconds: float = 0.0
+    paused_text: str = ""
+    paused_heard_pct: int = 0
     hold_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
 
 
@@ -212,27 +219,75 @@ async def _send_clear(ws: WebSocket, state: CallState) -> None:
     await ws.send_text(json.dumps(message))
 
 
+# The pause / acknowledge / resume / read-back lines are sent as ISOLATED
+# responses: ``conversation: "none"`` plus a hand-built ``input``. A normal
+# response.create sees the caller's still-unanswered question in the
+# conversation, and the model then simply answers it (in production it answered
+# the same question four times, ignoring "say ONE short sentence"). An isolated
+# response only sees what we hand it, so it cannot.
+_OOB_PERSONA = (
+    "You are the AI voice agent on a live phone call. Speak briefly and naturally, in "
+    "plain spoken sentences: no markdown, no lists. Do exactly what the request says "
+    "and nothing more."
+)
+
+
+def _oob_response(request: str, context: str) -> str:
+    return json.dumps(
+        {
+            "type": "response.create",
+            "response": {
+                "conversation": "none",
+                "tool_choice": "none",
+                "instructions": f"{_OOB_PERSONA}\n\n{request}",
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": context}],
+                    }
+                ],
+            },
+        }
+    )
+
+
+def _language_sample(state: CallState) -> str:
+    """A snippet of what the agent has been saying, so an isolated response
+    speaks the call's language even though it can't see the conversation."""
+    return (state.paused_text or state.resp_text or "").strip()[:200]
+
+
 async def _send_ack(oai_ws: Any, state: CallState) -> None:
     state.ack_stage = "ack"
     state.response_active = True
     await oai_ws.send(
-        json.dumps(
-            {
-                "type": "response.create",
-                "response": {
-                    "tool_choice": "none",
-                    "instructions": (
-                        f"{state.base_instructions}\n\n"
-                        "IMPORTANT - the caller just asked something while you were "
-                        "still talking, and you paused your answer. Say ONE short "
-                        "sentence, in the language you've been using, telling them "
-                        "you heard their question and will answer it right after "
-                        "you finish your current point, e.g. \"aapka sawaal sun "
-                        "liya, bas ye point khatam karke batata hoon.\" Do NOT "
-                        "answer their question or add anything else."
-                    ),
-                },
-            }
+        _oob_response(
+            "The caller just asked you something while you were still talking, so you "
+            "paused. Say ONE short sentence telling them you heard their question and "
+            "will answer it right after you finish your current point, for example "
+            "\"aapka sawaal sun liya, bas ye point khatam karke batata hoon.\" Say it "
+            "in the same language as the sample below. Do NOT answer their question, do "
+            "not ask anything, add nothing else.",
+            f"Language sample of the call so far: {_language_sample(state)!r}",
+        )
+    )
+
+
+async def _send_resume(oai_ws: Any, state: CallState) -> None:
+    """Finish the paused answer: hand the model the text it was saying and how
+    much of it the caller already heard."""
+    state.ack_stage = "resume"
+    state.response_active = True
+    await oai_ws.send(
+        _oob_response(
+            "You paused partway through the answer below to acknowledge the caller. "
+            "Finish it now: say only the part they have NOT heard yet, in at most two "
+            "short spoken sentences, continuing naturally (no greeting, no repeating what "
+            "they already heard, no mention of the pause). Do NOT answer any other "
+            "question.",
+            f"The full answer you were giving:\n{state.paused_text}\n\n"
+            f"The caller has already heard roughly the first {state.paused_heard_pct}% of it.",
         )
     )
 
@@ -296,6 +351,15 @@ async def _start_finish_first(oai_ws: Any, call_ws: WebSocket, state: CallState,
     state.restate_next = True  # read the question back after the point is finished
     state.reply_pending = True
     log.info("voice_finish_first_pause", still_generating=state.response_active)
+    # Remember what was being said and how much of it was heard, before the
+    # queued audio is cleared, so the point can be finished afterwards.
+    state.paused_text = state.resp_text.strip()
+    if state.resp_audio_seconds > 0:
+        unheard = max(0.0, state.playback_end - time.monotonic())
+        heard = max(0.0, state.resp_audio_seconds - unheard)
+        state.paused_heard_pct = max(0, min(95, int(100 * heard / state.resp_audio_seconds)))
+    else:
+        state.paused_heard_pct = 0
     await _teardown_elevenlabs_turn(state)
     await _send_clear(call_ws, state)
     if state.response_active:
@@ -448,7 +512,8 @@ async def _answer_after_readback(oai_ws: Any, state: CallState) -> None:
                 "response": {
                     "instructions": (
                         f"{state.base_instructions}\n\n"
-                        "You just read back what the caller asked. Now answer ALL of "
+                        "The caller asked you one or more questions while you were talking (their "
+                        "latest spoken turn, already read back to them). Now answer ALL of "
                         "those questions, one after another, fully, in the language "
                         "you've been using. Begin with a short lead-in that makes it "
                         "clear the answer is starting, e.g. \"Ab aapke sawaal ka "
@@ -520,27 +585,17 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
     if state.restate_next:
         state.restate_next = False
         state.answer_after_restate = True
-        heard = "; ".join(f'"{t}"' for t in state.overlap_transcripts)
-        hint = f" What they said (transcript): {heard}." if heard else ""
+        asked = "; ".join(t for t in state.overlap_transcripts if t) or state.utterance_text.strip()
         await oai_ws.send(
-            json.dumps(
-                {
-                    "type": "response.create",
-                    "response": {
-                        "tool_choice": "none",
-                        "instructions": (
-                            f"{state.base_instructions}\n\n"
-                            "IMPORTANT - this reply is ONLY a read-back. The caller spoke "
-                            "while you were still talking, and you have now finished your "
-                            "earlier point. In the language you've been using, say you "
-                            "heard them and tell them what they asked, e.g. \"aapne "
-                            "poocha tha ki ... aur ... ok.\" Cover EVERY question or "
-                            f"request they made while you were talking.{hint} Do NOT "
-                            "answer, explain or give any information yet - end right after "
-                            "repeating what they asked."
-                        ),
-                    },
-                }
+            _oob_response(
+                "You have just finished your earlier point. In ONE short sentence, tell "
+                "the caller what they asked you while you were talking, restating it in "
+                "your own words, for example \"aapne poocha tha ki ...\". If they asked "
+                "several things, name each one briefly. Use the same language as the "
+                "caller's words below. Do NOT answer, explain or give any information "
+                "yet - stop right after restating what they asked.",
+                f"What the caller said: {asked!r}\n"
+                f"Language sample of the call so far: {_language_sample(state)!r}",
             )
         )
         state.overlap_transcripts = []
@@ -754,9 +809,9 @@ async def _send_media(ws: WebSocket, state: CallState, payload: str) -> None:
     await ws.send_text(json.dumps(message))
     # base64 -> raw byte count; extend the playback horizon by that much audio.
     now = time.monotonic()
-    state.playback_end = max(state.playback_end, now) + (len(payload) * 3 // 4) / (
-        _PLAYBACK_BYTES_PER_SECOND
-    )
+    chunk_seconds = (len(payload) * 3 // 4) / _PLAYBACK_BYTES_PER_SECOND
+    state.playback_end = max(state.playback_end, now) + chunk_seconds
+    state.resp_audio_seconds += chunk_seconds
 
 
 async def _forward_elevenlabs_audio(call_ws: WebSocket, state: CallState, log: Any) -> None:
@@ -890,6 +945,11 @@ async def handle_openai_event(
 
     elif etype == "response.created":
         state.response_active = True
+        state.resp_text = ""
+        state.resp_audio_seconds = 0.0
+
+    elif etype in ("response.audio_transcript.delta", "response.output_audio_transcript.delta"):
+        state.resp_text += event.get("delta") or ""
 
     elif etype == "input_audio_buffer.committed":
         # create_response=False (session.update above) means nothing else
@@ -970,6 +1030,7 @@ async def handle_openai_event(
         # forwarding its audio concurrently, rather than waiting for the
         # full response to finish.
         delta = event.get("delta") or ""
+        state.resp_text += delta
         if state.tts_provider == "elevenlabs" and delta:
             if state.eleven_session is None:
                 state.eleven_session = await elevenlabs_client.ElevenLabsTTSSession().__aenter__()
@@ -1045,26 +1106,12 @@ async def handle_openai_event(
             await _send_ack(oai_ws, state)
             return
         if state.ack_stage == "ack":
-            state.ack_stage = "resume"
-            state.response_active = True
-            await oai_ws.send(
-                json.dumps(
-                    {
-                        "type": "response.create",
-                        "response": {
-                            "tool_choice": "none",
-                            "instructions": (
-                                f"{state.base_instructions}\n\n"
-                                "IMPORTANT - your previous answer was paused partway. "
-                                "Pick it up from the point the caller last heard and finish "
-                                "it, briefly, without repeating what was already said and "
-                                "without answering their new question yet."
-                            ),
-                        },
-                    }
-                )
-            )
-            return
+            if state.paused_text:
+                await _send_resume(oai_ws, state)
+                return
+            # Nothing to finish (e.g. the paused answer produced no text): go
+            # straight on to the read-back and answer.
+            state.ack_stage = None
         if state.ack_stage == "resume":
             state.ack_stage = None
         if state.answer_after_restate:

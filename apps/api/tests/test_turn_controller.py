@@ -498,10 +498,12 @@ async def test_finish_first_when_only_audio_is_still_playing_sends_the_ack_direc
 async def test_finish_first_full_sequence(
     finish_first: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """pause -> short ack -> resume the point -> read the question back -> answer."""
+    """pause -> short ack -> finish the point -> read the question back -> answer."""
     monkeypatch.setattr(adapter, "ANSWER_GAP_SECONDS", 0.01)
     state = _state(
-        live=_LiveOk(), caller_speaking=False, reply_pending=True, interrupted_mid_response=True
+        live=_LiveOk(), caller_speaking=False, reply_pending=True, interrupted_mid_response=True,
+        resp_text="We offer AI calling and WhatsApp agents. Setup takes a day.",
+        utterance_text=" price kitna hai",
     )
     oai, call = _FakeOai(), _FakeCall()
 
@@ -511,17 +513,94 @@ async def test_finish_first_full_sequence(
     await _event(state, oai, call, "response.done")  # paused answer ended -> ack
     assert "heard their question" in _instructions(oai)
 
-    await _event(state, oai, call, "response.done")  # ack ended -> resume the point
+    await _event(state, oai, call, "response.done")  # ack ended -> finish the point
     assert "paused partway" in _instructions(oai)
 
     await _event(state, oai, call, "response.done")  # point finished -> read-back
     await asyncio.sleep(0.05)
-    assert "ONLY a read-back" in _instructions(oai)
+    assert "restating" in _instructions(oai)
 
     await _event(state, oai, call, "response.done")  # read-back ended -> answer
     await asyncio.sleep(0.15)
     assert "answer ALL of those questions" in _instructions(oai)
     assert oai.types().count("response.create") == 4
+
+    # The three spoken helper lines are isolated from the conversation (so the
+    # model can't just answer the pending question); only the real answer sees it.
+    creates = [m["response"] for m in oai.sent if m["type"] == "response.create"]
+    assert [r.get("conversation") for r in creates] == ["none", "none", "none", None]
+    assert all("input" in r for r in creates[:3])
+    assert "input" not in creates[3]
+
+
+async def test_isolated_lines_carry_only_their_own_context(finish_first: None) -> None:
+    state = _state(
+        live=_LiveOk(), caller_speaking=False, response_active=False,
+        playback_end=time.monotonic() + 5, resp_text="Our plans start at one thousand rupees.",
+    )
+    oai, call = _FakeOai(), _FakeCall()
+    await adapter._start_finish_first(oai, call, state, _Log())  # type: ignore[arg-type]
+    ack = oai.sent[-1]["response"]
+    assert ack["conversation"] == "none"
+    assert ack["tool_choice"] == "none"
+    text = ack["input"][0]["content"][0]["text"]
+    assert "one thousand rupees" in text  # language sample of the call
+    assert "Do NOT answer" in ack["instructions"]
+
+
+async def test_resume_gets_the_paused_text_and_how_much_was_heard(finish_first: None) -> None:
+    state = _state(
+        live=_LiveOk(), caller_speaking=False, response_active=False, ack_stage="ack",
+        paused_text="First point. Second point. Third point.", paused_heard_pct=40,
+    )
+    oai, call = _FakeOai(), _FakeCall()
+    await _event(state, oai, call, "response.done")
+    resume = oai.sent[-1]["response"]
+    assert resume["conversation"] == "none"
+    body = resume["input"][0]["content"][0]["text"]
+    assert "First point. Second point. Third point." in body
+    assert "40%" in body
+    assert state.ack_stage == "resume"
+
+
+async def test_no_paused_text_skips_the_resume_and_goes_on_to_the_reply(
+    finish_first: None,
+) -> None:
+    state = _state(
+        live=_LiveOk(), caller_speaking=False, response_active=False, ack_stage="ack",
+        reply_pending=True, restate_next=True, paused_text="",
+    )
+    oai, call = _FakeOai(), _FakeCall()
+    await _event(state, oai, call, "response.done")
+    await asyncio.sleep(0.05)
+    assert state.ack_stage is None
+    assert "restating" in _instructions(oai)  # straight to the read-back
+
+
+async def test_heard_fraction_is_estimated_when_pausing(finish_first: None) -> None:
+    now = time.monotonic()
+    state = _state(
+        live=_LiveOk(), caller_speaking=False, response_active=False,
+        resp_text="A long answer.", resp_audio_seconds=10.0, playback_end=now + 6.0,
+    )
+    await adapter._start_finish_first(_FakeOai(), _FakeCall(), state, _Log())  # type: ignore[arg-type]
+    assert 30 <= state.paused_heard_pct <= 45  # ~4s of 10s heard
+    assert state.paused_text == "A long answer."
+
+
+async def test_response_text_and_audio_are_tracked_per_response() -> None:
+    state, oai, call = _state(), _FakeOai(), _FakeCall()
+    await _event(state, oai, call, "response.created")
+    for delta in ("Hello ", "there."):
+        await adapter.handle_openai_event(
+            {"type": "response.output_audio_transcript.delta", "delta": delta},
+            call, oai, state, _Log(),  # type: ignore[arg-type]
+        )
+    assert state.resp_text == "Hello there."
+    await adapter._send_media(call, state, "A" * 800)  # 600 bytes -> 0.075s of mu-law
+    assert state.resp_audio_seconds == pytest.approx(0.075)
+    await _event(state, oai, call, "response.created")
+    assert state.resp_text == "" and state.resp_audio_seconds == 0.0
 
 
 async def test_finish_first_makes_no_duplicate_pause(finish_first: None) -> None:
