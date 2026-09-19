@@ -130,6 +130,10 @@ class CallState:
 # Pause between the caller finishing their question and the agent cutting in
 # to say it heard them.
 ACK_GAP_SECONDS = 1.0
+# True: a real question asked while the agent is mid-answer cuts the current
+# answer off and is answered straight away (no ack / read-back). False: the
+# older behaviour — pause, "I heard you", resume, read-back, then answer.
+ANSWER_IMMEDIATELY = True
 # Silence between the read-back finishing and the answer starting.
 ANSWER_GAP_SECONDS = 1.0
 # mu-law at 8kHz, one byte per sample.
@@ -206,7 +210,7 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
     """Wait ACK_GAP_SECONDS, then — if the agent is still mid-answer (still
     generating, or its audio is still playing) and the caller's question is
     waiting — pause the answer so the ack can play."""
-    await asyncio.sleep(ACK_GAP_SECONDS)
+    await asyncio.sleep(0 if ANSWER_IMMEDIATELY else ACK_GAP_SECONDS)
     # Give the transcript a moment to arrive: if it's just "ok"/"theek hai"
     # the pending reply is dropped and there's nothing to acknowledge.
     waited = 0.0
@@ -218,6 +222,17 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
     await _teardown_elevenlabs_turn(state)
     await _send_clear(call_ws, state)
     log.info("voice_ack_pausing_answer", still_generating=state.response_active)
+    if ANSWER_IMMEDIATELY:
+        # Real question mid-answer: drop the read-back beat, answer it now.
+        state.restate_next = False
+        state.interrupted_mid_response = False
+        state.overlap_transcripts = []
+        if state.response_active:
+            state.ack_stage = "cancelling"
+            await oai_ws.send(json.dumps({"type": "response.cancel"}))
+        else:
+            await _fire_pending_reply(oai_ws, state)
+        return
     if state.response_active:
         # Wait for the cancelled response's response.done, then ack.
         state.ack_stage = "cancelling"
@@ -758,6 +773,12 @@ async def handle_openai_event(
         # until that playback ends.)
         state.greeting_guard_until = state.playback_end if state.greeting_guard_until else 0.0
         if state.ack_stage == "cancelling":
+            if ANSWER_IMMEDIATELY:
+                # The cut-off answer's response.done — answer the question now.
+                state.ack_stage = None
+                if state.reply_pending:
+                    await _fire_pending_reply(oai_ws, state)
+                return
             # The paused answer's response.done — play the short ack now.
             await _send_ack(oai_ws, state)
             return
