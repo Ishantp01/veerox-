@@ -121,6 +121,10 @@ class CallState:
     # provider — "agent is speaking" must be judged from this, not from
     # response_active alone.
     playback_end: float = 0.0
+    # input_audio_buffer.committed events whose transcript hasn't arrived
+    # yet — the ack waits briefly for these so a filler word ("ok") can be
+    # recognised and ignored before the agent reacts to it.
+    transcripts_outstanding: int = 0
 
 
 # Pause between the caller finishing their question and the agent cutting in
@@ -138,6 +142,29 @@ def _is_playing(state: CallState) -> bool:
 
 def _agent_busy(state: CallState) -> bool:
     return state.response_active or _is_playing(state)
+
+
+_BACKCHANNEL_WORDS = frozenset(
+    {
+        "ok", "okay", "okk", "k", "kk", "hmm", "hm", "hmmm", "mm", "mmm", "mhm", "uh", "um",
+        "uhh", "umm", "oh", "ohh", "ah", "aah", "haan", "han", "haa", "ha", "hanji", "haanji",
+        "ji", "achha", "accha", "acha", "achcha", "theek", "thik", "tik", "hai", "sahi",
+        "right", "yes", "yeah", "yep", "yup", "sure", "fine", "alright", "all", "good", "nice",
+        "cool", "great", "got", "it", "i", "see", "understood", "bilkul", "samajh", "gaya",
+        "gayi", "sir", "madam", "mam", "ma'am", "अच्छा", "ठीक", "है", "हां", "हाँ", "हा",
+        "जी", "हम्म", "ओके", "ओके।", "सही", "बिल्कुल", "समझ", "गया", "गई",
+    }
+)
+_MAX_BACKCHANNEL_WORDS = 4
+
+
+def _is_backchannel(text: str) -> bool:
+    """True for empty/noise transcripts and short filler acknowledgments
+    ("ok", "theek hai", "accha", "haan ji") — not real questions."""
+    words = [w for w in (t.strip(".,!?;:।|\"'“”‘’()-…") for t in text.lower().split()) if w]
+    if not words:
+        return True
+    return len(words) <= _MAX_BACKCHANNEL_WORDS and all(w in _BACKCHANNEL_WORDS for w in words)
 
 
 async def _send_clear(ws: WebSocket, state: CallState) -> None:
@@ -180,6 +207,12 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
     generating, or its audio is still playing) and the caller's question is
     waiting — pause the answer so the ack can play."""
     await asyncio.sleep(ACK_GAP_SECONDS)
+    # Give the transcript a moment to arrive: if it's just "ok"/"theek hai"
+    # the pending reply is dropped and there's nothing to acknowledge.
+    waited = 0.0
+    while state.transcripts_outstanding > 0 and waited < 1.5:
+        await asyncio.sleep(0.1)
+        waited += 0.1
     if not (_agent_busy(state) and state.reply_pending and state.ack_stage is None):
         return
     await _teardown_elevenlabs_turn(state)
@@ -614,6 +647,7 @@ async def handle_openai_event(
         # also the one place that can attach a one-off instruction to that
         # specific response without touching the persisted session
         # instructions used every other turn.
+        state.transcripts_outstanding += 1
         if state.interrupted_mid_response:
             state.interrupted_mid_response = False
             state.restate_next = True
@@ -632,9 +666,18 @@ async def handle_openai_event(
 
     elif etype == "conversation.item.input_audio_transcription.completed":
         state.pending_user_transcript = (event.get("transcript") or "").strip()
-        if state.pending_user_transcript and (
-            state.interrupted_mid_response or state.restate_next or state.reply_pending
-        ):
+        state.transcripts_outstanding = max(0, state.transcripts_outstanding - 1)
+        overlapping = state.interrupted_mid_response or state.restate_next or state.reply_pending
+        if overlapping and _is_backchannel(state.pending_user_transcript):
+            # Filler while the agent was talking ("ok", "theek hai"): not a
+            # question. If nothing real is waiting, drop the pending reply so
+            # it triggers no ack, read-back or new answer.
+            log.info("voice_backchannel_ignored", text=state.pending_user_transcript)
+            if not state.overlap_transcripts and state.answer_after_restate is False:
+                state.reply_pending = False
+                state.restate_next = False
+                state.interrupted_mid_response = False
+        elif state.pending_user_transcript and overlapping:
             state.overlap_transcripts.append(state.pending_user_transcript)
         log.info("voice_user_transcript", text=state.pending_user_transcript)
         if not state.language_hint_sent:
