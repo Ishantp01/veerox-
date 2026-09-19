@@ -114,15 +114,33 @@ class CallState:
     # playing; "resume" = the interrupted answer is being continued.
     ack_stage: str | None = None
     ack_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
+    reply_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
+    # ``time.monotonic()`` moment the audio already sent to the caller
+    # finishes playing. The model generates audio far faster than real time,
+    # so response.done arrives while seconds of speech are still queued at the
+    # provider — "agent is speaking" must be judged from this, not from
+    # response_active alone.
+    playback_end: float = 0.0
 
 
 # Pause between the caller finishing their question and the agent cutting in
 # to say it heard them.
 ACK_GAP_SECONDS = 1.0
+# mu-law at 8kHz, one byte per sample.
+_PLAYBACK_BYTES_PER_SECOND = 8000
+
+
+def _is_playing(state: CallState) -> bool:
+    return state.playback_end > time.monotonic()
+
+
+def _agent_busy(state: CallState) -> bool:
+    return state.response_active or _is_playing(state)
 
 
 async def _send_clear(ws: WebSocket, state: CallState) -> None:
     """Tell the provider to drop buffered playback audio."""
+    state.playback_end = 0.0
     if state.provider == "twilio":
         message = {"event": "clear", "streamSid": state.stream_id}
     else:
@@ -130,18 +148,69 @@ async def _send_clear(ws: WebSocket, state: CallState) -> None:
     await ws.send_text(json.dumps(message))
 
 
+async def _send_ack(oai_ws: Any, state: CallState) -> None:
+    state.ack_stage = "ack"
+    state.response_active = True
+    await oai_ws.send(
+        json.dumps(
+            {
+                "type": "response.create",
+                "response": {
+                    "tool_choice": "none",
+                    "instructions": (
+                        f"{state.base_instructions}\n\n"
+                        "IMPORTANT - the caller just asked something while you were "
+                        "still talking, and you paused your answer. Say ONE short "
+                        "sentence, in the language you've been using, telling them "
+                        "you heard their question and will answer it right after "
+                        "you finish your current point, e.g. \"aapka sawaal sun "
+                        "liya, bas ye point khatam karke batata hoon.\" Do NOT "
+                        "answer their question or add anything else."
+                    ),
+                },
+            }
+        )
+    )
+
+
 async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
-    """Wait ACK_GAP_SECONDS, then — if the agent is still mid-answer and the
-    caller's question is still waiting — pause the answer so the ack can play.
-    The rest of the sequence runs from the response.done handler."""
+    """Wait ACK_GAP_SECONDS, then — if the agent is still mid-answer (still
+    generating, or its audio is still playing) and the caller's question is
+    waiting — pause the answer so the ack can play."""
     await asyncio.sleep(ACK_GAP_SECONDS)
-    if not (state.response_active and state.reply_pending and state.ack_stage is None):
+    if not (_agent_busy(state) and state.reply_pending and state.ack_stage is None):
         return
-    state.ack_stage = "cancelling"
     await _teardown_elevenlabs_turn(state)
     await _send_clear(call_ws, state)
-    await oai_ws.send(json.dumps({"type": "response.cancel"}))
-    log.info("voice_ack_pausing_answer")
+    log.info("voice_ack_pausing_answer", still_generating=state.response_active)
+    if state.response_active:
+        # Wait for the cancelled response's response.done, then ack.
+        state.ack_stage = "cancelling"
+        await oai_ws.send(json.dumps({"type": "response.cancel"}))
+    else:
+        await _send_ack(oai_ws, state)
+
+
+async def _fire_reply_when_quiet(oai_ws: Any, state: CallState) -> None:
+    """Hold the caller's pending reply until the audio already queued to them
+    has finished playing, so the next answer starts after a real pause instead
+    of stacking behind the previous one."""
+    while True:
+        remaining = state.playback_end - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(remaining)
+    if state.reply_pending and state.ack_stage is None and not state.response_active:
+        await _fire_pending_reply(oai_ws, state)
+
+
+def _schedule_reply(oai_ws: Any, state: CallState) -> None:
+    """Fire the pending reply now, or once queued audio has drained."""
+    if _is_playing(state):
+        if state.reply_task is None or state.reply_task.done():
+            state.reply_task = asyncio.create_task(_fire_reply_when_quiet(oai_ws, state))
+    else:
+        asyncio.create_task(_fire_pending_reply(oai_ws, state))
 
 
 async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
@@ -389,6 +458,11 @@ async def _send_media(ws: WebSocket, state: CallState, payload: str) -> None:
             },
         }
     await ws.send_text(json.dumps(message))
+    # base64 -> raw byte count; extend the playback horizon by that much audio.
+    now = time.monotonic()
+    state.playback_end = max(state.playback_end, now) + (len(payload) * 3 // 4) / (
+        _PLAYBACK_BYTES_PER_SECOND
+    )
 
 
 async def _forward_elevenlabs_audio(call_ws: WebSocket, state: CallState, log: Any) -> None:
@@ -490,7 +564,7 @@ async def handle_openai_event(
         if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
             log.info("voice_greeting_barge_in_suppressed")
             return
-        if state.response_active:
+        if _agent_busy(state):
             state.interrupted_mid_response = True
             log.info("voice_caller_spoke_over_response")
 
@@ -510,9 +584,10 @@ async def handle_openai_event(
         # Still speaking the earlier answer: hold the reply, response.done
         # below fires it once that answer has fully finished.
         if not state.response_active:
-            await _fire_pending_reply(oai_ws, state)
-        elif (
-            state.ack_stage is None
+            _schedule_reply(oai_ws, state)
+        if (
+            _agent_busy(state)
+            and state.ack_stage is None
             and (state.ack_task is None or state.ack_task.done())
             and not (state.greeting_guard_until and time.monotonic() < state.greeting_guard_until)
         ):
@@ -599,31 +674,12 @@ async def handle_openai_event(
         state.response_active = False
         # The opening greeting has finished playing — lift the barge-in
         # suppression so normal interruption works for the rest of the call.
-        state.greeting_guard_until = 0.0
+        # (its audio may still be queued at the provider, so hold the guard
+        # until that playback ends.)
+        state.greeting_guard_until = state.playback_end if state.greeting_guard_until else 0.0
         if state.ack_stage == "cancelling":
             # The paused answer's response.done — play the short ack now.
-            state.ack_stage = "ack"
-            state.response_active = True
-            await oai_ws.send(
-                json.dumps(
-                    {
-                        "type": "response.create",
-                        "response": {
-                            "tool_choice": "none",
-                            "instructions": (
-                                f"{state.base_instructions}\n\n"
-                                "IMPORTANT - the caller just asked something while you were "
-                                "still talking, and you paused your answer. Say ONE short "
-                                "sentence, in the language you've been using, telling them "
-                                "you heard their question and will answer it right after "
-                                "you finish your current point, e.g. \"aapka sawaal sun "
-                                "liya, bas ye point khatam karke batata hoon.\" Do NOT "
-                                "answer their question or add anything else."
-                            ),
-                        },
-                    }
-                )
-            )
+            await _send_ack(oai_ws, state)
             return
         if state.ack_stage == "ack":
             state.ack_stage = "resume"
@@ -671,7 +727,7 @@ async def handle_openai_event(
                 )
                 return
         if state.reply_pending:
-            await _fire_pending_reply(oai_ws, state)
+            _schedule_reply(oai_ws, state)
 
     elif etype == "error":
         log.warning("openai_realtime_error", error=event.get("error"))
@@ -682,7 +738,7 @@ async def handle_openai_event(
             state.ack_stage = None
             state.response_active = False
             if state.reply_pending:
-                await _fire_pending_reply(oai_ws, state)
+                _schedule_reply(oai_ws, state)
 
     elif etype not in ("session.created", "session.updated"):
         log.info("voice_openai_event_unhandled", etype=etype)
