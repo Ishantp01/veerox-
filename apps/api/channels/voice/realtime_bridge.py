@@ -35,6 +35,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from apps.api.channels.voice import adapter as voice_adapter
+from apps.api.channels.voice import turn_controller
 from apps.api.channels.voice.turn_controller import LiveTranscriber
 from apps.api.config import settings
 from apps.api.core.prompts import (
@@ -346,6 +347,7 @@ async def _start_live_transcriber(
             # call pumps run, which is after oai exists.
             await voice_adapter.handle_live_delta(delta, call_ws, state.oai_ws, state, log)
 
+        asyncio.create_task(turn_controller.warm_up(state.openai_api_key))
         transcriber = LiveTranscriber(state.openai_api_key, on_delta, log)
         if await transcriber.start():
             state.live = transcriber

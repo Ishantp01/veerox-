@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
+from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
@@ -123,22 +125,134 @@ def classify_partial(text: str) -> Verdict:
     return "unsure"
 
 
+# ---------------------------------------------------------------------------
+# Adaptive endpointing
+# ---------------------------------------------------------------------------
+
+# Words a speaker ends on when they are clearly about to say more.
+CONTINUATION_WORDS = frozenset(
+    {
+        "and", "but", "so", "because", "then", "or", "like", "actually", "well", "um", "uh",
+        "umm", "uhh", "the", "a", "an", "to", "of", "my", "i", "mean", "that", "if", "when",
+        "aur", "lekin", "magar", "toh", "to", "kyunki", "ki", "matlab", "mera", "meri", "mujhe",
+        "woh", "wo", "vo", "yaani", "basically", "jaise", "agar", "ya", "phir", "fir", "main",
+        "और", "लेकिन", "मगर", "तो", "क्योंकि", "कि", "मतलब", "मेरा", "मेरी", "मुझे", "वो",
+        "यानी", "जैसे", "अगर", "या", "फिर", "मैं",
+    }
+)
+# Sentence-final punctuation from the transcriber (Latin, Devanagari danda,
+# Arabic/Urdu question mark, full-width).
+_TERMINAL = (".", "?", "!", "।", "؟", "？", "！", "。")
+# How long to keep waiting for the caller to continue.
+HOLD_CONTINUATION_SECONDS = 1.0
+HOLD_LONE_FILLER_SECONDS = 0.6
+
+
+def endpoint_hold_seconds(text: str, agent_was_busy: bool) -> float:
+    """How much longer to wait before answering, given the text streamed so far
+    for the caller's turn — 0 when the turn looks finished.
+
+    Turn end is otherwise decided by a fixed 0.4s silence, which cuts off a
+    caller who pauses mid-sentence ("haan… mera matlab…"). Streamed text lags
+    the audio by up to ~1s, so this looks at a *prefix*: callers re-check it as
+    more text arrives and release the hold as soon as it stops looking
+    unfinished (see adapter.handle_live_delta).
+    """
+    stripped = text.strip()
+    words = _tokens(stripped)
+    if not words:
+        return 0.0  # no text yet — don't guess, answer normally
+    lone_filler = len(words) <= 2 and all(w in BACKCHANNEL_WORDS for w in words)
+    if lone_filler and not agent_was_busy:
+        # A bare "haan"/"ok" to an idle agent is very often followed by more.
+        return HOLD_LONE_FILLER_SECONDS
+    if stripped.endswith(_TERMINAL) and not stripped.endswith("..."):
+        return 0.0
+    if stripped.endswith(("…", "...", ",")) or words[-1] in CONTINUATION_WORDS:
+        return HOLD_CONTINUATION_SECONDS
+    return 0.0
+
+
+# ---------------------------------------------------------------------------
+# LLM turn judgement (any language)
+# ---------------------------------------------------------------------------
+
+TURN_LABELS = (
+    "FILLER",
+    "QUESTION",
+    "CLARIFICATION",
+    "OBJECTION",
+    "INTERRUPTION",
+    "ANSWER",
+    "NEW_TOPIC",
+    "CONTINUATION",
+    "END",
+)
+# Below this the judgement is ignored and the agent keeps listening.
+LLM_MIN_CONFIDENCE = 0.6
+
+
+@dataclass(frozen=True)
+class TurnJudgement:
+    label: str
+    confidence: float
+
+    @property
+    def verdict(self) -> Literal["filler", "real", "wait", "unsure"]:
+        """filler: keep talking. real: stop and answer. wait: the caller is
+        mid-sentence, judge again once more text arrives. unsure: low
+        confidence — keep listening."""
+        if self.confidence < LLM_MIN_CONFIDENCE:
+            return "unsure"
+        if self.label == "FILLER":
+            return "filler"
+        if self.label == "CONTINUATION":
+            return "wait"
+        return "real"
+
+
 _LLM_SYSTEM = (
-    "You judge one utterance from a caller during a phone call with an AI sales agent, "
+    "You classify one utterance from a caller during a phone call with an AI sales agent, "
     "spoken while the agent was still talking. The transcript is automatic, may be in any "
-    "language (often Indian languages or Hinglish), and may be garbled or in the wrong "
-    "script. Reply with exactly one word:\n"
-    "FILLER - only an acknowledgment or reaction (ok, yes, I see, right, hmm, got it, "
-    "nice, thanks, or the equivalent in any language) with no question, request or new "
-    "information.\n"
-    "REAL - anything else: a question, a request, an objection, new information, asking "
-    "the agent to stop, wait, repeat or explain, or anything you cannot tell."
+    "language (often Indian languages or Hinglish), and may be garbled, cut off, or in the "
+    "wrong script. Choose exactly one label:\n"
+    "FILLER - only an acknowledgment or reaction (ok, yes, I see, right, hmm, got it, nice, "
+    "thanks, or the equivalent in any language) with no question, request or information.\n"
+    "QUESTION - asks something.\n"
+    "CLARIFICATION - asks the agent to repeat or explain what it just said.\n"
+    "OBJECTION - pushes back, refuses, or says they are not interested.\n"
+    "INTERRUPTION - asks the agent to stop, wait or listen.\n"
+    "ANSWER - gives information or a choice.\n"
+    "NEW_TOPIC - raises something unrelated to what the agent was saying.\n"
+    "CONTINUATION - a sentence clearly cut off mid-way, more is coming.\n"
+    "END - wants to end the call.\n"
+    'Reply with only JSON: {"label": "<LABEL>", "confidence": <0 to 1>}. When unsure between '
+    "FILLER and anything else, choose the other label."
 )
 
+_JSON_RE = re.compile(r"\{.*?\}", re.S)
 
-async def llm_is_real_turn(text: str, api_key: str | None, timeout: float = 2.5) -> bool | None:
-    """Ask a small, fast model whether ``text`` is a real turn (True), a filler
-    (False), or None if it couldn't answer in time. Works in any language."""
+
+def parse_judgement(content: str | None) -> TurnJudgement | None:
+    if not content:
+        return None
+    match = _JSON_RE.search(content)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(0))
+        label = str(data["label"]).strip().upper()
+        confidence = float(data.get("confidence", 0.0))
+    except (ValueError, KeyError, TypeError):
+        return None
+    if label not in TURN_LABELS:
+        return None
+    return TurnJudgement(label=label, confidence=max(0.0, min(1.0, confidence)))
+
+
+async def judge_turn(text: str, api_key: str | None, timeout: float = 2.5) -> TurnJudgement | None:
+    """Ask a small, fast model to label ``text`` (any language) with a
+    confidence, or None if it couldn't answer in time."""
     from apps.api.core.llm import chat_completion  # local: keeps import cost off startup
 
     try:
@@ -149,7 +263,7 @@ async def llm_is_real_turn(text: str, api_key: str | None, timeout: float = 2.5)
                     {"role": "user", "content": text},
                 ],
                 temperature=0.0,
-                max_tokens=3,
+                max_tokens=30,
                 api_key=api_key,
             ),
             timeout=timeout,
@@ -157,12 +271,16 @@ async def llm_is_real_turn(text: str, api_key: str | None, timeout: float = 2.5)
     except Exception as exc:  # noqa: BLE001 — never let a classifier failure touch the call
         logger.warning("voice_live_llm_check_failed", error=str(exc))
         return None
-    answer = (result.content or "").strip().upper()
-    if answer.startswith("FILLER"):
-        return False
-    if answer.startswith("REAL"):
-        return True
-    return None
+    return parse_judgement(result.content)
+
+
+async def warm_up(api_key: str | None) -> None:
+    """Make one throwaway classification at call start so the first real check
+    doesn't pay the cold-connection cost (~2s), which would blow its timeout."""
+    try:
+        await judge_turn("ok", api_key, timeout=8.0)
+    except Exception:  # noqa: BLE001 — purely an optimisation
+        pass
 
 
 # ---------------------------------------------------------------------------

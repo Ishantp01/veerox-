@@ -145,6 +145,12 @@ class CallState:
     live_llm_calls: int = 0
     live_llm_last_words: int = 0
     live_llm_said_filler: bool = False
+    # Adaptive endpointing: don't answer before this monotonic time (0 = no hold).
+    # Set when the caller's turn commits but the streamed text looks unfinished
+    # ("haan, mera matlab..."); cleared as soon as they resume or the text
+    # stops looking unfinished.
+    hold_until: float = 0.0
+    hold_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
 
 
 # Pause between the caller finishing their question and the agent cutting in
@@ -328,15 +334,23 @@ def _drop_filler_reply(state: CallState) -> None:
 
 async def _live_llm_check(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
     text = state.utterance_text
-    real = await turn_controller.llm_is_real_turn(text, state.openai_api_key)
-    log.info("voice_live_llm_verdict", text=text, real=real)
-    if real is None or time.monotonic() >= state.cut_eval_deadline:
+    judgement = await turn_controller.judge_turn(text, state.openai_api_key)
+    log.info(
+        "voice_live_llm_verdict",
+        text=text,
+        label=judgement.label if judgement else None,
+        confidence=judgement.confidence if judgement else None,
+    )
+    if judgement is None or time.monotonic() >= state.cut_eval_deadline:
         return
-    if real:
-        await _cut_now(oai_ws, call_ws, state, log, "live_llm_real")
-    else:
+    verdict = judgement.verdict
+    if verdict == "real":
+        await _cut_now(oai_ws, call_ws, state, log, f"live_llm_{judgement.label.lower()}")
+    elif verdict == "filler":
         state.live_llm_said_filler = True
         _drop_filler_reply(state)
+    # "wait" (sentence cut off) / "unsure" (low confidence): keep listening —
+    # more text re-triggers the check, and the fallback timer covers silence.
 
 
 async def handle_live_delta(
@@ -345,6 +359,13 @@ async def handle_live_delta(
     """A partial-transcript fragment of what the caller is saying. While the
     agent is talking, decide from the words so far whether to cut it off."""
     state.utterance_text += delta
+    if state.hold_until - time.monotonic() > 0 and not state.caller_speaking:
+        # We're holding the reply for a caller who paused mid-sentence: more
+        # text has arrived, so re-judge whether they're actually done.
+        if turn_controller.endpoint_hold_seconds(state.utterance_text, False) == 0.0:
+            _clear_hold(state)
+            if state.reply_pending and not state.response_active:
+                _schedule_reply(oai_ws, state)
     if time.monotonic() >= state.cut_eval_deadline or not _agent_busy(state):
         return
     verdict = turn_controller.classify_partial(state.utterance_text)
@@ -410,8 +431,32 @@ async def _fire_reply_when_quiet(oai_ws: Any, state: CallState) -> None:
         await _fire_pending_reply(oai_ws, state)
 
 
+async def _release_hold(oai_ws: Any, state: CallState) -> None:
+    """Wait out the endpointing hold, then send the reply if the caller hasn't
+    resumed speaking in the meantime."""
+    while True:
+        remaining = state.hold_until - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(remaining)
+    if state.reply_pending and not state.response_active and not state.caller_speaking:
+        _schedule_reply(oai_ws, state)
+
+
+def _clear_hold(state: CallState) -> None:
+    state.hold_until = 0.0
+    if state.hold_task is not None and not state.hold_task.done():
+        state.hold_task.cancel()
+    state.hold_task = None
+
+
 def _schedule_reply(oai_ws: Any, state: CallState) -> None:
-    """Fire the pending reply now, or once queued audio has drained."""
+    """Fire the pending reply now, or once queued audio has drained (or the
+    endpointing hold has passed)."""
+    if state.hold_until - time.monotonic() > 0:
+        if state.hold_task is None or state.hold_task.done():
+            state.hold_task = asyncio.create_task(_release_hold(oai_ws, state))
+        return
     if _is_playing(state):
         if state.reply_task is None or state.reply_task.done():
             state.reply_task = asyncio.create_task(_fire_reply_when_quiet(oai_ws, state))
@@ -771,6 +816,7 @@ async def handle_openai_event(
             log.info("voice_greeting_barge_in_suppressed")
             return
         state.caller_speaking = True
+        _clear_hold(state)
         state.utterance_text = ""
         state.live_llm_calls = 0
         state.live_llm_last_words = 0
@@ -812,6 +858,16 @@ async def handle_openai_event(
             state.interrupted_mid_response = False
             state.restate_next = not ANSWER_IMMEDIATELY
         state.reply_pending = True
+        # Adaptive endpointing: if the text streamed so far looks unfinished,
+        # wait a little before answering in case they carry on.
+        hold = (
+            turn_controller.endpoint_hold_seconds(state.utterance_text, _agent_busy(state))
+            if _live_ready(state)
+            else 0.0
+        )
+        state.hold_until = time.monotonic() + hold if hold else 0.0
+        if hold:
+            log.info("voice_endpoint_hold", seconds=hold, text=state.utterance_text)
         # Still speaking the earlier answer: hold the reply, response.done
         # below fires it once that answer has fully finished.
         if not state.response_active:

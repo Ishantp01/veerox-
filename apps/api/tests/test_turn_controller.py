@@ -12,7 +12,13 @@ from typing import Any
 import pytest
 
 from apps.api.channels.voice import adapter, turn_controller
-from apps.api.channels.voice.turn_controller import classify_partial, is_backchannel
+from apps.api.channels.voice.turn_controller import (
+    TurnJudgement,
+    classify_partial,
+    endpoint_hold_seconds,
+    is_backchannel,
+    parse_judgement,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -159,11 +165,11 @@ async def test_greeting_guard_blocks_the_cut() -> None:
 async def test_unsure_text_is_judged_by_the_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
-    async def fake_llm(text: str, api_key: str | None, timeout: float = 2.5) -> bool | None:
+    async def fake_llm(text: str, api_key: str | None, timeout: float = 2.5) -> TurnJudgement | None:
         calls.append(text)
-        return True
+        return TurnJudgement("QUESTION", 0.9)
 
-    monkeypatch.setattr(turn_controller, "llm_is_real_turn", fake_llm)
+    monkeypatch.setattr(turn_controller, "judge_turn", fake_llm)
     state, oai, call = _state(), _FakeOai(), _FakeCall()
     await _feed(state, oai, call, " अवनो", " කානි")  # garbled, no cues -> unsure
     assert state.live_llm_task is not None
@@ -173,10 +179,10 @@ async def test_unsure_text_is_judged_by_the_llm(monkeypatch: pytest.MonkeyPatch)
 
 
 async def test_llm_saying_filler_keeps_the_agent_talking(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_llm(text: str, api_key: str | None, timeout: float = 2.5) -> bool | None:
-        return False
+    async def fake_llm(text: str, api_key: str | None, timeout: float = 2.5) -> TurnJudgement | None:
+        return TurnJudgement("FILLER", 0.95)
 
-    monkeypatch.setattr(turn_controller, "llm_is_real_turn", fake_llm)
+    monkeypatch.setattr(turn_controller, "judge_turn", fake_llm)
     state, oai, call = _state(), _FakeOai(), _FakeCall()
     await _feed(state, oai, call, " ਵਧੀਆ", " ਜੀ")
     assert state.live_llm_task is not None
@@ -188,12 +194,12 @@ async def test_llm_saying_filler_keeps_the_agent_talking(monkeypatch: pytest.Mon
 async def test_llm_calls_are_capped_per_utterance(monkeypatch: pytest.MonkeyPatch) -> None:
     n = 0
 
-    async def fake_llm(text: str, api_key: str | None, timeout: float = 2.5) -> bool | None:
+    async def fake_llm(text: str, api_key: str | None, timeout: float = 2.5) -> TurnJudgement | None:
         nonlocal n
         n += 1
-        return False
+        return TurnJudgement("FILLER", 0.95)
 
-    monkeypatch.setattr(turn_controller, "llm_is_real_turn", fake_llm)
+    monkeypatch.setattr(turn_controller, "judge_turn", fake_llm)
     state, oai, call = _state(), _FakeOai(), _FakeCall()
     for word in [" ਇੱਕ", " ਦੋ", " ਤਿੰਨ", " ਚਾਰ", " ਪੰਜ", " ਛੇ"]:
         await _feed(state, oai, call, word)
@@ -263,3 +269,141 @@ async def test_start_without_key_fails_cleanly() -> None:
     assert await t.start() is False
     assert t.healthy is False
     await t.close()  # safe to close a never-started transcriber
+
+
+# ---------------------------------------------------------------------------
+# LLM judgement: labels + confidence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "confidence", "verdict"),
+    [
+        ("FILLER", 0.95, "filler"),
+        ("QUESTION", 0.9, "real"),
+        ("OBJECTION", 0.7, "real"),
+        ("INTERRUPTION", 0.8, "real"),
+        ("CONTINUATION", 0.9, "wait"),
+        ("QUESTION", 0.4, "unsure"),  # low confidence: keep listening
+        ("FILLER", 0.3, "unsure"),
+    ],
+)
+def test_judgement_verdicts(label: str, confidence: float, verdict: str) -> None:
+    assert TurnJudgement(label, confidence).verdict == verdict
+
+
+def test_parse_judgement_accepts_json_with_noise_and_case() -> None:
+    j = parse_judgement('Sure: {"label": "question", "confidence": 0.85}')
+    assert j == TurnJudgement("QUESTION", 0.85)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [None, "", "FILLER", '{"label": "MAYBE", "confidence": 0.9}', '{"confidence": 0.9}', "{bad json}"],
+)
+def test_parse_judgement_rejects_garbage(content: str | None) -> None:
+    assert parse_judgement(content) is None
+
+
+def test_parse_judgement_clamps_confidence() -> None:
+    assert parse_judgement('{"label": "FILLER", "confidence": 7}').confidence == 1.0
+
+
+async def test_low_confidence_llm_verdict_does_not_cut(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_llm(text: str, api_key: str | None, timeout: float = 2.5) -> TurnJudgement | None:
+        return TurnJudgement("QUESTION", 0.3)
+
+    monkeypatch.setattr(turn_controller, "judge_turn", fake_llm)
+    state, oai, call = _state(), _FakeOai(), _FakeCall()
+    await _feed(state, oai, call, " ਵਧੀਆ", " ਜੀ")
+    await state.live_llm_task  # type: ignore[misc]
+    assert oai.sent == []
+
+
+async def test_continuation_llm_verdict_does_not_cut(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_llm(text: str, api_key: str | None, timeout: float = 2.5) -> TurnJudgement | None:
+        return TurnJudgement("CONTINUATION", 0.9)
+
+    monkeypatch.setattr(turn_controller, "judge_turn", fake_llm)
+    state, oai, call = _state(), _FakeOai(), _FakeCall()
+    await _feed(state, oai, call, " ਵਧੀਆ", " ਜੀ")
+    await state.live_llm_task  # type: ignore[misc]
+    assert oai.sent == []
+
+
+# ---------------------------------------------------------------------------
+# Adaptive endpointing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["haan, mera matlab", "haan…", "I want to know, and", "mujhe ek cheez poochni thi, lekin", "और"],
+)
+def test_unfinished_text_gets_a_hold(text: str) -> None:
+    assert endpoint_hold_seconds(text, agent_was_busy=True) == turn_controller.HOLD_CONTINUATION_SECONDS
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["how much does it cost?", "haan mujhe pricing chahiye", "mera naam Rahul hai.", "", "   "],
+)
+def test_finished_or_empty_text_gets_no_hold(text: str) -> None:
+    assert endpoint_hold_seconds(text, agent_was_busy=True) == 0.0
+
+
+def test_lone_filler_to_an_idle_agent_gets_a_short_hold() -> None:
+    assert endpoint_hold_seconds("haan", agent_was_busy=False) == turn_controller.HOLD_LONE_FILLER_SECONDS
+    assert endpoint_hold_seconds("haan", agent_was_busy=True) == 0.0
+
+
+async def test_reply_is_held_while_hold_is_active_then_sent() -> None:
+    state = _state(response_active=False, caller_speaking=False, reply_pending=True)
+    state.hold_until = time.monotonic() + 0.15
+    oai = _FakeOai()
+    adapter._schedule_reply(oai, state)  # type: ignore[arg-type]
+    await asyncio.sleep(0.05)
+    assert oai.sent == []  # still holding
+    await asyncio.sleep(0.3)
+    assert "response.create" in oai.types()
+
+
+async def test_resumed_speech_cancels_the_hold() -> None:
+    state = _state(response_active=False, caller_speaking=False, reply_pending=True)
+    state.hold_until = time.monotonic() + 0.15
+    oai = _FakeOai()
+    adapter._schedule_reply(oai, state)  # type: ignore[arg-type]
+    state.caller_speaking = True  # they carried on talking
+    await asyncio.sleep(0.4)
+    assert oai.sent == []
+
+
+async def test_hold_is_released_as_soon_as_the_text_looks_finished() -> None:
+    state = _state(response_active=False, caller_speaking=False, reply_pending=True)
+    state.utterance_text = " haan, mera matlab"
+    state.hold_until = time.monotonic() + 5  # long hold
+    oai, call = _FakeOai(), _FakeCall()
+    adapter._schedule_reply(oai, state)  # type: ignore[arg-type]  # starts the hold task
+    await _feed(state, oai, call, " price", " kya", " hai", "?")
+    await asyncio.sleep(0.1)
+    assert state.hold_until == 0.0
+    assert "response.create" in oai.types()
+
+
+async def test_hold_persists_while_text_still_looks_unfinished() -> None:
+    state = _state(response_active=False, caller_speaking=False, reply_pending=True)
+    state.utterance_text = " haan"
+    state.hold_until = time.monotonic() + 5
+    oai, call = _FakeOai(), _FakeCall()
+    await _feed(state, oai, call, ",", " mera", " matlab")
+    await asyncio.sleep(0.05)
+    assert state.hold_until > time.monotonic()
+    assert oai.sent == []
+
+
+async def test_warm_up_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def boom(*a: Any, **k: Any) -> None:
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(turn_controller, "judge_turn", boom)
+    await turn_controller.warm_up("key")  # must swallow the failure
