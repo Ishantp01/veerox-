@@ -150,6 +150,9 @@ class CallState:
     # ("haan, mera matlab..."); cleared as soon as they resume or the text
     # stops looking unfinished.
     hold_until: float = 0.0
+    # finish_first mode: a real question was recognised while the caller was
+    # still speaking; the pause-and-acknowledge starts once their turn ends.
+    finish_first_pending: bool = False
     hold_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
 
 
@@ -159,10 +162,12 @@ ACK_GAP_SECONDS = 1.0
 # How long to keep the agent talking while waiting for the caller's
 # transcript, to tell a real question from filler ("ok", "theek hai").
 TRANSCRIPT_WAIT_SECONDS = 4.0
-# True: a real question asked while the agent is mid-answer cuts the current
-# answer off and is answered straight away (no ack / read-back). False: the
-# older behaviour — pause, "I heard you", resume, read-back, then answer.
-ANSWER_IMMEDIATELY = True
+def _answer_immediately() -> bool:
+    """True (default, VOICE_INTERRUPTION_MODE=answer_now): a real question asked
+    while the agent is mid-answer cuts the answer off and is answered straight
+    away. False (finish_first): pause, say "I heard you", resume and finish the
+    point, read the question back, then answer it."""
+    return settings.voice_interruption_mode != "finish_first"
 # The agent stops talking once the caller has kept speaking this long over it
 # — real questions run longer than a filler ("ok", "haan ji"), and it means
 # the agent is already quiet by the time the caller finishes, so the answer
@@ -236,7 +241,7 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
     """Wait ACK_GAP_SECONDS, then — if the agent is still mid-answer (still
     generating, or its audio is still playing) and the caller's question is
     waiting — pause the answer so the ack can play."""
-    await asyncio.sleep(0 if ANSWER_IMMEDIATELY else ACK_GAP_SECONDS)
+    await asyncio.sleep(0 if _answer_immediately() else ACK_GAP_SECONDS)
     # Give the transcript a moment to arrive: if it's just "ok"/"theek hai"
     # the pending reply is dropped and there's nothing to acknowledge.
     # The agent keeps talking while we wait — we only cut it off once we know
@@ -255,7 +260,7 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
     await _teardown_elevenlabs_turn(state)
     await _send_clear(call_ws, state)
     log.info("voice_ack_pausing_answer", still_generating=state.response_active)
-    if ANSWER_IMMEDIATELY:
+    if _answer_immediately():
         # Real question mid-answer: drop the read-back beat, answer it now.
         state.restate_next = False
         state.interrupted_mid_response = False
@@ -276,6 +281,44 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
 
 def _live_ready(state: CallState) -> bool:
     return state.live is not None and state.live.healthy
+
+
+async def _start_finish_first(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
+    """finish_first mode: pause the agent's answer so it can say it heard the
+    caller's question. The rest (short ack, resume, read-back, answer) runs from
+    the response.done handler via ``ack_stage``."""
+    if not _agent_busy(state) or state.ack_stage is not None:
+        return
+    if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
+        return
+    state.finish_first_pending = False
+    state.cut_eval_deadline = 0.0
+    state.restate_next = True  # read the question back after the point is finished
+    state.reply_pending = True
+    log.info("voice_finish_first_pause", still_generating=state.response_active)
+    await _teardown_elevenlabs_turn(state)
+    await _send_clear(call_ws, state)
+    if state.response_active:
+        state.ack_stage = "cancelling"
+        await oai_ws.send(json.dumps({"type": "response.cancel"}))
+    else:
+        await _send_ack(oai_ws, state)
+
+
+async def _on_real_turn(
+    oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, reason: str
+) -> None:
+    """The live text says the caller asked something real while the agent talks."""
+    if _answer_immediately():
+        await _cut_now(oai_ws, call_ws, state, log, reason)
+        return
+    if state.caller_speaking:
+        # Let them finish asking; the pause + "I heard you" starts when their
+        # turn commits so the two voices don't overlap.
+        state.finish_first_pending = True
+        log.info("voice_finish_first_pending", reason=reason)
+    else:
+        await _start_finish_first(oai_ws, call_ws, state, log)
 
 
 async def _cut_now(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, reason: str) -> None:
@@ -345,7 +388,7 @@ async def _live_llm_check(oai_ws: Any, call_ws: WebSocket, state: CallState, log
         return
     verdict = judgement.verdict
     if verdict == "real":
-        await _cut_now(oai_ws, call_ws, state, log, f"live_llm_{judgement.label.lower()}")
+        await _on_real_turn(oai_ws, call_ws, state, log, f"live_llm_{judgement.label.lower()}")
     elif verdict == "filler":
         state.live_llm_said_filler = True
         _drop_filler_reply(state)
@@ -371,7 +414,7 @@ async def handle_live_delta(
     verdict = turn_controller.classify_partial(state.utterance_text)
     if verdict == "real":
         log.info("voice_live_verdict", verdict=verdict, text=state.utterance_text)
-        await _cut_now(oai_ws, call_ws, state, log, "live_real")
+        await _on_real_turn(oai_ws, call_ws, state, log, "live_real")
     elif verdict == "filler":
         _drop_filler_reply(state)
     else:
@@ -821,21 +864,22 @@ async def handle_openai_event(
         state.live_llm_calls = 0
         state.live_llm_last_words = 0
         state.live_llm_said_filler = False
+        state.finish_first_pending = False
         if _agent_busy(state):
             state.interrupted_mid_response = True
             log.info("voice_caller_spoke_over_response", live=_live_ready(state))
-            if ANSWER_IMMEDIATELY and (state.cut_task is None or state.cut_task.done()):
-                if _live_ready(state):
-                    # Judge by the words as they stream in; this is only the
-                    # safety net if no verdict forms.
-                    state.cut_eval_deadline = time.monotonic() + 60.0
+            if _live_ready(state):
+                # Judge by the words as they stream in.
+                state.cut_eval_deadline = time.monotonic() + 60.0
+                if _answer_immediately() and (state.cut_task is None or state.cut_task.done()):
+                    # Safety net if no verdict forms.
                     state.cut_task = asyncio.create_task(
                         _live_fallback_cut(oai_ws, call_ws, state, log)
                     )
-                else:
-                    state.cut_task = asyncio.create_task(
-                        _cut_if_still_speaking(oai_ws, call_ws, state, log)
-                    )
+            elif _answer_immediately() and (state.cut_task is None or state.cut_task.done()):
+                state.cut_task = asyncio.create_task(
+                    _cut_if_still_speaking(oai_ws, call_ws, state, log)
+                )
 
     elif etype == "input_audio_buffer.speech_stopped":
         state.caller_speaking = False
@@ -856,7 +900,7 @@ async def handle_openai_event(
         state.transcripts_outstanding += 1
         if state.interrupted_mid_response:
             state.interrupted_mid_response = False
-            state.restate_next = not ANSWER_IMMEDIATELY
+            state.restate_next = not _answer_immediately()
         state.reply_pending = True
         # Adaptive endpointing: if the text streamed so far looks unfinished,
         # wait a little before answering in case they carry on.
@@ -868,6 +912,15 @@ async def handle_openai_event(
         state.hold_until = time.monotonic() + hold if hold else 0.0
         if hold:
             log.info("voice_endpoint_hold", seconds=hold, text=state.utterance_text)
+        # finish_first: the caller asked something real while the agent talked
+        # and has now finished asking — pause, acknowledge, resume, read back.
+        if (
+            not _answer_immediately()
+            and state.finish_first_pending
+            and _agent_busy(state)
+            and state.ack_stage is None
+        ):
+            await _start_finish_first(oai_ws, call_ws, state, log)
         # Still speaking the earlier answer: hold the reply, response.done
         # below fires it once that answer has fully finished.
         if not state.response_active:
@@ -982,7 +1035,7 @@ async def handle_openai_event(
         else:
             state.greeting_guard_until = 0.0
         if state.ack_stage == "cancelling":
-            if ANSWER_IMMEDIATELY:
+            if _answer_immediately():
                 # The cut-off answer's response.done — answer the question now.
                 state.ack_stage = None
                 if state.reply_pending:

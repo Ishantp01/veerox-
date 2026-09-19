@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     # real question while it is still talking (channels/voice/turn_controller.py).
     # Any failure falls back to the older duration-based rules; set false to
     # turn it off entirely (saves the extra connection per call).
+    # What the agent does when the caller asks a real question while it is still
+    # talking. "answer_now": stop and answer (default). "finish_first": pause,
+    # say it heard them and will answer after this point, finish the point, read
+    # their question back, then answer it.
+    voice_interruption_mode: str = "answer_now"
     voice_live_turn_detection: bool = True
     voice_live_transcribe_model: str = "gpt-live-transcribe"
     # gpt-live-transcribe streaming delay: minimal|low|medium|high|xhigh —

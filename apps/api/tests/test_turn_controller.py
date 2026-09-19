@@ -407,3 +407,126 @@ async def test_warm_up_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(turn_controller, "judge_turn", boom)
     await turn_controller.warm_up("key")  # must swallow the failure
+
+
+# ---------------------------------------------------------------------------
+# finish_first interruption mode
+# ---------------------------------------------------------------------------
+
+
+class _LiveOk:
+    healthy = True
+
+
+@pytest.fixture
+def finish_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(adapter.settings, "voice_interruption_mode", "finish_first")
+
+
+async def _event(state: adapter.CallState, oai: _FakeOai, call: _FakeCall, etype: str) -> None:
+    await adapter.handle_openai_event({"type": etype}, call, oai, state, _Log())  # type: ignore[arg-type]
+
+
+def _instructions(oai: _FakeOai, index: int = -1) -> str:
+    return oai.sent[index]["response"]["instructions"]
+
+
+def test_answer_now_is_the_default_mode() -> None:
+    from apps.api.config import Settings
+
+    assert Settings.model_fields["voice_interruption_mode"].default == "answer_now"
+
+
+async def test_finish_first_real_question_does_not_cut_the_agent(finish_first: None) -> None:
+    state, oai, call = _state(live=_LiveOk()), _FakeOai(), _FakeCall()
+    await _feed(state, oai, call, " haan", ",", " lekin", " price")
+    assert oai.sent == [] and call.sent == []  # agent keeps talking
+    assert state.finish_first_pending is True
+
+
+async def test_finish_first_filler_does_nothing(finish_first: None) -> None:
+    state, oai, call = _state(live=_LiveOk()), _FakeOai(), _FakeCall()
+    await _feed(state, oai, call, " haan", " haan", " samajh", " gaya")
+    assert oai.sent == [] and call.sent == []
+    assert state.finish_first_pending is False
+
+
+async def test_finish_first_pause_starts_when_their_turn_commits(finish_first: None) -> None:
+    state, oai, call = _state(live=_LiveOk()), _FakeOai(), _FakeCall()
+    state.interrupted_mid_response = True
+    await _feed(state, oai, call, " lekin", " price", " kya", " hai")
+    state.caller_speaking = False  # they finished asking
+    await _event(state, oai, call, "input_audio_buffer.committed")
+    assert call.sent == [{"event": "clearAudio"}]
+    assert oai.types() == ["response.cancel"]  # pauses the answer; ack follows response.done
+    assert state.ack_stage == "cancelling"
+    assert state.restate_next is True
+    assert state.finish_first_pending is False
+
+
+async def test_finish_first_pause_is_immediate_if_verdict_lands_after_they_stopped(
+    finish_first: None,
+) -> None:
+    state, oai, call = _state(live=_LiveOk(), caller_speaking=False), _FakeOai(), _FakeCall()
+    await _feed(state, oai, call, " lekin", " price")
+    assert oai.types() == ["response.cancel"]
+    assert state.ack_stage == "cancelling"
+
+
+async def test_finish_first_when_only_audio_is_still_playing_sends_the_ack_directly(
+    finish_first: None,
+) -> None:
+    state = _state(
+        live=_LiveOk(), response_active=False, caller_speaking=False,
+        playback_end=time.monotonic() + 5,
+    )
+    oai, call = _FakeOai(), _FakeCall()
+    await _feed(state, oai, call, " lekin", " price")
+    assert call.sent == [{"event": "clearAudio"}]
+    assert oai.types() == ["response.create"]
+    assert "heard their question" in _instructions(oai)
+    assert state.ack_stage == "ack"
+
+
+async def test_finish_first_full_sequence(
+    finish_first: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pause -> short ack -> resume the point -> read the question back -> answer."""
+    monkeypatch.setattr(adapter, "ANSWER_GAP_SECONDS", 0.01)
+    state = _state(
+        live=_LiveOk(), caller_speaking=False, reply_pending=True, interrupted_mid_response=True
+    )
+    oai, call = _FakeOai(), _FakeCall()
+
+    await adapter._start_finish_first(oai, call, state, _Log())  # type: ignore[arg-type]
+    assert oai.types() == ["response.cancel"]
+
+    await _event(state, oai, call, "response.done")  # paused answer ended -> ack
+    assert "heard their question" in _instructions(oai)
+
+    await _event(state, oai, call, "response.done")  # ack ended -> resume the point
+    assert "paused partway" in _instructions(oai)
+
+    await _event(state, oai, call, "response.done")  # point finished -> read-back
+    await asyncio.sleep(0.05)
+    assert "ONLY a read-back" in _instructions(oai)
+
+    await _event(state, oai, call, "response.done")  # read-back ended -> answer
+    await asyncio.sleep(0.15)
+    assert "answer ALL of those questions" in _instructions(oai)
+    assert oai.types().count("response.create") == 4
+
+
+async def test_finish_first_makes_no_duplicate_pause(finish_first: None) -> None:
+    state, oai, call = _state(live=_LiveOk(), caller_speaking=False), _FakeOai(), _FakeCall()
+    await _feed(state, oai, call, " lekin", " price")
+    await _feed(state, oai, call, " kya", " hai")
+    assert oai.types() == ["response.cancel"]  # only one pause
+
+
+async def test_answer_now_mode_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(adapter.settings, "voice_interruption_mode", "answer_now")
+    state, oai, call = _state(live=_LiveOk()), _FakeOai(), _FakeCall()
+    await _feed(state, oai, call, " lekin", " price")
+    assert oai.types() == ["response.cancel"]
+    assert state.finish_first_pending is False
