@@ -85,6 +85,7 @@ class CallState:
     # before they hear any of it. Cleared to 0 once the greeting response
     # actually finishes, so normal barge-in resumes for the rest of the call.
     greeting_guard_until: float = 0.0
+    greeting_guard_extended: bool = False
     # True between a response.created and its matching response.done — lets
     # the speech_started handler below tell whether the caller started
     # talking while the agent was actively generating/speaking a response.
@@ -771,7 +772,14 @@ async def handle_openai_event(
         # suppression so normal interruption works for the rest of the call.
         # (its audio may still be queued at the provider, so hold the guard
         # until that playback ends.)
-        state.greeting_guard_until = state.playback_end if state.greeting_guard_until else 0.0
+        if state.greeting_guard_until and not state.greeting_guard_extended:
+            # Only the greeting's own response.done: extend the guard once, to
+            # when the greeting audio stops. Later responses must not renew it
+            # or every answer would suppress the caller's speech.
+            state.greeting_guard_extended = True
+            state.greeting_guard_until = state.playback_end
+        else:
+            state.greeting_guard_until = 0.0
         if state.ack_stage == "cancelling":
             if ANSWER_IMMEDIATELY:
                 # The cut-off answer's response.done — answer the question now.
