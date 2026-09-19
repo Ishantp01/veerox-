@@ -131,6 +131,9 @@ class CallState:
 # Pause between the caller finishing their question and the agent cutting in
 # to say it heard them.
 ACK_GAP_SECONDS = 1.0
+# How long to keep the agent talking while waiting for the caller's
+# transcript, to tell a real question from filler ("ok", "theek hai").
+TRANSCRIPT_WAIT_SECONDS = 4.0
 # True: a real question asked while the agent is mid-answer cuts the current
 # answer off and is answered straight away (no ack / read-back). False: the
 # older behaviour — pause, "I heard you", resume, read-back, then answer.
@@ -214,10 +217,17 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
     await asyncio.sleep(0 if ANSWER_IMMEDIATELY else ACK_GAP_SECONDS)
     # Give the transcript a moment to arrive: if it's just "ok"/"theek hai"
     # the pending reply is dropped and there's nothing to acknowledge.
+    # The agent keeps talking while we wait — we only cut it off once we know
+    # this is a real question.
     waited = 0.0
-    while state.transcripts_outstanding > 0 and waited < 1.5:
+    while state.transcripts_outstanding > 0 and waited < TRANSCRIPT_WAIT_SECONDS:
         await asyncio.sleep(0.1)
         waited += 0.1
+    if state.transcripts_outstanding > 0:
+        # Transcript never showed up: don't cut the agent off on a guess (it
+        # could be "ok"). The normal path answers after playback ends.
+        state.transcripts_outstanding = 0
+        return
     if not (_agent_busy(state) and state.reply_pending and state.ack_stage is None):
         return
     await _teardown_elevenlabs_turn(state)
