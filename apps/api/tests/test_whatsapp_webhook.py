@@ -47,6 +47,9 @@ async def _seed_org(
     org = Org(
         id=org_id,
         name=f"Org {org_id}",
+        # resolve_meta_credentials needs app_id, app_secret AND access_token.
+        meta_app_id="test-app-id",
+        meta_access_token_encrypted=encrypt_secret("test-access-token"),
         meta_verify_token_encrypted=encrypt_secret(verify_token) if verify_token else None,
         meta_app_secret_encrypted=encrypt_secret(app_secret) if app_secret else None,
     )

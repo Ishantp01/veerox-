@@ -27,7 +27,7 @@ async def _stub_plivo_sms(monkeypatch: pytest.MonkeyPatch) -> None:
     so these tests never make a live network call."""
     from apps.api.routers import auth as auth_module
 
-    async def _fake_send_sms(to_e164: str, text: str) -> tuple[dict, str]:
+    async def _fake_send_sms(*_args: object, **_kwargs: object) -> tuple[dict, str]:
         return {"message_uuid": "fake"}, "plivo"
 
     monkeypatch.setattr(auth_module.voice_failover, "send_sms", _fake_send_sms)
