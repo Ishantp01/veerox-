@@ -106,6 +106,42 @@ class CallState:
     # Transcripts of everything the caller said while the agent was talking,
     # so the repeat-back beat can quote every question, not just the last.
     overlap_transcripts: list[str] = field(default_factory=list)
+    # Mid-answer acknowledgment state machine. ~ACK_GAP_SECONDS after the
+    # caller finishes a question that overlapped the agent's answer, the
+    # answer is paused and the agent briefly says it heard them, then picks
+    # its answer back up. None = idle; "cancelling" = response.cancel sent,
+    # waiting for its response.done; "ack" = the short acknowledgment is
+    # playing; "resume" = the interrupted answer is being continued.
+    ack_stage: str | None = None
+    ack_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
+
+
+# Pause between the caller finishing their question and the agent cutting in
+# to say it heard them.
+ACK_GAP_SECONDS = 1.0
+
+
+async def _send_clear(ws: WebSocket, state: CallState) -> None:
+    """Tell the provider to drop buffered playback audio."""
+    if state.provider == "twilio":
+        message = {"event": "clear", "streamSid": state.stream_id}
+    else:
+        message = {"event": "clearAudio"}
+    await ws.send_text(json.dumps(message))
+
+
+async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
+    """Wait ACK_GAP_SECONDS, then — if the agent is still mid-answer and the
+    caller's question is still waiting — pause the answer so the ack can play.
+    The rest of the sequence runs from the response.done handler."""
+    await asyncio.sleep(ACK_GAP_SECONDS)
+    if not (state.response_active and state.reply_pending and state.ack_stage is None):
+        return
+    state.ack_stage = "cancelling"
+    await _teardown_elevenlabs_turn(state)
+    await _send_clear(call_ws, state)
+    await oai_ws.send(json.dumps({"type": "response.cancel"}))
+    log.info("voice_ack_pausing_answer")
 
 
 async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
@@ -475,6 +511,12 @@ async def handle_openai_event(
         # below fires it once that answer has fully finished.
         if not state.response_active:
             await _fire_pending_reply(oai_ws, state)
+        elif (
+            state.ack_stage is None
+            and (state.ack_task is None or state.ack_task.done())
+            and not (state.greeting_guard_until and time.monotonic() < state.greeting_guard_until)
+        ):
+            state.ack_task = asyncio.create_task(_ack_after_gap(oai_ws, call_ws, state, log))
 
     elif etype == "conversation.item.input_audio_transcription.completed":
         state.pending_user_transcript = (event.get("transcript") or "").strip()
@@ -558,6 +600,54 @@ async def handle_openai_event(
         # The opening greeting has finished playing — lift the barge-in
         # suppression so normal interruption works for the rest of the call.
         state.greeting_guard_until = 0.0
+        if state.ack_stage == "cancelling":
+            # The paused answer's response.done — play the short ack now.
+            state.ack_stage = "ack"
+            state.response_active = True
+            await oai_ws.send(
+                json.dumps(
+                    {
+                        "type": "response.create",
+                        "response": {
+                            "tool_choice": "none",
+                            "instructions": (
+                                f"{state.base_instructions}\n\n"
+                                "IMPORTANT - the caller just asked something while you were "
+                                "still talking, and you paused your answer. Say ONE short "
+                                "sentence, in the language you've been using, telling them "
+                                "you heard their question and will answer it right after "
+                                "you finish your current point, e.g. \"aapka sawaal sun "
+                                "liya, bas ye point khatam karke batata hoon.\" Do NOT "
+                                "answer their question or add anything else."
+                            ),
+                        },
+                    }
+                )
+            )
+            return
+        if state.ack_stage == "ack":
+            state.ack_stage = "resume"
+            state.response_active = True
+            await oai_ws.send(
+                json.dumps(
+                    {
+                        "type": "response.create",
+                        "response": {
+                            "tool_choice": "none",
+                            "instructions": (
+                                f"{state.base_instructions}\n\n"
+                                "IMPORTANT - your previous answer was paused partway. "
+                                "Pick it up from the point the caller last heard and finish "
+                                "it, briefly, without repeating what was already said and "
+                                "without answering their new question yet."
+                            ),
+                        },
+                    }
+                )
+            )
+            return
+        if state.ack_stage == "resume":
+            state.ack_stage = None
         if state.answer_after_restate:
             state.answer_after_restate = False
             # Restate beat is done. If the caller spoke again meanwhile, the
@@ -585,6 +675,14 @@ async def handle_openai_event(
 
     elif etype == "error":
         log.warning("openai_realtime_error", error=event.get("error"))
+        err = event.get("error") or {}
+        if state.ack_stage == "cancelling" and "cancel_not_active" in str(err.get("code")):
+            # The answer finished on its own just before our cancel landed;
+            # no ack needed, carry on with the normal pending reply.
+            state.ack_stage = None
+            state.response_active = False
+            if state.reply_pending:
+                await _fire_pending_reply(oai_ws, state)
 
     elif etype not in ("session.created", "session.updated"):
         log.info("voice_openai_event_unhandled", etype=etype)

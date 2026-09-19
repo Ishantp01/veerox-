@@ -1816,7 +1816,7 @@ async def test_meta_credentials_settings_forbidden_for_member_role(
     get_response = await client.get("/admin/settings/meta-credentials", headers=member_headers)
     put_response = await client.put(
         "/admin/settings/meta-credentials",
-        json={"app_id": "a", "app_secret": "b", "access_token": "c"},
+        json={"app_id": "a", "app_secret": "bbbb", "access_token": "cccc"},
         headers=member_headers,
     )
 
