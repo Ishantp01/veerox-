@@ -126,6 +126,8 @@ class CallState:
 # Pause between the caller finishing their question and the agent cutting in
 # to say it heard them.
 ACK_GAP_SECONDS = 1.0
+# Silence between the read-back finishing and the answer starting.
+ANSWER_GAP_SECONDS = 1.0
 # mu-law at 8kHz, one byte per sample.
 _PLAYBACK_BYTES_PER_SECOND = 8000
 
@@ -189,6 +191,41 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
         await oai_ws.send(json.dumps({"type": "response.cancel"}))
     else:
         await _send_ack(oai_ws, state)
+
+
+async def _answer_after_readback(oai_ws: Any, state: CallState) -> None:
+    """Answer the caller's overlapping questions after the read-back has
+    finished playing plus ANSWER_GAP_SECONDS of silence, so they can tell
+    where the answer starts."""
+    while True:
+        remaining = state.playback_end - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(remaining)
+    await asyncio.sleep(ANSWER_GAP_SECONDS)
+    # The caller spoke again (a newer reply is pending) or something else is
+    # already responding — that path handles it.
+    if state.reply_pending or state.response_active or state.ack_stage is not None:
+        return
+    state.response_active = True
+    await oai_ws.send(
+        json.dumps(
+            {
+                "type": "response.create",
+                "response": {
+                    "instructions": (
+                        f"{state.base_instructions}\n\n"
+                        "You just read back what the caller asked. Now answer ALL of "
+                        "those questions, one after another, fully, in the language "
+                        "you've been using. Begin with a short lead-in that makes it "
+                        "clear the answer is starting, e.g. \"Ab aapke sawaal ka "
+                        "jawab:\", and when there is more than one question, signal "
+                        "each one (\"pehla sawaal...\", \"doosra sawaal...\")."
+                    ),
+                },
+            }
+        )
+    )
 
 
 async def _fire_reply_when_quiet(oai_ws: Any, state: CallState) -> None:
@@ -709,22 +746,7 @@ async def handle_openai_event(
             # Restate beat is done. If the caller spoke again meanwhile, the
             # pending reply restates that newer question instead.
             if not state.reply_pending:
-                state.response_active = True
-                await oai_ws.send(
-                    json.dumps(
-                        {
-                            "type": "response.create",
-                            "response": {
-                                "instructions": (
-                                    f"{state.base_instructions}\n\n"
-                                    "You just read back what the caller asked. Now answer "
-                                    "ALL of those questions, one after another, fully, in "
-                                    "the language you've been using."
-                                ),
-                            },
-                        }
-                    )
-                )
+                asyncio.create_task(_answer_after_readback(oai_ws, state))
                 return
         if state.reply_pending:
             _schedule_reply(oai_ws, state)
