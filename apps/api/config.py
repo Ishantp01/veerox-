@@ -77,10 +77,11 @@ class Settings(BaseSettings):
     # measured ~1s lower lag at "minimal" than the default.
     voice_live_transcribe_delay: str = "minimal"
     # What the agent does when the caller asks a real question while it is still
-    # talking. "finish_first" (default): pause, say it heard them and will answer
-    # after this point, finish the point, read their question back, then answer
-    # it. "answer_now": stop and answer straight away.
-    voice_interruption_mode: str = "finish_first"
+    # talking. "answer_now" (default): stop and answer straight away (small
+    # acknowledgements like "ok" / "theek hai" are ignored either way).
+    # "finish_first": pause, say it heard them, finish the point, read their
+    # question back, then answer it.
+    voice_interruption_mode: str = "answer_now"
     elevenlabs_api_key: str | None = None
     elevenlabs_voice_id: str = "CwhRBWXzGAHq8TQ4Fs17"
     # Low-latency model — eleven_multilingual_v2 sounds better but is too
