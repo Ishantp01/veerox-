@@ -6,15 +6,12 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   MessageSquare,
-  MessagesSquare,
   FileText,
   Paperclip,
   Phone,
-  Users,
   UserCheck,
   CalendarCheck,
   CalendarClock,
-  AlertTriangle,
   BarChart3,
   TrendingUp,
   Megaphone,
@@ -73,12 +70,9 @@ const GROUPS: NavGroup[] = [
   {
     label: "CRM",
     items: [
-      { href: "/crm/contacts", label: "Contacts", Icon: Users },
       { href: "/crm/leads", label: "Leads", Icon: UserCheck },
       { href: "/crm/appointments", label: "Appointments", Icon: CalendarClock },
-      { href: "/conversations", label: "Conversations", Icon: MessagesSquare },
       { href: "/follow-up-tasks", label: "Follow-up Tasks", Icon: CalendarCheck },
-      { href: "/human-support", label: "Human Support", Icon: AlertTriangle },
     ],
   },
   {
