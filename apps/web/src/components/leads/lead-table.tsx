@@ -1,7 +1,16 @@
 ﻿"use client";
 
 import { useRouter } from "next/navigation";
-import { Badge, Button, Table, TableHeader, TableRow, TableCell } from "@/components/ui";
+import { useAuth } from "@/lib/auth-context";
+import { isFeatureDisabled } from "@/lib/orgFeatures";
+import {
+  Badge,
+  Button,
+  Table,
+  TableHeader,
+  TableRow,
+  TableCell,
+} from "@/components/ui";
 import { formatDateTime, formatPhone } from "@/lib/format";
 import type { Lead } from "@/lib/types";
 import { IntentBadge } from "./intent-badge";
@@ -20,6 +29,10 @@ export interface LeadTableProps {
  */
 export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
   const router = useRouter();
+  const { user } = useAuth();
+  const features = user?.enabled_features ?? null;
+  const showConversation = !isFeatureDisabled(features, "conversations");
+  const showHumanSupport = !isFeatureDisabled(features, "human_support");
   return (
     <div
       data-tour="page-table"
@@ -35,20 +48,26 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
             <TableHeader title="Where this lead sits in your sales pipeline: New → Contacted → Qualified → Converted/Lost.">
               Status
             </TableHeader>
-            <TableHeader>Conversation</TableHeader>
-            <TableHeader>Human Support</TableHeader>
+            {showConversation && <TableHeader>Conversation</TableHeader>}
+            {showHumanSupport && <TableHeader>Human Support</TableHeader>}
             <TableHeader>Created</TableHeader>
           </TableRow>
         </thead>
         <tbody>
           {leads.map((lead) => {
-            const href = detailBasePath ? `${detailBasePath}/${lead.id}` : undefined;
+            const href = detailBasePath
+              ? `${detailBasePath}/${lead.id}`
+              : undefined;
             return (
               <TableRow
                 key={lead.id}
                 role={href ? "link" : undefined}
                 tabIndex={href ? 0 : undefined}
-                aria-label={href ? `Open lead ${lead.name ?? lead.phone ?? lead.id}` : undefined}
+                aria-label={
+                  href
+                    ? `Open lead ${lead.name ?? lead.phone ?? lead.id}`
+                    : undefined
+                }
                 onClick={href ? () => router.push(href) : undefined}
                 onKeyDown={
                   href
@@ -67,7 +86,9 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
                 }
               >
                 <TableCell>
-                  <span className="font-semibold text-slate-800 dark:text-slate-100">{lead.name ?? "—"}</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-100">
+                    {lead.name ?? "—"}
+                  </span>
                 </TableCell>
                 <TableCell>
                   <span className="font-mono text-xs text-slate-600 dark:text-slate-400">
@@ -87,51 +108,62 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
                       ))}
                     </div>
                   ) : (
-                    <span className="text-slate-400 dark:text-slate-600">—</span>
+                    <span className="text-slate-400 dark:text-slate-600">
+                      —
+                    </span>
                   )}
                 </TableCell>
                 <TableCell>
                   <StatusBadge status={lead.status} />
                 </TableCell>
-                <TableCell>
-                  {href ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        router.push(`/conversations/lead/${lead.id}`);
-                      }}
-                    >
-                      View
-                    </Button>
-                  ) : (
-                    <span className="text-slate-400 dark:text-slate-600">—</span>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-2">
-                    {lead.intent === "human_support" && !lead.claimed_by_account_user_id && (
-                      <Badge variant="live">Waiting</Badge>
-                    )}
+                {showConversation && (
+                  <TableCell>
                     {href ? (
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={(e) => {
                           e.stopPropagation();
-                          router.push(`/human-support/lead/${lead.id}`);
+                          router.push(`/conversations/lead/${lead.id}`);
                         }}
                       >
                         View
                       </Button>
                     ) : (
-                      lead.intent !== "human_support" && (
-                        <span className="text-slate-400 dark:text-slate-600">—</span>
-                      )
+                      <span className="text-slate-400 dark:text-slate-600">
+                        —
+                      </span>
                     )}
-                  </div>
-                </TableCell>
+                  </TableCell>
+                )}
+                {showHumanSupport && (
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      {lead.intent === "human_support" &&
+                        !lead.claimed_by_account_user_id && (
+                          <Badge variant="live">Waiting</Badge>
+                        )}
+                      {href ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/human-support/lead/${lead.id}`);
+                          }}
+                        >
+                          View
+                        </Button>
+                      ) : (
+                        lead.intent !== "human_support" && (
+                          <span className="text-slate-400 dark:text-slate-600">
+                            —
+                          </span>
+                        )
+                      )}
+                    </div>
+                  </TableCell>
+                )}
                 <TableCell className="text-xs text-slate-500">
                   {formatDateTime(lead.created_at)}
                 </TableCell>

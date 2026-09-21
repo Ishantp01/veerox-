@@ -5,7 +5,7 @@ import { queryKeys } from "@/lib/query";
 import type { PlatformSettings } from "@/lib/types";
 
 /**
- * Platform-wide help-desk script + social links (platform-admin only).
+ * Platform-wide social links (platform-admin only).
  *
  * GET /billing/platform-settings → PlatformSettings
  */
@@ -17,7 +17,6 @@ export function usePlatformSettings() {
 }
 
 export interface UpdatePlatformSettingsInput {
-  help_desk_script?: string | null;
   social_links?: Record<string, string>;
 }
 

@@ -68,6 +68,36 @@ async def test_disabled_feature_blocks_org_scoped_request(
     assert blocked_response.json()["detail"]["feature"] == "crm"
 
 
+async def test_human_support_and_follow_up_tasks_can_be_switched_off_per_org(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    db_session.add(Org(id=ORG_ID, name="Feature-Gated Co 2"))
+    await db_session.commit()
+    headers = await _login_as(client, db_session, org_id=ORG_ID, email="rep@gated2.example", role="admin")
+
+    with _require_session_auth(True):
+        assert (await client.get("/admin/human-support", headers=headers)).status_code == 200
+        assert (await client.get("/lead-follow-ups", headers=headers)).status_code == 200
+
+    # Only Human Support ticked -> follow-up tasks blocked, human support allowed.
+    patch = await client.patch(
+        f"/billing/orgs/{ORG_ID}", json={"enabled_features": ["human_support"]}, headers=ADMIN_HEADERS
+    )
+    assert patch.status_code == 200
+    with _require_session_auth(True):
+        assert (await client.get("/admin/human-support", headers=headers)).status_code == 200
+        blocked = await client.get("/lead-follow-ups", headers=headers)
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["feature"] == "follow_up_tasks"
+
+    # Nothing ticked -> Human Support blocked too.
+    await client.patch(f"/billing/orgs/{ORG_ID}", json={"enabled_features": []}, headers=ADMIN_HEADERS)
+    with _require_session_auth(True):
+        blocked = await client.get("/admin/human-support", headers=headers)
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["feature"] == "human_support"
+
+
 async def test_update_org_rejects_unknown_feature_key(client: AsyncClient, db_session: AsyncSession) -> None:
     db_session.add(Org(id=ORG_ID, name="Unknown Feature Co"))
     await db_session.commit()

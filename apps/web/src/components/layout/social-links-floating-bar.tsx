@@ -6,7 +6,7 @@ import { useSocialLinks } from "@/lib/hooks/useSocialLinks";
 import { SOCIAL_META } from "@/lib/social-links";
 
 // Anchored by distance from the bottom-right corner (same convention as
-// help-desk-widget.tsx's useDraggableOffset) so the bar keeps opening on the
+// the removed help widget's useDraggableOffset) so the bar keeps opening on the
 // right no matter where it's been dragged to.
 type Offset = { right: number; bottom: number };
 
@@ -24,7 +24,7 @@ function clampOffset(offset: Offset, width: number, height: number): Offset {
   };
 }
 
-/** Drag-to-reposition for the whole icon column, mirroring the help-desk
+/** Drag-to-reposition for the whole icon column, mirroring the former help-desk
  * widget's draggable offset hook. Position persists across reloads. */
 function useDraggableOffset(width: number, height: number) {
   const [offset, setOffset] = useState<Offset>(DEFAULT_OFFSET);

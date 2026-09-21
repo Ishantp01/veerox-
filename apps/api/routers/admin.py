@@ -94,6 +94,7 @@ from apps.api.deps import (
     RequestOrgDep,
     SessionPayloadDep,
     owned_lead_user_ids,
+    require_feature,
     verify_admin_or_session,
 )
 from apps.api.rate_limit import limiter
@@ -3431,7 +3432,7 @@ def _lead_out_with_claimant(lead: Lead, claimant_names: dict[UUID, str]) -> Lead
     return out
 
 
-@router.get("/human-support")
+@router.get("/human-support", dependencies=[Depends(require_feature("human_support"))])
 async def get_human_support(
     db: DbDep,
     redis: RedisDep,
@@ -3487,7 +3488,7 @@ async def get_human_support(
     return {"recent_leads": recent_leads, "queue": queue}
 
 
-@router.patch("/human-support/{lead_id}/claim", response_model=LeadOut)
+@router.patch("/human-support/{lead_id}/claim", response_model=LeadOut, dependencies=[Depends(require_feature("human_support"))])
 async def claim_human_support(
     lead_id: UUID,
     db: DbDep,
@@ -3538,7 +3539,7 @@ async def _scoped_lead_or_404(
     return lead
 
 
-@router.get("/leads/{lead_id}/human-support", response_model=list[LeadOut])
+@router.get("/leads/{lead_id}/human-support", response_model=list[LeadOut], dependencies=[Depends(require_feature("human_support"))])
 async def list_lead_human_support(
     lead_id: UUID,
     db: DbDep,
@@ -3576,7 +3577,7 @@ async def list_lead_human_support(
     return [_lead_out_with_claimant(row, claimant_names) for row in rows]
 
 
-@router.post("/leads/{lead_id}/human-support", response_model=LeadOut)
+@router.post("/leads/{lead_id}/human-support", response_model=LeadOut, dependencies=[Depends(require_feature("human_support"))])
 async def request_human_support(
     lead_id: UUID,
     db: DbDep,

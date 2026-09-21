@@ -332,21 +332,14 @@ export interface OrgNumbers {
 }
 
 // GET/PATCH /billing/platform-settings — platform-admin-only view of the
-// help-desk script + social links (superset of GET /billing/social-links).
+// social links (superset of GET /billing/social-links).
 export interface PlatformSettings {
-  help_desk_script: string | null;
   social_links: Record<string, string>;
 }
 
 // GET /billing/social-links — read-only for any authenticated org member.
 export interface SocialLinks {
   social_links: Record<string, string>;
-}
-
-// POST /helpdesk/chat request/response shapes.
-export interface HelpDeskMessage {
-  role: "user" | "assistant";
-  content: string;
 }
 
 // Tool JSON schemas exposed by GET /admin/tools.

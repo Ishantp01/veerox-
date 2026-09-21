@@ -28,7 +28,6 @@ from apps.api.routers import (
     diag,
     follow_ups,
     health,
-    helpdesk,
     lead_follow_ups,
     leads,
     media,
@@ -120,7 +119,6 @@ def create_app() -> FastAPI:
     app.include_router(tickets.router)
     app.include_router(tickets.admin_router)
     app.include_router(admin.router)
-    app.include_router(helpdesk.router)
     app.include_router(media.router)
     app.include_router(diag.router)
     app.include_router(whatsapp_router)

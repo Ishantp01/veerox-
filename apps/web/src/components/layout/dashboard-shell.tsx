@@ -2,6 +2,8 @@
 
 import { useState, type ReactNode } from "react";
 import Nav from "@/components/nav";
+import { useAuth } from "@/lib/auth-context";
+import { isFeatureDisabled } from "@/lib/orgFeatures";
 import { Topbar } from "@/components/layout/topbar";
 import { FollowUpDuePopup } from "@/components/follow-up-tasks/follow-up-due-popup";
 import { EmergencyHumanSupportPopup } from "@/components/human-support/emergency-human-support-popup";
@@ -14,6 +16,10 @@ import { EmergencyHumanSupportPopup } from "@/components/human-support/emergency
  */
 export function DashboardShell({ children }: { children: ReactNode }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // Popups poll their feature's API, which 403s for an org the platform admin
+  // has switched the feature off for — so don't mount them at all then.
+  const { user } = useAuth();
+  const features = user?.enabled_features ?? null;
 
   return (
     <div className="flex h-screen overflow-hidden bg-mesh-light dark:bg-mesh-dark">
@@ -30,11 +36,11 @@ export function DashboardShell({ children }: { children: ReactNode }) {
           clipped by the scroll container. Deliberately a small card (not a
           full-screen takeover) so it doesn't stop whatever the team member
           is doing. */}
-      <EmergencyHumanSupportPopup />
+      {!isFeatureDisabled(features, "human_support") && <EmergencyHumanSupportPopup />}
       {/* Bottom-right reminder for lead follow-ups that have come due —
           admins see the whole org's, members only their claimed leads
           (scoped server-side). */}
-      <FollowUpDuePopup />
+      {!isFeatureDisabled(features, "follow_up_tasks") && <FollowUpDuePopup />}
     </div>
   );
 }

@@ -3,12 +3,13 @@
 export const ORG_FEATURES: { key: string; label: string }[] = [
   { key: "crm", label: "CRM (contacts)" },
   { key: "appointments", label: "Appointments" },
-  { key: "follow_ups", label: "Follow-ups" },
+  { key: "follow_ups", label: "Automated follow-ups" },
   { key: "sales", label: "Sales pipeline & revenue" },
-  { key: "helpdesk", label: "Helpdesk widget" },
   { key: "tickets", label: "Support tickets" },
   { key: "templates", label: "WhatsApp templates" },
   { key: "conversations", label: "Conversations inbox" },
+  { key: "human_support", label: "Human Support (hand a lead to a human)" },
+  { key: "follow_up_tasks", label: "Follow-up reminders & tasks" },
 ];
 
 /** True once `enabledFeatures` (from MeInfo.enabled_features) explicitly
@@ -28,6 +29,10 @@ export const FEATURE_GATED_ROUTES: { prefix: string; feature: string }[] = [
   { prefix: "/crm/contacts", feature: "crm" },
   { prefix: "/crm/appointments", feature: "appointments" },
   { prefix: "/conversations", feature: "conversations" },
+  { prefix: "/human-support", feature: "human_support" },
+  { prefix: "/calling/human-support", feature: "human_support" },
+  { prefix: "/whatsapp/human-support", feature: "human_support" },
+  { prefix: "/follow-up-tasks", feature: "follow_up_tasks" },
   { prefix: "/automation/follow-ups", feature: "follow_ups" },
   { prefix: "/analytics/sales", feature: "sales" },
   { prefix: "/whatsapp/templates", feature: "templates" },

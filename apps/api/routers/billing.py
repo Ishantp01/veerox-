@@ -657,7 +657,7 @@ async def _get_platform_settings(db: DbDep) -> PlatformSettings:
     if record is None:
         # Defensive fallback in case the seed row from the migration is
         # somehow missing — creates it on first read instead of 500ing.
-        record = PlatformSettings(id=1, help_desk_script=None, social_links={})
+        record = PlatformSettings(id=1, social_links={})
         db.add(record)
         await db.commit()
         await db.refresh(record)
@@ -666,12 +666,9 @@ async def _get_platform_settings(db: DbDep) -> PlatformSettings:
 
 @router.get("/platform-settings", response_model=PlatformSettingsOut)
 async def get_platform_settings(db: DbDep, _admin: PlatformAdminDep) -> PlatformSettingsOut:
-    """Platform-wide help-desk script + social links, for the admin editor
-    on the Organizations page."""
+    """Platform-wide social links, for the admin editor on the Organizations page."""
     record = await _get_platform_settings(db)
-    return PlatformSettingsOut(
-        help_desk_script=record.help_desk_script, social_links=record.social_links
-    )
+    return PlatformSettingsOut(social_links=record.social_links)
 
 
 @router.patch("/platform-settings", response_model=PlatformSettingsOut)
@@ -680,16 +677,11 @@ async def update_platform_settings(
 ) -> PlatformSettingsOut:
     record = await _get_platform_settings(db)
     fields = payload.model_dump(exclude_unset=True)
-    if "help_desk_script" in fields:
-        value = fields["help_desk_script"]
-        record.help_desk_script = value.strip() if value and value.strip() else None
     if "social_links" in fields:
         record.social_links = {k: v.strip() for k, v in (fields["social_links"] or {}).items() if v and v.strip()}
     await db.commit()
     await db.refresh(record)
-    return PlatformSettingsOut(
-        help_desk_script=record.help_desk_script, social_links=record.social_links
-    )
+    return PlatformSettingsOut(social_links=record.social_links)
 
 
 @router.get("/social-links", response_model=SocialLinksOut)

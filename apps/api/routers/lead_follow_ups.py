@@ -22,12 +22,18 @@ from sqlalchemy import select
 
 from apps.api.db.models import Lead
 from apps.api.db.models.account_user import AccountUser
-from apps.api.deps import AnalyticsScopeDep, DbDep, MemberScopeDep, verify_admin_or_session
+from apps.api.deps import (
+    AnalyticsScopeDep,
+    DbDep,
+    MemberScopeDep,
+    require_feature,
+    verify_admin_or_session,
+)
 
 router = APIRouter(
     prefix="/lead-follow-ups",
     tags=["lead-follow-ups"],
-    dependencies=[Depends(verify_admin_or_session)],
+    dependencies=[Depends(verify_admin_or_session), Depends(require_feature("follow_up_tasks"))],
 )
 
 # slot number -> (status attr, at attr, note attr). Slot 1's "status" is the

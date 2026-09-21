@@ -26,10 +26,11 @@ AVAILABLE_ORG_FEATURES = (
     "appointments",
     "follow_ups",
     "sales",
-    "helpdesk",
     "tickets",
     "templates",
     "conversations",
+    "human_support",
+    "follow_up_tasks",
 )
 
 
