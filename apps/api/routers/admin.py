@@ -757,7 +757,7 @@ def _member_lead_scope(
     lead in scope. Returns the caller's own account_user id for a
     role=="member" caller, who should only see/act on leads assigned to them
     via `Lead.claimed_by_account_user_id` (see the field's docstring on the
-    model — general assignment, not just the escalation-claim flow).
+    model — general assignment, not just the Human Support claim flow).
 
     Reads the id straight off the session payload rather than depending on
     `CurrentUserDep` — that dependency's X-Admin-Token branch requires a
@@ -1053,7 +1053,7 @@ async def update_lead(
 
     # Assignment is automatic-only — a Lead's claimed_by_account_user_id is
     # set once, by core/tools.py::transfer_to_human's round-robin at
-    # creation time (or by the escalation self-claim endpoint below).
+    # creation time (or by the Human Support self-claim endpoint below).
     # LeadUpdateIn has no such field, so there is no way to reassign a lead
     # through this endpoint.
     updates = payload.model_dump(exclude_unset=True)
@@ -3431,15 +3431,15 @@ def _lead_out_with_claimant(lead: Lead, claimant_names: dict[UUID, str]) -> Lead
     return out
 
 
-@router.get("/escalations")
-async def get_escalations(
+@router.get("/human-support")
+async def get_human_support(
     db: DbDep,
     redis: RedisDep,
     scope_org_id: AnalyticsScopeDep,
     x_admin_token: str | None = Header(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
 ) -> dict:
-    """Return recent escalation Lead rows plus the live human_handoff_queue,
+    """Return recent Human Support Lead rows plus the live human_handoff_queue,
     both scoped to the caller's own org unless they're the platform admin.
     The queue is a single Redis list with no per-org key, so it's filtered
     in Python on the `org_id` each entry carries (written by
@@ -3447,7 +3447,7 @@ async def get_escalations(
     """
     stmt = (
         select(Lead)
-        .where(Lead.intent == "escalation")
+        .where(Lead.intent == "human_support")
         .order_by(Lead.created_at.desc())
         .limit(50)
     )
@@ -3462,7 +3462,7 @@ async def get_escalations(
     ]
 
     # LRANGE for inspection — non-destructive. Claiming (PATCH
-    # /escalations/{lead_id}/claim, below) only applies to `recent_leads`
+    # /human-support/{lead_id}/claim, below) only applies to `recent_leads`
     # rows; a raw queue entry has no id to claim until transfer_to_human's
     # Lead write lands, which is the normal case since a Lead is written
     # whenever a user_id is available (see tools.py).
@@ -3487,24 +3487,24 @@ async def get_escalations(
     return {"recent_leads": recent_leads, "queue": queue}
 
 
-@router.patch("/escalations/{lead_id}/claim", response_model=LeadOut)
-async def claim_escalation(
+@router.patch("/human-support/{lead_id}/claim", response_model=LeadOut)
+async def claim_human_support(
     lead_id: UUID,
     db: DbDep,
     scope_org_id: AnalyticsScopeDep,
     current_user: CurrentUserDep,
     x_admin_token: str | None = Header(None),
 ) -> LeadOut:
-    """A team member takes ownership of an escalation so others stop being
+    """A team member takes ownership of a Human Support request so others stop being
     alerted for it. First claim wins — a second attempt on an
     already-claimed lead is rejected (409) rather than silently
     reassigning it, so two people can't both think they own the handoff.
     """
     lead = await db.get(Lead, lead_id)
-    if lead is None or lead.intent != "escalation":
-        raise HTTPException(status_code=404, detail="Escalation not found")
+    if lead is None or lead.intent != "human_support":
+        raise HTTPException(status_code=404, detail="Human Support request not found")
     if scope_org_id is not None and lead.org_id != scope_org_id:
-        raise HTTPException(status_code=404, detail="Escalation not found")
+        raise HTTPException(status_code=404, detail="Human Support request not found")
 
     if lead.claimed_by_account_user_id not in (None, current_user.id):
         claimant_names = await _claimant_names(db, [lead])
@@ -3517,6 +3517,92 @@ async def claim_escalation(
         await db.commit()
         await db.refresh(lead)
 
+    return _lead_out_with_claimant(lead, {current_user.id: current_user.full_name or current_user.email})
+
+
+async def _scoped_lead_or_404(
+    lead_id: UUID,
+    db: DbDep,
+    scope_org_id: UUID | None,
+    org,
+    session_payload,
+) -> Lead:
+    """Same visibility rules as update_lead: org-scoped, and a plain member
+    only reaches leads they claimed."""
+    lead = await db.get(Lead, lead_id)
+    if lead is None or (scope_org_id is not None and lead.org_id != scope_org_id):
+        raise HTTPException(status_code=404, detail="Lead not found")
+    member_scope = _member_lead_scope(scope_org_id, org, session_payload)
+    if member_scope is not None and lead.claimed_by_account_user_id != member_scope:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    return lead
+
+
+@router.get("/leads/{lead_id}/human-support", response_model=list[LeadOut])
+async def list_lead_human_support(
+    lead_id: UUID,
+    db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    session_payload: SessionPayloadDep,
+    x_admin_token: str | None = Header(None),
+) -> list[LeadOut]:
+    """Every Human Support request raised for this lead's contact (each
+    transfer_to_human writes its own Lead row, all sharing the user_id),
+    newest first — the lead itself included when it is one."""
+    lead = await _scoped_lead_or_404(lead_id, db, scope_org_id, org, session_payload)
+    # One person can have several User rows ("+91…" vs "91…"), so match on the
+    # phone's digits as well as the user_id.
+    same_contact = [Lead.user_id == lead.user_id]
+    digits = re.sub(r"\D", "", lead.phone or "")
+    if digits:
+        same_contact.append(func.replace(Lead.phone, "+", "") == digits)
+    rows = (
+        (
+            await db.execute(
+                select(Lead)
+                .where(
+                    Lead.org_id == lead.org_id,
+                    Lead.intent == "human_support",
+                    or_(*same_contact),
+                )
+                .order_by(Lead.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    claimant_names = await _claimant_names(db, rows)
+    return [_lead_out_with_claimant(row, claimant_names) for row in rows]
+
+
+@router.post("/leads/{lead_id}/human-support", response_model=LeadOut)
+async def request_human_support(
+    lead_id: UUID,
+    db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    session_payload: SessionPayloadDep,
+    current_user: CurrentUserDep,
+    x_admin_token: str | None = Header(None),
+) -> LeadOut:
+    """Connect any lead to a human from the Lead page: flag it as Human
+    Support and claim it for the caller (first claim wins, like
+    claim_human_support). Lets a team member take over a lead the AI never
+    escalated on its own."""
+    lead = await _scoped_lead_or_404(lead_id, db, scope_org_id, org, session_payload)
+
+    if lead.claimed_by_account_user_id not in (None, current_user.id):
+        claimant_names = await _claimant_names(db, [lead])
+        claimant = claimant_names.get(lead.claimed_by_account_user_id, "another team member")
+        raise HTTPException(status_code=409, detail=f"Already claimed by {claimant}")
+
+    lead.intent = "human_support"
+    if lead.claimed_by_account_user_id is None:
+        lead.claimed_by_account_user_id = current_user.id
+        lead.claimed_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(lead)
     return _lead_out_with_claimant(lead, {current_user.id: current_user.full_name or current_user.email})
 
 

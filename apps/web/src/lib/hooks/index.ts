@@ -34,7 +34,7 @@ export {
   followUpKey,
   type LeadFollowUp,
 } from "./useLeadFollowUps";
-export { useHumanSupport, useClaimHumanSupport, useRequestHumanSupport, type HumanSupportFilters } from "./useHumanSupport";
+export { useHumanSupport, useClaimHumanSupport, useRequestHumanSupport, useLeadHumanSupport, type HumanSupportFilters } from "./useHumanSupport";
 export { useKillSwitch, useSetKillSwitch } from "./useKillSwitch";
 export {
   useWhatsAppSettings,

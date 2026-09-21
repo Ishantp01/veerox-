@@ -8,6 +8,7 @@ import { ArrowLeft, CalendarClock, MessageSquare, Save, Tag, UserCircle, Users }
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { ChannelBadge } from "@/components/conversations/channel-badge";
+import { LeadHumanSupportCard } from "@/components/leads/lead-human-support-card";
 import { IntentBadge } from "@/components/leads/intent-badge";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
 import {
@@ -113,6 +114,13 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
     setFollowUp3Note(lead.data.follow_up_3_note ?? "");
     setTagsInput((lead.data.tags ?? []).join(", "));
   }, [lead.data]);
+
+  // Deep links like /crm/leads/{id}#human-support: the target card only
+  // exists after the lead loads, so the browser's own hash scroll misses it.
+  useEffect(() => {
+    if (!lead.data || typeof window === "undefined" || !window.location.hash) return;
+    document.getElementById(window.location.hash.slice(1))?.scrollIntoView({ block: "start" });
+  }, [lead.data?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSave() {
     updateLead.mutate(
@@ -274,6 +282,8 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                   </dl>
                 </CardContent>
               </Card>
+
+              <LeadHumanSupportCard lead={lead.data} />
 
               {lead.data.claimed_by_account_user_id && (
                 <Card>
@@ -629,7 +639,7 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card id="conversation">
                 <CardHeader>
                   <div className="flex items-center gap-2">
                     <MessageSquare size={15} aria-hidden className="text-slate-400" />

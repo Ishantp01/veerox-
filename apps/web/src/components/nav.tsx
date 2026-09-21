@@ -50,7 +50,7 @@ interface NavGroup {
 
 // One persistent sidebar grouped by function (not by channel) — replaces the
 // old WhatsApp/Calling tab switcher. AI Calling / AI WhatsApp each link to
-// their channel root; the conversations/leads/escalations/settings pages that
+// their channel root; the conversations/leads/human-support/settings pages that
 // used to be flat top-level items now live as secondary nav within each
 // channel section (see components/layout/section-tabs.tsx).
 // Base groups every user sees. The "Platform" group (Organizations
@@ -78,7 +78,7 @@ const GROUPS: NavGroup[] = [
       { href: "/crm/appointments", label: "Appointments", Icon: CalendarClock },
       { href: "/conversations", label: "Conversations", Icon: MessagesSquare },
       { href: "/follow-up-tasks", label: "Follow-up Tasks", Icon: CalendarCheck },
-      { href: "/escalations", label: "Escalations", Icon: AlertTriangle },
+      { href: "/human-support", label: "Human Support", Icon: AlertTriangle },
     ],
   },
   {

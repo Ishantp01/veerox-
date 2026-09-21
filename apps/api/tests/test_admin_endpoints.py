@@ -1262,6 +1262,30 @@ async def test_request_human_support_from_lead_flags_and_claims(
     assert body["claimed_by_name"] == "Owner"
 
 
+async def test_list_lead_human_support_returns_all_requests_for_the_contact(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The Lead page's Human Support list: every human_support Lead row for the
+    same user_id, and nothing from other users or other intents."""
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000017")
+    other = User(org_id=ORG_ID, phone="+910000000018")
+    db_session.add_all([user, other])
+    await db_session.flush()
+    base = Lead(org_id=ORG_ID, user_id=user.id, intent="pricing", channel="whatsapp")
+    hs1 = Lead(org_id=ORG_ID, user_id=user.id, intent="human_support", channel="voice")
+    hs2 = Lead(org_id=ORG_ID, user_id=user.id, intent="human_support", channel="whatsapp")
+    other_hs = Lead(org_id=ORG_ID, user_id=other.id, intent="human_support", channel="voice")
+    db_session.add_all([base, hs1, hs2, other_hs])
+    await db_session.commit()
+    await db_session.refresh(base)
+
+    response = await client.get(f"/admin/leads/{base.id}/human-support", headers=ADMIN_HEADERS)
+    assert response.status_code == 200
+    ids = {row["id"] for row in response.json()}
+    assert ids == {str(hs1.id), str(hs2.id)}
+
+
 async def test_claim_human_support_conflict_when_already_claimed(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

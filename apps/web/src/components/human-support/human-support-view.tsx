@@ -14,7 +14,7 @@ import type { HumanSupport, HandoffQueueEntry, Lead } from "@/lib/types";
  * Map a persisted Lead row (intent='human_support') into the unified row shape.
  * reason/urgency live in metadata_ — see apps/api/core/tools.py:transfer_to_human.
  */
-function leadToHumanSupport(lead: Lead): HumanSupport {
+export function leadToHumanSupport(lead: Lead): HumanSupport {
   const meta = lead.metadata_ ?? {};
   return {
     source: "lead",
@@ -34,7 +34,7 @@ function leadToHumanSupport(lead: Lead): HumanSupport {
 }
 
 /** Map a live Redis-queue entry into the unified row shape. */
-function queueEntryToHumanSupport(entry: HandoffQueueEntry): HumanSupport {
+export function queueEntryToHumanSupport(entry: HandoffQueueEntry): HumanSupport {
   return {
     source: "queue",
     created_at: entry.requested_at,

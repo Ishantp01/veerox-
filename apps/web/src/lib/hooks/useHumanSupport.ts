@@ -65,3 +65,16 @@ export function useRequestHumanSupport() {
     },
   });
 }
+
+/**
+ * Every Human Support request raised for a lead's contact, newest first.
+ *
+ * GET /admin/leads/{leadId}/human-support → Lead[]
+ */
+export function useLeadHumanSupport(leadId: string | undefined | null) {
+  return useQuery<Lead[]>({
+    queryKey: ["humanSupport", "lead", leadId ?? ""],
+    queryFn: () => apiFetch<Lead[]>(`/admin/leads/${leadId}/human-support`),
+    enabled: Boolean(leadId),
+  });
+}
