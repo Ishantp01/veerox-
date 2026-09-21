@@ -1,5 +1,6 @@
 ﻿"use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Badge, Table, TableHeader, TableRow, TableCell } from "@/components/ui";
 import { formatDateTime, formatPhone } from "@/lib/format";
@@ -15,7 +16,7 @@ export interface LeadTableProps {
 
 /**
  * Presentational lead table (UI plan §7.2) — aware of the Lead type but not of
- * fetching. Columns: Name, Phone, Intent, Status, Created. Rows navigate to
+ * fetching. Columns: Name, Phone, Intent, Tags, Status, Conversation, Human Support, Created. Rows navigate to
  * `${detailBasePath}/${lead.id}` when provided (dashboard/CRM detail view).
  */
 export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
@@ -36,6 +37,8 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
             <TableHeader title="Where this lead sits in your sales pipeline: New → Contacted → Qualified → Converted/Lost.">
               Status
             </TableHeader>
+            <TableHeader>Conversation</TableHeader>
+            <TableHeader>Human Support</TableHeader>
             <TableHeader>Created</TableHeader>
           </TableRow>
         </thead>
@@ -91,6 +94,36 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
                 </TableCell>
                 <TableCell>
                   <StatusBadge status={lead.status} />
+                </TableCell>
+                <TableCell>
+                  {href ? (
+                    <Link
+                      href={`${href}#conversation`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
+                    >
+                      Conversation
+                    </Link>
+                  ) : (
+                    <span className="text-slate-400 dark:text-slate-600">—</span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  {lead.claimed_by_account_user_id ? (
+                    <Badge variant="success">With {lead.claimed_by_name ?? "team"}</Badge>
+                  ) : lead.intent === "human_support" ? (
+                    <Badge variant="live">Waiting</Badge>
+                  ) : href ? (
+                    <Link
+                      href={`${href}#human-support`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
+                    >
+                      Human Support
+                    </Link>
+                  ) : (
+                    <span className="text-slate-400 dark:text-slate-600">—</span>
+                  )}
                 </TableCell>
                 <TableCell className="text-xs text-slate-500">
                   {formatDateTime(lead.created_at)}

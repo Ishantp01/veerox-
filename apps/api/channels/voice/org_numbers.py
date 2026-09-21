@@ -28,7 +28,7 @@ from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn
 
 # Per-(org, provider) rotation counter — see get_rotating_numbers. Same
-# INCR-then-modulo pattern as core/tools.py's escalation round robin
+# INCR-then-modulo pattern as core/tools.py's Human Support round robin
 # (_TRANSFER_ROUND_ROBIN_PREFIX): the counter only ever grows, so numbers can
 # be added/removed without resetting it.
 _PHONE_ROUND_ROBIN_PREFIX = "veerox:phone_round_robin:"
@@ -110,7 +110,7 @@ async def next_rotating_number(
     equivalent. A single number never touches Redis (behaves exactly like
     the old always-use-the-default behavior); 2+ numbers INCR a shared
     per-(org, provider) counter and take it modulo the current list length,
-    same pattern as core/tools.py's escalation round robin.
+    same pattern as core/tools.py's Human Support round robin.
     """
     if not numbers:
         return None

@@ -5,16 +5,16 @@ import { CheckCircle2, Search } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
-import { EscalationTable } from "@/components/escalations/escalation-table";
+import { HumanSupportTable } from "@/components/human-support/human-support-table";
 import { EmptyState, Input, Pagination, Select, SkeletonRows, Table } from "@/components/ui";
-import { useClientPagination, useEscalations } from "@/lib/hooks";
-import type { Escalation, HandoffQueueEntry, Lead } from "@/lib/types";
+import { useClientPagination, useHumanSupport } from "@/lib/hooks";
+import type { HumanSupport, HandoffQueueEntry, Lead } from "@/lib/types";
 
 /**
- * Map a persisted Lead row (intent='escalation') into the unified row shape.
+ * Map a persisted Lead row (intent='human_support') into the unified row shape.
  * reason/urgency live in metadata_ — see apps/api/core/tools.py:transfer_to_human.
  */
-function leadToEscalation(lead: Lead): Escalation {
+function leadToHumanSupport(lead: Lead): HumanSupport {
   const meta = lead.metadata_ ?? {};
   return {
     source: "lead",
@@ -34,7 +34,7 @@ function leadToEscalation(lead: Lead): Escalation {
 }
 
 /** Map a live Redis-queue entry into the unified row shape. */
-function queueEntryToEscalation(entry: HandoffQueueEntry): Escalation {
+function queueEntryToHumanSupport(entry: HandoffQueueEntry): HumanSupport {
   return {
     source: "queue",
     created_at: entry.requested_at,
@@ -47,7 +47,7 @@ function queueEntryToEscalation(entry: HandoffQueueEntry): Escalation {
   };
 }
 
-export interface EscalationsViewProps {
+export interface HumanSupportViewProps {
   title: string;
   description: string;
   /** Scopes both the Lead-backed and live-queue rows to a single channel. */
@@ -57,39 +57,39 @@ export interface EscalationsViewProps {
 }
 
 /**
- * Escalations feed (UI plan §7.2). Shared by the unified Escalations page
- * and the per-channel /whatsapp/escalations and /calling/escalations pages.
+ * HumanSupport feed (UI plan §7.2). Shared by the unified HumanSupport page
+ * and the per-channel /whatsapp/human-support and /calling/human-support pages.
  */
-export function EscalationsView({
+export function HumanSupportView({
   title,
   description,
   channel,
   conversationBasePath,
-}: EscalationsViewProps) {
+}: HumanSupportViewProps) {
   // Only the unified (cross-channel) view lets the user pick a channel —
   // per-channel pages already have `channel` fixed by their caller.
   const [channelFilter, setChannelFilter] = useState<"voice" | "whatsapp" | "">("");
   const effectiveChannel = channel ?? (channelFilter || undefined);
 
-  const { data, isLoading, isError, error, refetch } = useEscalations({ channel: effectiveChannel });
+  const { data, isLoading, isError, error, refetch } = useHumanSupport({ channel: effectiveChannel });
   const [search, setSearch] = useState("");
 
   // Flatten: queue entries first (live, pending pickup), then persisted leads
   // (history). A queue entry becomes a lead only after it's handled, which
   // removes it from the queue — so no de-dup is needed today.
-  const allEscalations: Escalation[] = [
-    ...(data?.queue ?? []).map(queueEntryToEscalation),
-    ...(data?.recent_leads ?? []).map(leadToEscalation),
+  const allHumanSupport: HumanSupport[] = [
+    ...(data?.queue ?? []).map(queueEntryToHumanSupport),
+    ...(data?.recent_leads ?? []).map(leadToHumanSupport),
   ];
   const term = search.trim().toLowerCase();
-  const escalations = term
-    ? allEscalations.filter((e) =>
+  const humanSupport = term
+    ? allHumanSupport.filter((e) =>
         [e.user_phone, e.reason, ...(e.tags ?? [])]
           .filter(Boolean)
           .some((f) => f!.toLowerCase().includes(term)),
       )
-    : allEscalations;
-  const pager = useClientPagination(escalations, 20, `${effectiveChannel}|${search}`);
+    : allHumanSupport;
+  const pager = useClientPagination(humanSupport, 20, `${effectiveChannel}|${search}`);
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -105,12 +105,12 @@ export function EscalationsView({
                 className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
               />
               <Input
-                id="escalation-search"
+                id="human-support-search"
                 type="search"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search number, reason, or tag…"
-                aria-label="Search escalations by number, reason, or tag"
+                aria-label="Search Human Support requests by number, reason, or tag"
                 className="w-56 pl-8"
               />
             </div>
@@ -118,11 +118,11 @@ export function EscalationsView({
               <Select
                 value={channelFilter}
                 onChange={(v) => setChannelFilter(v as "voice" | "whatsapp" | "")}
-                aria-label="Filter escalations by channel"
+                aria-label="Filter Human Support requests by channel"
               >
                 <option value="">All channels</option>
-                <option value="voice">Call escalations</option>
-                <option value="whatsapp">WhatsApp escalations</option>
+                <option value="voice">Call requests</option>
+                <option value="whatsapp">WhatsApp requests</option>
               </Select>
             )}
           </div>
@@ -133,7 +133,7 @@ export function EscalationsView({
         isLoading={isLoading}
         isError={isError}
         error={error}
-        isEmpty={escalations.length === 0}
+        isEmpty={humanSupport.length === 0}
         onRetry={() => refetch()}
         loadingFallback={
           <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
@@ -147,12 +147,12 @@ export function EscalationsView({
         emptyFallback={
           <EmptyState
             icon={CheckCircle2}
-            title="No pending escalations"
+            title="No pending Human Support requests"
             description="All clear — no human handoffs needed right now."
           />
         }
       >
-        <EscalationTable escalations={pager.pageRows} conversationBasePath={conversationBasePath} />
+        <HumanSupportTable humanSupport={pager.pageRows} conversationBasePath={conversationBasePath} />
         <Pagination
           page={pager.page}
           pageSize={pager.pageSize}

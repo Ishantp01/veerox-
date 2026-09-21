@@ -221,7 +221,7 @@ function CountryCodeSection() {
  * Picks which approved WhatsApp template the human-handoff notification
  * sends (apps/api/core/tools.py::transfer_to_human). Any active template can
  * be chosen — its variables are filled server-side: {{1}} the caller's
- * number, {{2}} the escalation reason, and any further {{n}} padded with the
+ * number, {{2}} the humanSupport reason, and any further {{n}} padded with the
  * reason. Empty = built-in default.
  */
 function HandoffTemplatePreference() {

@@ -139,7 +139,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "properties": {
                     "reason": {
                         "type": "string",
-                        "description": "Reason for escalation to a human agent.",
+                        "description": "Reason for handing off to a human agent (Human Support).",
                     },
                     "urgency": {
                         "type": "string",
@@ -870,7 +870,7 @@ async def transfer_to_human(
     conversation_id: UUID | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    """Escalate to a human: enqueue in Redis, write an escalation ``Lead``,
+    """Escalate to a human: enqueue in Redis, write a Human Support ``Lead``,
     and best-effort WhatsApp-notify one team member on the org, picked by
     round-robin over ``_resolve_team_notify_targets`` (see
     ``_TRANSFER_ROUND_ROBIN_PREFIX``). Round-robin instead of notifying
@@ -882,7 +882,7 @@ async def transfer_to_human(
     else on the org can reassign it (assignment is automatic-only; there is
     no manual "assign lead" action anywhere in the product).
 
-    Exception: when the escalation is raised from a campaign call/chat (the
+    Exception: when the Human Support is raised from a campaign call/chat (the
     conversation is linked to a ``CampaignTarget``), it skips the round-robin
     and goes to that campaign's creator
     (``CallCampaign.created_by_account_user_id``) — both the Lead assignment
@@ -895,13 +895,13 @@ async def transfer_to_human(
     unset, sends ``agent_connect_request`` once that template is
     Meta-approved (``_AGENT_CONNECT_TEMPLATE_APPROVED``); until then, falls
     back to the already-approved ``appointment_confirmation`` template
-    reused with escalation-shaped params, same as before that template existed.
+    reused with Human Support-shaped params, same as before that template existed.
 
     The ``Lead`` row is only written when the agent layer supplies a
     ``user_id`` (the LLM args don't carry one). When absent, the Redis
     enqueue still happens so operators see the request on the dashboard.
     ``conversation_id`` is likewise agent-layer context (see module
-    docstring) — threaded through so the Escalations dashboard can link
+    docstring) — threaded through so the Human Support dashboard can link
     straight to the transcript.
     """
     org_id = org_id or _default_org_id()
@@ -915,7 +915,7 @@ async def transfer_to_human(
             phone = user.phone
             name = user.name
 
-    # An escalation raised from a campaign call/chat goes straight to that
+    # A Human Support raised from a campaign call/chat goes straight to that
     # campaign's creator — they own its outreach (see
     # CallCampaign.created_by_account_user_id) — instead of the team
     # round-robin. CampaignTarget.conversation_id is set for both channels
@@ -939,7 +939,7 @@ async def transfer_to_human(
     if campaign_owner is not None:
         notify_account_user_id, notify_phone = campaign_owner
     elif notify_targets:
-        # INCR is atomic across concurrent calls, so two escalations landing
+        # INCR is atomic across concurrent calls, so two Human Support requests landing
         # at the same instant still get distinct, consecutive turns instead
         # of racing onto the same teammate. The counter only ever grows —
         # taking it modulo the *current* team size at read time is what
@@ -1022,7 +1022,7 @@ async def transfer_to_human(
             user_id=user_id,
             phone=phone,
             conversation_id=conversation_id,
-            intent="escalation",
+            intent="human_support",
             channel=channel,
             metadata_={"reason": reason, "urgency": urgency},
             claimed_by_account_user_id=notify_account_user_id,

@@ -162,7 +162,7 @@ class WhatsAppSettingsIn(BaseModel):
         description=(
             "Approved WhatsApp template name to use for the human-handoff "
             "notification. Must have exactly two body variables: {{1}} the "
-            "caller's number, {{2}} the escalation reason. Omit/null to use "
+            "caller's number, {{2}} the Human Support reason. Omit/null to use "
             "the built-in default."
         ),
     )

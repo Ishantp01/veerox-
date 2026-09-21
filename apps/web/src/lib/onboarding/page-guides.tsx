@@ -54,16 +54,16 @@ const CONVERSATIONS: GuideStep[] = [
   },
 ];
 
-const ESCALATIONS: GuideStep[] = [
+const HUMAN_SUPPORT: GuideStep[] = [
   {
     anchor: "header",
-    title: "Escalations",
+    title: "Human Support",
     content: "Conversations where the AI decided a human should take over.",
   },
   {
     anchor: "action",
     title: "Filter",
-    content: "Show only call escalations or only WhatsApp ones with the channel filter.",
+    content: "Show only call requests or only WhatsApp ones with the channel filter.",
   },
   {
     anchor: "table",
@@ -167,7 +167,7 @@ export const PAGE_GUIDES: Record<string, GuideStep[]> = {
     },
   ],
   "/calling/conversations": CONVERSATIONS,
-  "/calling/escalations": ESCALATIONS,
+  "/calling/human-support": HUMAN_SUPPORT,
   "/calling/leads": CHANNEL_LEADS("Calling"),
   "/calling/campaigns": [
     {
@@ -243,7 +243,7 @@ export const PAGE_GUIDES: Record<string, GuideStep[]> = {
     },
   ],
   "/whatsapp/conversations": CONVERSATIONS,
-  "/whatsapp/escalations": ESCALATIONS,
+  "/whatsapp/human-support": HUMAN_SUPPORT,
   "/whatsapp/leads": CHANNEL_LEADS("WhatsApp"),
   "/whatsapp/settings": CHANNEL_SETTINGS,
 
@@ -330,7 +330,7 @@ export const PAGE_GUIDES: Record<string, GuideStep[]> = {
   ],
 
   "/conversations": CONVERSATIONS,
-  "/escalations": ESCALATIONS,
+  "/human-support": HUMAN_SUPPORT,
   "/leads": [
     {
       anchor: "header",

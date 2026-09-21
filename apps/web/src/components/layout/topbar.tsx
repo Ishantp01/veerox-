@@ -18,7 +18,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   login: "Login",
   conversations: "Conversations",
   leads: "Leads",
-  escalations: "Escalations",
+  "human-support": "Human Support",
   settings: "Settings",
   send: "Send Message",
   dial: "Dial",

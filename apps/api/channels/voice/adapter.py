@@ -740,7 +740,7 @@ async def _dispatch_realtime_tool(
     (the agent's request-scoped session doesn't exist on the voice path).
     ``org_id`` is the call's already-resolved tenant (``CallState.org_id``,
     see ``_resolve_org_id`` in realtime_bridge.py) — threaded through so tool
-    handlers write leads/appointments/escalations to the org that actually
+    handlers write leads/appointments/human-support to the org that actually
     owns the call, instead of falling back to the platform's default org.
     """
     handler = DISPATCH_TABLE.get(name)

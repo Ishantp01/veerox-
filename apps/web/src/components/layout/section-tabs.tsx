@@ -18,7 +18,7 @@ function isTabActive(pathname: string, href: string, sectionRoot: string): boole
 }
 
 /**
- * Secondary in-section navigation (Conversations / Leads / Escalations / ...)
+ * Secondary in-section navigation (Conversations / Leads / HumanSupport / ...)
  * for a channel whose top-level sidebar entry (AI Calling, AI WhatsApp) now
  * links to a single root rather than listing each sub-page in the primary
  * sidebar. Rendered from each channel's `layout.tsx` above `{children}`.

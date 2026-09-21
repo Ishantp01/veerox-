@@ -108,8 +108,8 @@ export default function LoginPage() {
             One dashboard for every call and chat your agent handles.
           </h1>
           <p className="mt-3 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
-            Voice calls and WhatsApp conversations, leads captured, appointments booked — escalated
-            to your team only when it matters.
+            Voice calls and WhatsApp conversations, leads captured, appointments booked — handed to
+            a human on your team only when it matters.
           </p>
 
           <div className="mt-9 flex flex-col gap-3">

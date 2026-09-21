@@ -155,7 +155,7 @@ async def create_appointment(
             raise HTTPException(status_code=404, detail="Lead not found")
         # A member booking against a lead nobody has claimed self-claims it,
         # so the appointment they just made stays visible to them (same
-        # first-claim-wins semantics as admin.py's escalation claim).
+        # first-claim-wins semantics as admin.py's Human Support claim).
         if member_scope is not None and lead.claimed_by_account_user_id is None:
             lead.claimed_by_account_user_id = member_scope
             lead.claimed_at = func.now()

@@ -23,13 +23,13 @@ const VOICE_ACTIONS: Action[] = [
   { href: "/calling", label: "Dial a number", description: "Place a one-off outbound call", icon: Phone },
   { href: "/automation/campaigns", label: "New campaign", description: "Bulk-call and qualify a lead list", icon: Megaphone },
   { href: "/crm/leads?channel=voice", label: "View leads", description: "See who the agent has captured", icon: UserCheck },
-  { href: "/escalations", label: "Escalations", description: "Conversations needing a human", icon: AlertTriangle },
+  { href: "/human-support", label: "Human Support", description: "Conversations needing a human", icon: AlertTriangle },
 ];
 
 const WHATSAPP_ACTIONS: Action[] = [
   { href: "/whatsapp", label: "Send a message", description: "One-off outbound WhatsApp text", icon: MessageSquareText },
   { href: "/crm/leads?channel=whatsapp", label: "View leads", description: "See who the agent has captured", icon: UserCheck },
-  { href: "/escalations", label: "Escalations", description: "Conversations needing a human", icon: AlertTriangle },
+  { href: "/human-support", label: "Human Support", description: "Conversations needing a human", icon: AlertTriangle },
 ];
 
 const ALL_ACTIONS: Action[] = [

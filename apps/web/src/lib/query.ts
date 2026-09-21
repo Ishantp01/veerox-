@@ -41,7 +41,7 @@ export const queryKeys = {
   leads: (filters?: { intent?: string; channel?: string; status?: string }) =>
     ["leads", filters ?? {}] as const,
   lead: (id: string) => ["leads", "detail", id] as const,
-  escalations: (filters?: { channel?: string }) => ["escalations", filters ?? {}] as const,
+  humanSupport: (filters?: { channel?: string }) => ["humanSupport", filters ?? {}] as const,
   killSwitch: () => ["kill-switch"] as const,
   prompts: () => ["prompts"] as const,
   tools: () => ["tools"] as const,
@@ -81,7 +81,7 @@ export const queryKeys = {
  */
 export const POLL = {
   liveConversation: 3_000,
-  escalations: 3_000,
+  humanSupport: 3_000,
   dashboard: 4_000,
   conversationList: 4_000,
   leads: 10_000,

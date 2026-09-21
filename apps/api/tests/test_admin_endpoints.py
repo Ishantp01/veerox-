@@ -1,7 +1,7 @@
 """Tests for the channel-scoping added to apps.api.routers.admin.
 
 Covers the new ``channel`` query filters on /admin/conversations,
-/admin/leads, /admin/escalations, plus the new whatsapp/per-channel fields
+/admin/leads, /admin/human-support, plus the new whatsapp/per-channel fields
 on /admin/stats. Redis is monkeypatched with an in-process fake so these
 tests are hermetic (no live Redis needed).
 """
@@ -99,7 +99,7 @@ class _FakePipeline:
 
 class _FakeRedis:
     """Minimal Redis stand-in for /admin/stats' error counter,
-    /admin/escalations' human_handoff_queue LRANGE, and session
+    /admin/human-support' human_handoff_queue LRANGE, and session
     login/logout (SET/SADD/SREM/DELETE via a pipeline)."""
 
     def __init__(self) -> None:
@@ -1167,7 +1167,7 @@ async def test_stats_includes_whatsapp_and_per_channel_leads(
     assert body["leads_today_voice"] == 1
 
 
-async def test_escalations_filters_queue_entries_by_channel(
+async def test_human_support_filters_queue_entries_by_channel(
     client: AsyncClient, db_session: AsyncSession, fake_redis: _FakeRedis
 ) -> None:
     await _seed_org(db_session)
@@ -1175,10 +1175,10 @@ async def test_escalations_filters_queue_entries_by_channel(
     db_session.add(user)
     await db_session.flush()
     db_session.add(
-        Lead(org_id=ORG_ID, user_id=user.id, intent="escalation", channel="voice")
+        Lead(org_id=ORG_ID, user_id=user.id, intent="human_support", channel="voice")
     )
     db_session.add(
-        Lead(org_id=ORG_ID, user_id=user.id, intent="escalation", channel="whatsapp")
+        Lead(org_id=ORG_ID, user_id=user.id, intent="human_support", channel="whatsapp")
     )
     await db_session.commit()
 
@@ -1188,7 +1188,7 @@ async def test_escalations_filters_queue_entries_by_channel(
     ]
 
     response = await client.get(
-        "/admin/escalations", params={"channel": "voice"}, headers=ADMIN_HEADERS
+        "/admin/human-support", params={"channel": "voice"}, headers=ADMIN_HEADERS
     )
 
     assert response.status_code == 200
@@ -1199,7 +1199,7 @@ async def test_escalations_filters_queue_entries_by_channel(
     assert body["queue"][0]["channel"] == "voice"
 
 
-async def test_claim_escalation_success(
+async def test_claim_human_support_success(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     """First claim sets claimed_by_account_user_id/claimed_at and returns
@@ -1215,12 +1215,12 @@ async def test_claim_escalation_success(
     user = User(org_id=ORG_ID, phone="+910000000006")
     db_session.add(user)
     await db_session.flush()
-    lead = Lead(org_id=ORG_ID, user_id=user.id, intent="escalation", channel="whatsapp")
+    lead = Lead(org_id=ORG_ID, user_id=user.id, intent="human_support", channel="whatsapp")
     db_session.add(lead)
     await db_session.commit()
     await db_session.refresh(lead)
 
-    response = await client.patch(f"/admin/escalations/{lead.id}/claim", headers=ADMIN_HEADERS)
+    response = await client.patch(f"/admin/human-support/{lead.id}/claim", headers=ADMIN_HEADERS)
     assert response.status_code == 200
     body = response.json()
     assert body["claimed_by_account_user_id"] == str(DEFAULT_OWNER_ID)
@@ -1228,12 +1228,41 @@ async def test_claim_escalation_success(
     assert body["claimed_at"] is not None
 
     # Idempotent re-claim by the same caller.
-    response2 = await client.patch(f"/admin/escalations/{lead.id}/claim", headers=ADMIN_HEADERS)
+    response2 = await client.patch(f"/admin/human-support/{lead.id}/claim", headers=ADMIN_HEADERS)
     assert response2.status_code == 200
     assert response2.json()["claimed_by_account_user_id"] == str(DEFAULT_OWNER_ID)
 
 
-async def test_claim_escalation_conflict_when_already_claimed(
+async def test_request_human_support_from_lead_flags_and_claims(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A lead the AI never escalated (e.g. a New lead) can be connected to a
+    human from the Lead page: it becomes a Human Support lead, claimed by the
+    caller."""
+    from apps.api.db.models import AccountUser
+    from apps.api.deps import DEFAULT_OWNER_ID
+
+    await _seed_org(db_session)
+    db_session.add(
+        AccountUser(id=DEFAULT_OWNER_ID, email="owner@example.com", token_hash="owner-hash", full_name="Owner")
+    )
+    user = User(org_id=ORG_ID, phone="+910000000016")
+    db_session.add(user)
+    await db_session.flush()
+    lead = Lead(org_id=ORG_ID, user_id=user.id, intent="pricing", channel="whatsapp")
+    db_session.add(lead)
+    await db_session.commit()
+    await db_session.refresh(lead)
+
+    response = await client.post(f"/admin/leads/{lead.id}/human-support", headers=ADMIN_HEADERS)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "human_support"
+    assert body["claimed_by_account_user_id"] == str(DEFAULT_OWNER_ID)
+    assert body["claimed_by_name"] == "Owner"
+
+
+async def test_claim_human_support_conflict_when_already_claimed(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     from apps.api.db.models import AccountUser
@@ -1253,7 +1282,7 @@ async def test_claim_escalation_conflict_when_already_claimed(
     lead = Lead(
         org_id=ORG_ID,
         user_id=user.id,
-        intent="escalation",
+        intent="human_support",
         channel="whatsapp",
         claimed_by_account_user_id=other_id,
     )
@@ -1261,12 +1290,12 @@ async def test_claim_escalation_conflict_when_already_claimed(
     await db_session.commit()
     await db_session.refresh(lead)
 
-    response = await client.patch(f"/admin/escalations/{lead.id}/claim", headers=ADMIN_HEADERS)
+    response = await client.patch(f"/admin/human-support/{lead.id}/claim", headers=ADMIN_HEADERS)
     assert response.status_code == 409
     assert "Other Rep" in response.json()["detail"]
 
 
-async def test_claim_escalation_not_found(client: AsyncClient, db_session: AsyncSession) -> None:
+async def test_claim_human_support_not_found(client: AsyncClient, db_session: AsyncSession) -> None:
     from apps.api.db.models import AccountUser
     from apps.api.deps import DEFAULT_OWNER_ID
 
@@ -1277,7 +1306,7 @@ async def test_claim_escalation_not_found(client: AsyncClient, db_session: Async
     await db_session.commit()
 
     response = await client.patch(
-        f"/admin/escalations/{uuid.uuid4()}/claim", headers=ADMIN_HEADERS
+        f"/admin/human-support/{uuid.uuid4()}/claim", headers=ADMIN_HEADERS
     )
     assert response.status_code == 404
 

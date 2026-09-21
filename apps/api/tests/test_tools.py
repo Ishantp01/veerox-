@@ -500,11 +500,11 @@ async def test_transfer_to_human_enqueues_and_writes_lead(
     assert result["status"] == "ok"
     assert result["lead_id"]  # was written because user_id was supplied
 
-    # Lead row exists with intent=escalation, metadata, phone, and
+    # Lead row exists with intent=human_support, metadata, phone, and
     # conversation_id all captured.
     rows = (
         await db_session.execute(
-            select(Lead).where(Lead.intent == "escalation")
+            select(Lead).where(Lead.intent == "human_support")
         )
     ).scalars().all()
     assert len(rows) == 1
@@ -669,7 +669,7 @@ async def test_transfer_to_human_sizes_body_params_to_chosen_template(
 async def test_transfer_to_human_auto_assigns_lead_to_notified_teammate(
     db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The escalation Lead's claimed_by_account_user_id must be set to
+    """The Human Support Lead's claimed_by_account_user_id must be set to
     whichever teammate the round robin notified — automatically, so it shows
     up on that person's own Leads dashboard immediately with no separate
     claim step (there's no manual "assign lead" action anywhere else)."""
@@ -780,10 +780,10 @@ async def _seed_campaign_conversation(
     return conversation.id
 
 
-async def test_transfer_to_human_campaign_escalation_routes_to_campaign_creator(
+async def test_transfer_to_human_campaign_human_support_routes_to_campaign_creator(
     db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An escalation from a campaign call goes to that campaign's creator —
+    """A Human Support from a campaign call goes to that campaign's creator —
     Lead assignment + WhatsApp notify — not the team round robin."""
     sent: list[dict[str, object]] = []
 

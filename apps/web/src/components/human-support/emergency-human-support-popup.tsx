@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, ArrowRight, BellRing, Clock, MessageSquare, Phone, X } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { formatPhone, formatRelative } from "@/lib/format";
-import { useClaimEscalation, useEscalations } from "@/lib/hooks";
-import type { Escalation } from "@/lib/types";
+import { useClaimHumanSupport, useHumanSupport } from "@/lib/hooks";
+import type { HumanSupport } from "@/lib/types";
 import { UrgencyBadge } from "./urgency-badge";
 
 /** How long "Not now" hides an alert before it's eligible to resurface — it
@@ -38,7 +38,7 @@ export function playAlertSound() {
   }
 }
 
-function notifyBrowser(e: Escalation) {
+function notifyBrowser(e: HumanSupport) {
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
   if (document.visibilityState !== "hidden") return;
   try {
@@ -52,25 +52,25 @@ function notifyBrowser(e: Escalation) {
 }
 
 /**
- * Corner alert for a brand-new, unclaimed escalation (transfer_to_human
+ * Corner alert for a brand-new, unclaimed humanSupport (transfer_to_human
  * lead), mounted once in DashboardShell so it reaches every dashboard route
  * regardless of which page a team member is on. Deliberately non-blocking —
  * a fixed card near the toast region, not a full-screen takeover — so it's
  * hard to miss without stopping whatever the team member is doing.
  *
- * Polls via the same useEscalations() hook as the /escalations page
- * (POLL.escalations, 3s) — this app has no push/websocket infra, so "new"
+ * Polls via the same useHumanSupport() hook as the /human-support page
+ * (POLL.humanSupport, 3s) — this app has no push/websocket infra, so "new"
  * is detected by diffing against a set of already-seen lead ids rather than
  * a server-pushed event. Only `recent_leads` rows are alertable (they carry
- * an id to claim); raw queue entries are covered by the /escalations table.
+ * an id to claim); raw queue entries are covered by the /human-support table.
  */
-export function EmergencyEscalationPopup() {
-  const { data } = useEscalations();
-  const claimEscalation = useClaimEscalation();
+export function EmergencyHumanSupportPopup() {
+  const { data } = useHumanSupport();
+  const claimHumanSupport = useClaimHumanSupport();
   const { toast } = useToast();
   const router = useRouter();
 
-  const [queue, setQueue] = useState<Escalation[]>([]);
+  const [queue, setQueue] = useState<HumanSupport[]>([]);
   const seenIds = useRef<Set<string> | null>(null);
   const snoozedUntil = useRef<Map<string, number>>(new Map());
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | "unsupported">(
@@ -79,7 +79,7 @@ export function EmergencyEscalationPopup() {
 
   // Diff each poll against what's already been seen/queued. First real
   // response just seeds `seenIds` (silently) so opening the dashboard
-  // doesn't fire a burst of alerts for escalations that were already sitting
+  // doesn't fire a burst of alerts for humanSupport that were already sitting
   // there.
   useEffect(() => {
     if (data === undefined) return;
@@ -108,7 +108,7 @@ export function EmergencyEscalationPopup() {
         });
       });
 
-      const next = fresh.map<Escalation>((l) => {
+      const next = fresh.map<HumanSupport>((l) => {
         const meta = l.metadata_ ?? {};
         return {
           source: "lead",
@@ -152,7 +152,7 @@ export function EmergencyEscalationPopup() {
   function handleClaim() {
     if (!active?.id) return;
     const id = active.id;
-    claimEscalation.mutate(
+    claimHumanSupport.mutate(
       { leadId: id },
       {
         onSuccess: () => {
@@ -229,7 +229,7 @@ export function EmergencyEscalationPopup() {
             <button
               type="button"
               onClick={handleClaim}
-              disabled={claimEscalation.isPending}
+              disabled={claimHumanSupport.isPending}
               className="inline-flex items-center gap-1 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:opacity-60 dark:bg-red-500 dark:hover:bg-red-400"
             >
               Claim &amp; open

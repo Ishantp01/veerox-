@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, BellRing, Check, Clock, X } from "lucide-react";
 
-import { playAlertSound } from "@/components/escalations/emergency-escalation-popup";
+import { playAlertSound } from "@/components/human-support/emergency-human-support-popup";
 import { Button, useToast } from "@/components/ui";
 import { formatDateTime, formatPhone } from "@/lib/format";
 import { followUpKey, useLeadFollowUps, useUpdateLeadFollowUp, type LeadFollowUp } from "@/lib/hooks";

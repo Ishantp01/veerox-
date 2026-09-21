@@ -364,17 +364,17 @@ export interface Tool {
   [key: string]: unknown;
 }
 
-// Response shape from GET /admin/escalations — backend returns both:
-//   recent_leads: persisted Lead rows with intent='escalation'
+// Response shape from GET /admin/human-support — backend returns both:
+//   recent_leads: persisted Lead rows with intent='human_support'
 //   queue:       live entries from the Redis human_handoff_queue
 // The UI flattens these into a unified display list.
-export interface EscalationsResponse {
+export interface HumanSupportResponse {
   recent_leads: Lead[];
   queue: HandoffQueueEntry[];
 }
 
-// Unified row shape the escalations table actually renders.
-export interface Escalation {
+// Unified row shape the humanSupport table actually renders.
+export interface HumanSupport {
   source: "lead" | "queue";
   id?: string;
   created_at: string;

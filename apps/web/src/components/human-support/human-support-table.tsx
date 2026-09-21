@@ -4,24 +4,24 @@ import { Save } from "lucide-react";
 import { Badge, Input, Table, TableHeader, TableRow, TableCell } from "@/components/ui";
 import { useToast } from "@/components/ui/toast";
 import { formatDateTime, formatPhone } from "@/lib/format";
-import { useClaimEscalation, useUpdateLead } from "@/lib/hooks";
-import type { Escalation } from "@/lib/types";
+import { useClaimHumanSupport, useUpdateLead } from "@/lib/hooks";
+import type { HumanSupport } from "@/lib/types";
 import { SourceBadge } from "./source-badge";
 import { UrgencyBadge } from "./urgency-badge";
 
 /** Inline tags editor for a "lead"-sourced row — a live "queue" entry has no
  * Lead row yet, so there's nothing to attach tags to until it's handled. */
-function TagsCell({ escalation }: { escalation: Escalation }) {
+function TagsCell({ humanSupport }: { humanSupport: HumanSupport }) {
   const updateLead = useUpdateLead();
   const { toast } = useToast();
-  const [value, setValue] = useState((escalation.tags ?? []).join(", "));
+  const [value, setValue] = useState((humanSupport.tags ?? []).join(", "));
   const [editing, setEditing] = useState(false);
 
   useEffect(() => {
-    setValue((escalation.tags ?? []).join(", "));
-  }, [escalation.tags]);
+    setValue((humanSupport.tags ?? []).join(", "));
+  }, [humanSupport.tags]);
 
-  if (escalation.source !== "lead" || !escalation.id) {
+  if (humanSupport.source !== "lead" || !humanSupport.id) {
     return <span className="text-sm text-slate-300 dark:text-slate-600">—</span>;
   }
 
@@ -32,8 +32,8 @@ function TagsCell({ escalation }: { escalation: Escalation }) {
         onClick={() => setEditing(true)}
         className="flex flex-wrap items-center gap-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
       >
-        {escalation.tags && escalation.tags.length > 0 ? (
-          escalation.tags.map((t) => (
+        {humanSupport.tags && humanSupport.tags.length > 0 ? (
+          humanSupport.tags.map((t) => (
             <Badge key={t} variant="neutral" icon={null}>
               {t}
             </Badge>
@@ -53,7 +53,7 @@ function TagsCell({ escalation }: { escalation: Escalation }) {
       .map((t) => t.trim())
       .filter(Boolean);
     updateLead.mutate(
-      { id: escalation.id!, tags: tags.length > 0 ? tags : null },
+      { id: humanSupport.id!, tags: tags.length > 0 ? tags : null },
       {
         onSuccess: () => {
           setEditing(false);
@@ -88,26 +88,26 @@ function TagsCell({ escalation }: { escalation: Escalation }) {
   );
 }
 
-export interface EscalationTableProps {
-  escalations: Escalation[];
+export interface HumanSupportTableProps {
+  humanSupport: HumanSupport[];
   /** Base path for the conversation link, e.g. "/whatsapp/conversations". */
   conversationBasePath: string;
 }
 
 /**
- * Presentational escalation table (UI plan §7.2). Renders the unified
- * Escalation row shape — queue (live) and lead (history) — with source +
+ * Presentational humanSupport table (UI plan §7.2). Renders the unified
+ * HumanSupport row shape — queue (live) and lead (history) — with source +
  * urgency badges and a link to the conversation when present.
  */
-export function EscalationTable({ escalations, conversationBasePath }: EscalationTableProps) {
-  const claimEscalation = useClaimEscalation();
+export function HumanSupportTable({ humanSupport, conversationBasePath }: HumanSupportTableProps) {
+  const claimHumanSupport = useClaimHumanSupport();
   const { toast } = useToast();
 
   function handleClaim(leadId: string) {
-    claimEscalation.mutate(
+    claimHumanSupport.mutate(
       { leadId },
       {
-        onSuccess: () => toast({ title: "Escalation claimed", variant: "success" }),
+        onSuccess: () => toast({ title: "Human Support request claimed", variant: "success" }),
         onError: (err) => toast({ title: "Couldn't claim", description: err.message, variant: "error" }),
       },
     );
@@ -132,7 +132,7 @@ export function EscalationTable({ escalations, conversationBasePath }: Escalatio
           </TableRow>
         </thead>
         <tbody>
-          {escalations.map((e, idx) => (
+          {humanSupport.map((e, idx) => (
             <TableRow key={e.id ?? `${e.source}_${e.created_at}_${idx}`}>
               <TableCell>
                 <SourceBadge source={e.source} />
@@ -152,7 +152,7 @@ export function EscalationTable({ escalations, conversationBasePath }: Escalatio
                 <UrgencyBadge urgency={e.urgency} />
               </TableCell>
               <TableCell>
-                <TagsCell escalation={e} />
+                <TagsCell humanSupport={e} />
               </TableCell>
               <TableCell>
                 {e.conversation_id ? (
@@ -175,7 +175,7 @@ export function EscalationTable({ escalations, conversationBasePath }: Escalatio
                   <button
                     type="button"
                     onClick={() => handleClaim(e.id!)}
-                    disabled={claimEscalation.isPending}
+                    disabled={claimHumanSupport.isPending}
                     className="rounded-sm text-sm font-semibold text-primary-600 hover:text-primary-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:opacity-50 dark:text-primary-400 dark:hover:text-primary-300"
                   >
                     Claim

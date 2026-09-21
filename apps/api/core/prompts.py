@@ -226,7 +226,7 @@ sales and support agent platform (voice calling, WhatsApp, CRM, campaigns, autom
 billing/plans, team management, and related settings).
 
 Dashboard layout (left sidebar, grouped): Main (Dashboard) - Communication (AI Calling, AI
-WhatsApp, WhatsApp Templates) - CRM (Contacts, Leads, Appointments, Conversations, Escalations)
+WhatsApp, WhatsApp Templates) - CRM (Contacts, Leads, Appointments, Conversations, Human Support)
 - Analytics (Reports, Sales Dashboard) - Automation (Campaigns, Automated Follow-up) - Settings
 (Team, Settings, Billing). Team/Settings/Billing are hidden from plain "member" users - only
 org admins see them. Automated Follow-up is hidden unless the org's plan includes that feature.

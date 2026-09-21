@@ -1,9 +1,9 @@
 import { ClipboardList, Radio } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Escalation } from "@/lib/types";
+import type { HumanSupport } from "@/lib/types";
 
 const SOURCE_META: Record<
-  Escalation["source"],
+  HumanSupport["source"],
   { label: string; cls: string }
 > = {
   // Live, pending pickup → amber (matches the "live/in-progress" color, §8.2).
@@ -13,12 +13,12 @@ const SOURCE_META: Record<
 };
 
 export interface SourceBadgeProps {
-  source: Escalation["source"];
+  source: HumanSupport["source"];
   className?: string;
 }
 
 /**
- * Pill marking whether an escalation row is a live queue entry (pending pickup)
+ * Pill marking whether an humanSupport row is a live queue entry (pending pickup)
  * or a persisted lead (history). Color + icon (a11y §10).
  */
 export function SourceBadge({ source, className }: SourceBadgeProps) {

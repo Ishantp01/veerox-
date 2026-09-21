@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 import Nav from "@/components/nav";
 import { Topbar } from "@/components/layout/topbar";
 import { FollowUpDuePopup } from "@/components/follow-up-tasks/follow-up-due-popup";
-import { EmergencyEscalationPopup } from "@/components/escalations/emergency-escalation-popup";
+import { EmergencyHumanSupportPopup } from "@/components/human-support/emergency-human-support-popup";
 
 /**
  * Owns the mobile-drawer open state shared by Nav (the sidebar itself) and
@@ -25,12 +25,12 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         </main>
       </div>
       {/* Non-blocking corner alert for a brand-new, unclaimed
-          transfer_to_human escalation — mounted here (not per page) so it
+          transfer_to_human humanSupport — mounted here (not per page) so it
           reaches every dashboard route, and outside <main> so it isn't
           clipped by the scroll container. Deliberately a small card (not a
           full-screen takeover) so it doesn't stop whatever the team member
           is doing. */}
-      <EmergencyEscalationPopup />
+      <EmergencyHumanSupportPopup />
       {/* Bottom-right reminder for lead follow-ups that have come due —
           admins see the whole org's, members only their claimed leads
           (scoped server-side). */}

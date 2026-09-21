@@ -68,7 +68,7 @@ KILL_SWITCH_REPLY = (
 )
 
 # Fallback when the model keeps requesting tool calls past the iteration cap.
-ESCALATION_FALLBACK = (
+HUMAN_SUPPORT_FALLBACK = (
     "I'm having trouble completing that right now. "
     "Let me connect you to a human agent."
 )
@@ -414,7 +414,7 @@ class AgentCore:
         # Agent loop: alternate (LLM call, tool-call dispatch) until the model
         # returns plain text or we hit the iteration ceiling.
         result: ChatResult | None = None
-        assistant_text = ESCALATION_FALLBACK
+        assistant_text = HUMAN_SUPPORT_FALLBACK
         total_tokens_in = 0
         total_tokens_out = 0
 

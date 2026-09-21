@@ -99,7 +99,7 @@ class CallCampaign(Base):
     # and X-Admin-Token-created ones. A role=="member" caller only sees/acts on
     # campaigns where this is their id (see routers/admin.py::_member_lead_scope);
     # admins and platform superusers see all. Also decides who a campaign
-    # escalation is routed to (see core/tools.py::transfer_to_human). SET NULL on
+    # Human Support is routed to (see core/tools.py::transfer_to_human). SET NULL on
     # delete so removing a teammate never blocks the delete or loses the campaign.
     created_by_account_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("account_users.id", ondelete="SET NULL"), nullable=True

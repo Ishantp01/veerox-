@@ -21,7 +21,7 @@ class Lead(Base):
     contact_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
     )
-    # Set only by transfer_to_human — the conversation the escalation was
+    # Set only by transfer_to_human — the conversation the Human Support was
     # raised from, so operators can jump straight to the transcript.
     # Other Lead-creation paths (capture_lead, campaign qualification) leave
     # this null.
@@ -72,9 +72,9 @@ class Lead(Base):
         nullable=False,
         index=True,
     )
-    # General lead ownership within an org. Two write paths: an escalation
-    # lead is self-claimed via PATCH /admin/escalations/{id}/claim (first
-    # claim wins, transfer_to_human writes intent="escalation" leads); any
+    # General lead ownership within an org. Two write paths: an Human Support
+    # lead is self-claimed via PATCH /admin/human-support/{id}/claim (first
+    # claim wins, transfer_to_human writes intent="human_support" leads); any
     # lead can otherwise be assigned by an admin via PATCH /admin/leads/{id}.
     # A role=="member" account_user only sees/acts on leads assigned to them
     # here (see admin._member_lead_scope) — role=="admin" still sees the

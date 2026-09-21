@@ -1,11 +1,11 @@
 "use client";
 
-import { EscalationsView } from "@/components/escalations/escalations-view";
+import { HumanSupportView } from "@/components/human-support/human-support-view";
 
-export default function CallingEscalationsPage() {
+export default function CallingHumanSupportPage() {
   return (
-    <EscalationsView
-      title="Escalations"
+    <HumanSupportView
+      title="Human Support"
       description="Live transfer_to_human events from calls — queue rows are pending pickup, lead rows are history."
       channel="voice"
       conversationBasePath="/calling/conversations"
