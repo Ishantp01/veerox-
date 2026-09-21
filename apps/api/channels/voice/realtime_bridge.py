@@ -283,7 +283,7 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
                     "type": "server_vad",
                     "threshold": 0.5,
                     "prefix_padding_ms": 300,
-                    "silence_duration_ms": 400,
+                    "silence_duration_ms": settings.voice_vad_silence_ms,
                     # Caller talking mid-answer no longer wipes the
                     # in-progress response — OpenAI keeps generating and
                     # speaking it to completion, and the caller's new speech

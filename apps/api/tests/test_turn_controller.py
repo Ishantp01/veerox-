@@ -616,3 +616,82 @@ async def test_answer_now_mode_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> 
     await _feed(state, oai, call, " lekin", " price")
     assert oai.types() == ["response.cancel"]
     assert state.finish_first_pending is False
+
+
+# ---------------------------------------------------------------------------
+# Latency: no endpoint hold by default, configurable VAD, timing log
+# ---------------------------------------------------------------------------
+
+
+def test_latency_defaults_favour_speed() -> None:
+    from apps.api.config import Settings
+
+    assert Settings.model_fields["voice_endpoint_hold"].default is False
+    assert Settings.model_fields["voice_vad_silence_ms"].default <= 300
+
+
+def test_vad_silence_window_comes_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    from apps.api.channels.voice import realtime_bridge
+
+    monkeypatch.setattr(realtime_bridge.settings, "voice_vad_silence_ms", 250)
+    event = realtime_bridge._session_update_event("hi")
+    assert event["session"]["audio"]["input"]["turn_detection"]["silence_duration_ms"] == 250
+
+
+async def test_unfinished_text_does_not_delay_the_reply_by_default() -> None:
+    state = _state(
+        live=_LiveOk(), caller_speaking=False, response_active=False,
+        utterance_text=" haan, mera matlab",
+    )
+    oai, call = _FakeOai(), _FakeCall()
+    await _event(state, oai, call, "input_audio_buffer.committed")
+    await asyncio.sleep(0.05)
+    assert state.hold_until == 0.0
+    assert "response.create" in oai.types()  # answered at once
+
+
+async def test_unfinished_text_is_held_when_endpoint_hold_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(adapter.settings, "voice_endpoint_hold", True)
+    state = _state(
+        live=_LiveOk(), caller_speaking=False, response_active=False,
+        utterance_text=" haan, mera matlab",
+    )
+    oai, call = _FakeOai(), _FakeCall()
+    await _event(state, oai, call, "input_audio_buffer.committed")
+    await asyncio.sleep(0.05)
+    assert state.hold_until > time.monotonic()
+    assert "response.create" not in oai.types()
+
+
+class _RecLog(_Log):
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    def info(self, event: str, **kw: Any) -> None:  # type: ignore[override]
+        self.events.append((event, kw))
+
+
+async def test_reply_latency_is_logged_once_at_first_audio() -> None:
+    state, oai, call, log = _state(), _FakeOai(), _FakeCall(), _RecLog()
+    state.t_speech_stopped = time.monotonic() - 0.5
+    state.t_reply_sent = time.monotonic() - 0.2
+    for _ in range(2):  # a second chunk must not log again
+        await adapter.handle_openai_event(
+            {"type": "response.output_audio.delta", "delta": "AAAA"}, call, oai, state, log,  # type: ignore[arg-type]
+        )
+    latency = [kw for name, kw in log.events if name == "voice_reply_latency"]
+    assert len(latency) == 1
+    assert latency[0]["kind"] == "audio"
+    assert 450 <= latency[0]["since_speech_stopped_ms"] <= 1500
+    assert 150 <= latency[0]["since_reply_sent_ms"] <= 1000
+
+
+async def test_reply_latency_is_logged_for_text_output_too() -> None:
+    state, oai, call, log = _state(), _FakeOai(), _FakeCall(), _RecLog()
+    state.t_reply_sent = time.monotonic() - 0.1
+    await adapter.handle_openai_event(
+        {"type": "response.output_text.delta", "delta": "Hello"}, call, oai, state, log,  # type: ignore[arg-type]
+    )
+    assert [name for name, _ in log.events].count("voice_reply_latency") == 1

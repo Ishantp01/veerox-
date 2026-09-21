@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     # "finish_first": pause, say it heard them, finish the point, read their
     # question back, then answer it.
     voice_interruption_mode: str = "answer_now"
+    # Silence (ms) the Realtime VAD waits before deciding the caller has finished
+    # speaking — the floor on how soon the agent can start answering. Lower =
+    # faster replies, but a caller who pauses mid-sentence is cut off more.
+    voice_vad_silence_ms: int = 300
+    # Adaptive endpointing: hold the reply up to ~1s when the caller's text looks
+    # unfinished ("haan, mera matlab..."). Off by default — it adds a second of
+    # latency whenever a sentence happens to end on a connective word.
+    voice_endpoint_hold: bool = False
     elevenlabs_api_key: str | None = None
     elevenlabs_voice_id: str = "CwhRBWXzGAHq8TQ4Fs17"
     # Low-latency model — eleven_multilingual_v2 sounds better but is too

@@ -150,6 +150,11 @@ class CallState:
     # ("haan, mera matlab..."); cleared as soon as they resume or the text
     # stops looking unfinished.
     hold_until: float = 0.0
+    # Latency instrumentation: when the caller's speech ended / when the reply
+    # request went out (monotonic; 0 = not measuring). Logged once the first
+    # audio or text of that reply arrives (voice_reply_latency).
+    t_speech_stopped: float = 0.0
+    t_reply_sent: float = 0.0
     # finish_first mode: a real question was recognised while the caller was
     # still speaking; the pause-and-acknowledge starts once their turn ends.
     finish_first_pending: bool = False
@@ -332,6 +337,23 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
         await oai_ws.send(json.dumps({"type": "response.cancel"}))
     else:
         await _send_ack(oai_ws, state)
+
+
+def _note_first_output(state: CallState, log: Any, kind: str) -> None:
+    """Log how long the caller waited: from the end of their speech, and from the
+    moment the reply was requested, to the first audio/text of the answer."""
+    if not state.t_reply_sent:
+        return
+    now = time.monotonic()
+    log.info(
+        "voice_reply_latency",
+        kind=kind,
+        since_speech_stopped_ms=int((now - state.t_speech_stopped) * 1000)
+        if state.t_speech_stopped
+        else None,
+        since_reply_sent_ms=int((now - state.t_reply_sent) * 1000),
+    )
+    state.t_reply_sent = 0.0
 
 
 def _live_ready(state: CallState) -> bool:
@@ -600,6 +622,7 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
         )
         state.overlap_transcripts = []
     else:
+        state.t_reply_sent = time.monotonic()
         await oai_ws.send(json.dumps({"type": "response.create"}))
 
 
@@ -895,6 +918,7 @@ async def handle_openai_event(
         delta = event.get("delta")
         if delta:
             await _send_media(call_ws, state, delta)
+            _note_first_output(state, log, "audio")
 
     elif etype == "input_audio_buffer.speech_started":
         # The caller started talking while the agent's current answer is
@@ -938,6 +962,7 @@ async def handle_openai_event(
 
     elif etype == "input_audio_buffer.speech_stopped":
         state.caller_speaking = False
+        state.t_speech_stopped = time.monotonic()
         if state.cut_eval_deadline:
             state.cut_eval_deadline = min(
                 state.cut_eval_deadline, time.monotonic() + LIVE_EVAL_TAIL_SECONDS
@@ -966,7 +991,7 @@ async def handle_openai_event(
         # wait a little before answering in case they carry on.
         hold = (
             turn_controller.endpoint_hold_seconds(state.utterance_text, _agent_busy(state))
-            if _live_ready(state)
+            if _live_ready(state) and settings.voice_endpoint_hold
             else 0.0
         )
         state.hold_until = time.monotonic() + hold if hold else 0.0
@@ -1031,6 +1056,8 @@ async def handle_openai_event(
         # full response to finish.
         delta = event.get("delta") or ""
         state.resp_text += delta
+        if delta:
+            _note_first_output(state, log, "text")
         if state.tts_provider == "elevenlabs" and delta:
             if state.eleven_session is None:
                 state.eleven_session = await elevenlabs_client.ElevenLabsTTSSession().__aenter__()
