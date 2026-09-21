@@ -491,7 +491,8 @@ async def get_reports_campaigns(
 async def export_reports_xlsx(
     db: DbDep,
     scope_org_id: AnalyticsScopeDep,
-    org: RequestOrgDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
     days: int = Query(30, ge=1, le=365),
 ) -> StreamingResponse:
@@ -501,7 +502,7 @@ async def export_reports_xlsx(
     reading the dashboard on screen. Reuses the JSON endpoints' own query
     logic directly rather than duplicating it."""
     timeseries = await get_reports_timeseries(db, scope_org_id, x_admin_token, days)
-    campaign_rows = await get_reports_campaigns(db, org, x_admin_token)
+    campaign_rows = await get_reports_campaigns(db, scope_org_id, org, payload, x_admin_token)
 
     workbook = openpyxl.Workbook()
     trend_sheet = workbook.active
