@@ -507,15 +507,15 @@ async def export_reports_xlsx(
     workbook = openpyxl.Workbook()
     trend_sheet = workbook.active
     trend_sheet.title = "Daily trend"
-    trend_sheet.append(["Date", "Calls", "WhatsApp", "Qualified", "Spend (USD)"])
+    trend_sheet.append(["Date", "Calls", "WhatsApp", "Interested"])
     for point in timeseries:
         trend_sheet.append(
-            [point.date, point.calls, point.whatsapp_messages, point.qualified_count, point.usd_spend]
+            [point.date, point.calls, point.whatsapp_messages, point.qualified_count]
         )
 
     campaign_sheet = workbook.create_sheet("Campaign conversion")
     campaign_sheet.append(
-        ["Name", "Channel", "Status", "Pending", "Calling", "Completed", "Failed", "Qualified", "Qualification rate"]
+        ["Name", "Channel", "Status", "Pending", "Calling", "Completed", "Failed", "Interested", "Interest rate"]
     )
     for row in campaign_rows:
         campaign_sheet.append(
@@ -1233,7 +1233,7 @@ async def export_leads_xlsx(
 ) -> StreamingResponse:
     """Same data/filters as GET /admin/leads.csv, as an .xlsx workbook —
     e.g. `?qualification_status=qualified` for the Reports page's "Export
-    qualified leads" button."""
+    interested leads" button."""
     stmt = _leads_export_stmt(
         scope_org_id,
         _member_lead_scope(scope_org_id, org, payload),
@@ -1261,7 +1261,7 @@ async def export_leads_xlsx(
     workbook.save(buf)
     buf.seek(0)
 
-    filename = "qualified-leads.xlsx" if qualification_status == "qualified" else "leads.xlsx"
+    filename = "interested-leads.xlsx" if qualification_status == "qualified" else "leads.xlsx"
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -34,7 +34,7 @@ interface SeriesDef {
 const SERIES: SeriesDef[] = [
   { key: "calls", label: "Calls", colorKey: "calls" },
   { key: "whatsapp_messages", label: "WhatsApp Messages", colorKey: "whatsapp" },
-  { key: "qualified_count", label: "Qualified Leads", colorKey: "qualified" },
+  { key: "qualified_count", label: "Interested Leads", colorKey: "qualified" },
 ];
 
 function TrendTooltip({

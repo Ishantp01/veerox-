@@ -18,8 +18,8 @@ export function CampaignsConversionTable({ rows }: { rows: ReportsCampaignRow[] 
             <TableHeader>Channel</TableHeader>
             <TableHeader>Status</TableHeader>
             <TableHeader>Completed</TableHeader>
-            <TableHeader>Qualified</TableHeader>
-            <TableHeader>Qualification rate</TableHeader>
+            <TableHeader>Interested</TableHeader>
+            <TableHeader>Interest rate</TableHeader>
           </TableRow>
         </thead>
         <tbody>

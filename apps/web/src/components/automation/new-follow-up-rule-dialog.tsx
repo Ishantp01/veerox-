@@ -17,15 +17,13 @@ import {
   Textarea,
   useToast,
 } from "@/components/ui";
-import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
 import {
   TemplateParamMapper,
   guessTemplateParamSource,
   resolveTemplateParams,
   type TemplateParamSource,
 } from "@/components/whatsapp/template-param-mapper";
-import { useCreateFollowUpRule, useTemplates, useWhatsappAssets } from "@/lib/hooks";
-import type { LeadStatus } from "@/lib/types";
+import { useCreateFollowUpRule, useLeadStatusOptions, useTemplates, useWhatsappAssets } from "@/lib/hooks";
 
 const ruleSchema = z.object({
   name: z.string().trim().min(1, "Rule name is required"),
@@ -40,7 +38,8 @@ export function NewFollowUpRuleDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [channel, setChannel] = useState<"whatsapp" | "voice">("whatsapp");
-  const [status, setStatus] = useState<LeadStatus>("contacted");
+  const [status, setStatus] = useState<string>("contacted");
+  const { options: statusOptions } = useLeadStatusOptions();
   const [delayHours, setDelayHours] = useState("24");
   const [templateId, setTemplateId] = useState("");
   const [paramSources, setParamSources] = useState<TemplateParamSource[]>([]);
@@ -231,12 +230,12 @@ export function NewFollowUpRuleDialog() {
                 <Select
                   id="rule-status"
                   value={status}
-                  onChange={(v) => setStatus(v as LeadStatus)}
+                  onChange={(v) => setStatus(v)}
                   className="w-full"
                 >
-                  {LEAD_STATUS_OPTIONS.map((s) => (
-                    <option key={s} value={s}>
-                      {LEAD_STATUS_LABELS[s]}
+                  {statusOptions.map((s) => (
+                    <option key={s.value} value={s.value}>
+                      {s.label}
                     </option>
                   ))}
                 </Select>

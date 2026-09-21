@@ -113,7 +113,7 @@ export interface ContactWithLeads extends Contact {
 }
 
 export interface PipelineStage {
-  status: LeadStatus;
+  status: string;
   count: number;
   value: number;
 }

@@ -21,12 +21,11 @@ import {
 import { NewFollowUpRuleDialog } from "@/components/automation/new-follow-up-rule-dialog";
 import { FollowUpTaskStatusBadge } from "@/components/automation/follow-up-task-status-badge";
 import { ChannelBadge } from "@/components/conversations/channel-badge";
-import { LEAD_STATUS_LABELS } from "@/components/leads/status-badge";
-import type { LeadStatus } from "@/lib/types";
 import {
   useCancelFollowUpTask,
   useDeleteFollowUpRule,
   useFollowUpRules,
+  useLeadStatusOptions,
   useFollowUpTasks,
   useUpdateFollowUpRule,
 } from "@/lib/hooks";
@@ -34,6 +33,7 @@ import { formatDateTime } from "@/lib/format";
 
 export default function FollowUpsPage() {
   const rules = useFollowUpRules();
+  const { labelFor } = useLeadStatusOptions();
   const tasks = useFollowUpTasks();
   const updateRule = useUpdateFollowUpRule();
   const deleteRule = useDeleteFollowUpRule();
@@ -115,7 +115,7 @@ export default function FollowUpsPage() {
                       <TableCell className="text-xs text-slate-600 dark:text-slate-400">
                         status ={" "}
                         {rule.trigger_config.status
-                          ? LEAD_STATUS_LABELS[rule.trigger_config.status as LeadStatus]
+                          ? labelFor(rule.trigger_config.status)
                           : "—"}
                         , wait {rule.trigger_config.delay_hours ?? 0}h
                       </TableCell>

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
+import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
 import type { LeadStatusPreset } from "@/lib/types";
 
 /**
@@ -16,6 +17,23 @@ export function useLeadStatusPresets() {
     queryKey: queryKeys.leadStatusPresets(),
     queryFn: () => apiFetch<LeadStatusPreset[]>("/admin/lead-status-presets"),
   });
+}
+
+/**
+ * Every status a lead can have in this org — the built-ins plus its custom
+ * ones — as {value,label} options, plus `labelFor` for showing any status
+ * string (custom names are their own label). Use this for any status
+ * dropdown/label outside the leads pages so custom statuses appear everywhere.
+ */
+export function useLeadStatusOptions() {
+  const { data } = useLeadStatusPresets();
+  const options = [
+    ...LEAD_STATUS_OPTIONS.map((s) => ({ value: s as string, label: LEAD_STATUS_LABELS[s] })),
+    ...(data ?? []).map((p) => ({ value: p.name, label: p.name })),
+  ];
+  const labelFor = (status: string) =>
+    (LEAD_STATUS_LABELS as Record<string, string>)[status] ?? status;
+  return { options, labelFor };
 }
 
 /** POST /admin/lead-status-presets → LeadStatusPreset */

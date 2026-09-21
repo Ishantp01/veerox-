@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 
-from apps.api.db.models import Lead
+from apps.api.db.models import Lead, LeadStatusPreset
 from apps.api.deps import DbDep, RequestOrgDep, require_feature, verify_admin_or_session
 from apps.api.schemas.lead import LEAD_QUALIFICATION_STATUSES, LEAD_STATUSES
 from apps.api.schemas.sales import (
@@ -35,9 +35,20 @@ async def get_pipeline(db: DbDep, org_id: RequestOrgDep) -> PipelineOut:
     ).all()
     by_status = {status: (count, float(value)) for status, count, value in rows}
 
+    # Built-in statuses first, then this org's custom ones (LeadStatusPreset),
+    # then any status still on leads whose preset was since deleted — so no
+    # lead ever drops out of the pipeline totals.
+    preset_names = (
+        await db.execute(
+            select(LeadStatusPreset.name)
+            .where(LeadStatusPreset.org_id == org_id)
+            .order_by(LeadStatusPreset.created_at)
+        )
+    ).scalars().all()
+    ordered_statuses = list(dict.fromkeys([*LEAD_STATUSES, *preset_names, *by_status]))
     stages = [
         PipelineStage(status=status, count=by_status.get(status, (0, 0.0))[0], value=by_status.get(status, (0, 0.0))[1])
-        for status in LEAD_STATUSES
+        for status in ordered_statuses
     ]
     total_value = sum(stage.value for stage in stages)
     return PipelineOut(stages=stages, total_value=total_value)

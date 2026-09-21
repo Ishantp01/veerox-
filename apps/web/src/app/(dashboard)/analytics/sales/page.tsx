@@ -8,12 +8,12 @@ import { ChannelBadge } from "@/components/conversations/channel-badge";
 import {
   LEAD_QUALIFICATION_LABELS,
 } from "@/components/leads/qualification-badge";
-import { LEAD_STATUS_LABELS } from "@/components/leads/status-badge";
 import { Card, CardContent, CardHeader, CardTitle, Skeleton, Table, TableCell, TableHeader, TableRow } from "@/components/ui";
-import { usePipeline, useRevenueSummary } from "@/lib/hooks";
+import { useLeadStatusOptions, usePipeline, useRevenueSummary } from "@/lib/hooks";
 import { formatUsd } from "@/lib/format";
 
 export default function SalesDashboardPage() {
+  const { labelFor } = useLeadStatusOptions();
   const pipeline = usePipeline();
   const revenue = useRevenueSummary();
 
@@ -94,7 +94,7 @@ export default function SalesDashboardPage() {
                         {(pipeline.data?.stages ?? []).map((stage) => (
                           <TableRow key={stage.status}>
                             <TableCell className="font-semibold text-slate-800 dark:text-slate-100">
-                              {LEAD_STATUS_LABELS[stage.status]}
+                              {labelFor(stage.status)}
                             </TableCell>
                             <TableCell className="tabular-nums">{stage.count}</TableCell>
                             <TableCell className="tabular-nums">{formatUsd(stage.value)}</TableCell>

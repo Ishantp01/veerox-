@@ -82,7 +82,7 @@ export default function ReportsPage() {
       const stamp = new Date().toISOString().slice(0, 10);
       await downloadCsv(
         "/admin/leads.xlsx?qualification_status=qualified",
-        `qualified-leads-${stamp}.xlsx`
+        `interested-leads-${stamp}.xlsx`
       );
       toast({
         title: "Export started",
@@ -139,7 +139,7 @@ export default function ReportsPage() {
             </Button>
             <Button variant="outline" size="sm" onClick={handleExportQualified} loading={exporting}>
               {!exporting && <Download size={14} aria-hidden />}
-              Export qualified leads
+              Export interested leads
             </Button>
           </div>
         }
