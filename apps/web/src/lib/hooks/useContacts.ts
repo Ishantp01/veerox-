@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
-import type { Contact, ContactWithLeads } from "@/lib/types";
+import type { Contact, ContactWithLeads, Lead } from "@/lib/types";
 
 /**
  * Contacts list, newest first. Optional `q` substring-filters by name/phone.
@@ -50,6 +50,26 @@ export function useCreateContact() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["contacts"] });
+    },
+  });
+}
+
+/**
+ * Put a contact on the Leads page: creates a Lead linked to it with status
+ * "Contact" (idempotent — an existing lead for the contact is returned).
+ *
+ * POST /crm/contacts/{id}/lead → Lead
+ */
+export function useCreateLeadFromContact() {
+  const queryClient = useQueryClient();
+
+  return useMutation<Lead, Error, string>({
+    mutationFn: (contactId) =>
+      apiFetch<Lead>(`/crm/contacts/${contactId}/lead`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: ["contacts"] });
+      queryClient.invalidateQueries({ queryKey: ["lead-status-presets"] });
     },
   });
 }

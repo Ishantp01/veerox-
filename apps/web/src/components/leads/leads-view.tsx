@@ -6,12 +6,13 @@ import { Download, FileSpreadsheet, Search, Upload, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
+import { NewContactDialog } from "@/components/crm/new-contact-dialog";
 import { LeadTable } from "@/components/leads/lead-table";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
 import { Button, EmptyState, Input, Pagination, Select, SkeletonRows, Table, useToast } from "@/components/ui";
 import { SESSION_TOKEN_KEY } from "@/lib/api";
 import { downloadCsv } from "@/lib/download-csv";
-import { useLeads, useLeadStatusPresets } from "@/lib/hooks";
+import { useCreateLeadFromContact, useLeads, useLeadStatusPresets } from "@/lib/hooks";
 import type { LeadStatus } from "@/lib/types";
 
 interface ImportLeadsResult {
@@ -93,6 +94,7 @@ export interface LeadsViewProps {
  */
 export function LeadsView({ title, description, channel, detailBasePath }: LeadsViewProps) {
   const searchParams = useSearchParams();
+  const createLeadFromContact = useCreateLeadFromContact();
   const initialChannelParam = searchParams.get("channel");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -292,6 +294,24 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
               {!exporting && <Download size={15} aria-hidden />}
               Export CSV
             </Button>
+            <NewContactDialog
+              onCreated={(contact) =>
+                createLeadFromContact.mutate(contact.id, {
+                  onSuccess: () =>
+                    toast({
+                      title: "Added to Leads",
+                      description: "The new contact is on this page with status Contact.",
+                      variant: "success",
+                    }),
+                  onError: (err) =>
+                    toast({
+                      title: "Contact saved, but not added to Leads",
+                      description: err.message,
+                      variant: "error",
+                    }),
+                })
+              }
+            />
           </div>
         }
       />

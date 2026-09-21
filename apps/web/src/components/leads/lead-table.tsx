@@ -1,10 +1,9 @@
 ﻿"use client";
 
 import { useRouter } from "next/navigation";
-import { Badge, Button, Table, TableHeader, TableRow, TableCell, useToast } from "@/components/ui";
-import { apiFetch } from "@/lib/api";
+import { Badge, Button, Table, TableHeader, TableRow, TableCell } from "@/components/ui";
 import { formatDateTime, formatPhone } from "@/lib/format";
-import type { Lead, LeadDetail } from "@/lib/types";
+import type { Lead } from "@/lib/types";
 import { IntentBadge } from "./intent-badge";
 import { StatusBadge } from "./status-badge";
 
@@ -21,38 +20,6 @@ export interface LeadTableProps {
  */
 export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
   const router = useRouter();
-  const { toast } = useToast();
-
-  /** Open the lead's conversation (not the lead page). A Human Support lead
-   * carries the conversation that raised it; otherwise use the newest
-   * conversation that actually has messages (calls that dropped before anyone
-   * spoke are empty), falling back to the newest of all. */
-  async function openConversation(lead: Lead) {
-    // The unified CRM route (highlights "Conversations" in the sidebar), not
-    // the per-channel /calling or /whatsapp one, which would light up AI Calling.
-    const go = (id: string) => router.push(`/conversations/${id}`);
-    if (lead.conversation_id) {
-      go(lead.conversation_id);
-      return;
-    }
-    try {
-      const detail = await apiFetch<LeadDetail>(`/admin/leads/${lead.id}`);
-      const conv =
-        detail.conversations.find((c) => (c.message_count ?? 0) > 0) ?? detail.conversations[0];
-      if (!conv) {
-        toast({ title: "No conversation yet", description: "This lead has no conversation.", variant: "error" });
-        return;
-      }
-      go(conv.id);
-    } catch (err) {
-      toast({
-        title: "Couldn't open conversation",
-        description: err instanceof Error ? err.message : undefined,
-        variant: "error",
-      });
-    }
-  }
-
   return (
     <div
       data-tour="page-table"
@@ -133,7 +100,7 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
                       size="sm"
                       onClick={(e) => {
                         e.stopPropagation();
-                        void openConversation(lead);
+                        router.push(`/conversations/lead/${lead.id}`);
                       }}
                     >
                       View

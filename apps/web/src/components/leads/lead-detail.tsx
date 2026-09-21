@@ -2,13 +2,11 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { ArrowLeft, CalendarClock, MessageSquare, Save, Tag, UserCircle, Users } from "lucide-react";
+import { ArrowLeft, CalendarClock, Save, Tag, UserCircle } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import { ChannelBadge } from "@/components/conversations/channel-badge";
-import { LeadHumanSupportCard } from "@/components/leads/lead-human-support-card";
 import { IntentBadge } from "@/components/leads/intent-badge";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
 import {
@@ -24,15 +22,10 @@ import {
   DialogContent,
   DialogFooter,
   DialogTitle,
-  EmptyState,
   Input,
   Label,
   Select,
   Skeleton,
-  Table,
-  TableCell,
-  TableHeader,
-  TableRow,
   Textarea,
   useToast,
 } from "@/components/ui";
@@ -55,10 +48,6 @@ function toDatetimeLocal(iso: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function conversationHref(channel: string, id: string): string {
-  return channel === "voice" ? `/calling/conversations/${id}` : `/whatsapp/conversations/${id}`;
-}
-
 export interface LeadDetailProps {
   id: string;
   /** Where the "back" link goes, e.g. "/whatsapp/leads". */
@@ -72,7 +61,6 @@ export interface LeadDetailProps {
  * per-channel /whatsapp/leads/[id] and /calling/leads/[id] pages.
  */
 export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
-  const router = useRouter();
   const { toast } = useToast();
   const lead = useLead(id);
   const updateLead = useUpdateLead();
@@ -114,13 +102,6 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
     setFollowUp3Note(lead.data.follow_up_3_note ?? "");
     setTagsInput((lead.data.tags ?? []).join(", "));
   }, [lead.data]);
-
-  // Deep links like /crm/leads/{id}#human-support: the target card only
-  // exists after the lead loads, so the browser's own hash scroll misses it.
-  useEffect(() => {
-    if (!lead.data || typeof window === "undefined" || !window.location.hash) return;
-    document.getElementById(window.location.hash.slice(1))?.scrollIntoView({ block: "start" });
-  }, [lead.data?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSave() {
     updateLead.mutate(
@@ -282,8 +263,6 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                   </dl>
                 </CardContent>
               </Card>
-
-              <LeadHumanSupportCard lead={lead.data} />
 
               {lead.data.claimed_by_account_user_id && (
                 <Card>
@@ -636,74 +615,6 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
                       Save tags
                     </Button>
                   </div>
-                </CardContent>
-              </Card>
-
-              <Card id="conversation">
-                <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <MessageSquare size={15} aria-hidden className="text-slate-400" />
-                    <CardTitle>Conversation History</CardTitle>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  {lead.data.conversations.length === 0 ? (
-                    <EmptyState
-                      icon={Users}
-                      title="No conversations yet"
-                      description="This lead's conversations will appear here once they talk to the agent."
-                      className="border-0"
-                    />
-                  ) : (
-                    <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
-                      <Table>
-                        <thead>
-                          <TableRow isHeader>
-                            <TableHeader>Channel</TableHeader>
-                            <TableHeader>Started</TableHeader>
-                            <TableHeader>Ended</TableHeader>
-                            <TableHeader># Messages</TableHeader>
-                          </TableRow>
-                        </thead>
-                        <tbody>
-                          {lead.data.conversations.map((c) => {
-                            const href = conversationHref(c.channel, c.id);
-                            return (
-                              <TableRow
-                                key={c.id}
-                                role="link"
-                                tabIndex={0}
-                                aria-label={`Open conversation ${c.id}`}
-                                onClick={() => router.push(href)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter" || e.key === " ") {
-                                    e.preventDefault();
-                                    router.push(href);
-                                  }
-                                }}
-                                className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
-                              >
-                                <TableCell>
-                                  <ChannelBadge
-                                    channel={c.channel === "voice" ? "voice" : "whatsapp"}
-                                  />
-                                </TableCell>
-                                <TableCell className="text-xs text-slate-500">
-                                  {formatDateTime(c.started_at)}
-                                </TableCell>
-                                <TableCell className="text-xs text-slate-500">
-                                  {formatDateTime(c.ended_at)}
-                                </TableCell>
-                                <TableCell className="font-bold text-slate-800 dark:text-slate-100">
-                                  {c.message_count ?? "—"}
-                                </TableCell>
-                              </TableRow>
-                            );
-                          })}
-                        </tbody>
-                      </Table>
-                    </div>
-                  )}
                 </CardContent>
               </Card>
             </div>

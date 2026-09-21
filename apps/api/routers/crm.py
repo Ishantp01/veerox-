@@ -7,15 +7,16 @@ from uuid import UUID
 import openpyxl
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from apps.api.core.phone import normalize_phone
-from apps.api.db.models import Contact, Org
+from apps.api.db.models import Contact, Lead, LeadStatusPreset, Org, User
 from apps.api.deps import (
     DbDep,
     RequestAccountUserDep,
+    MemberScopeDep,
     RequestOrgDep,
     require_feature,
     verify_admin_or_session,
@@ -26,6 +27,7 @@ from apps.api.routers.admin import (
     _iter_csv_rows,
     _iter_xlsx_rows,
 )
+from apps.api.schemas.lead import LeadOut
 from apps.api.schemas.crm import (
     ContactCreate,
     ContactImportError,
@@ -98,6 +100,85 @@ async def create_contact(
         raise HTTPException(status_code=409, detail="You already have a contact with that phone number")
     await db.refresh(contact)
     return contact
+
+
+# Status a Lead gets when it is created from a Contact (Leads page "New
+# Contact"). A custom pipeline stage — auto-added to the org's
+# LeadStatusPreset list the first time it's needed.
+CONTACT_LEAD_STATUS = "Contact"
+
+
+@router.post("/contacts/{contact_id}/lead", response_model=LeadOut)
+async def create_lead_from_contact(
+    contact_id: UUID,
+    db: DbDep,
+    org_id: RequestOrgDep,
+    account_user_id: RequestAccountUserDep,
+    member_scope: MemberScopeDep,
+) -> Lead:
+    """Bring a Contact onto the Leads page: create a Lead linked to it with
+    status "Contact". Idempotent — a contact that already has a lead returns
+    that lead untouched."""
+    contact = (
+        await db.execute(
+            select(Contact).where(
+                Contact.id == contact_id,
+                Contact.org_id == org_id,
+                Contact.created_by_account_user_id == account_user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    existing = (
+        await db.execute(
+            select(Lead)
+            .where(Lead.org_id == org_id, Lead.contact_id == contact.id)
+            .order_by(Lead.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    # Leads hang off the messaging User (one per org+phone), not the Contact.
+    user = (
+        await db.execute(select(User).where(User.org_id == org_id, User.phone == contact.phone))
+    ).scalar_one_or_none()
+    if user is None:
+        user = User(org_id=org_id, phone=contact.phone, name=contact.name)
+        db.add(user)
+        await db.flush()
+
+    has_preset = (
+        await db.execute(
+            select(LeadStatusPreset.id).where(
+                LeadStatusPreset.org_id == org_id, LeadStatusPreset.name == CONTACT_LEAD_STATUS
+            )
+        )
+    ).first()
+    if has_preset is None:
+        db.add(LeadStatusPreset(org_id=org_id, name=CONTACT_LEAD_STATUS))
+
+    lead = Lead(
+        org_id=org_id,
+        user_id=user.id,
+        contact_id=contact.id,
+        name=contact.name,
+        phone=contact.phone,
+        intent="contact",
+        status=CONTACT_LEAD_STATUS,
+        tags=contact.tags,
+        # A member only sees leads they own, so they'd lose sight of the one
+        # they just created otherwise.
+        claimed_by_account_user_id=member_scope,
+        claimed_at=func.now() if member_scope else None,
+    )
+    db.add(lead)
+    await db.commit()
+    await db.refresh(lead)
+    return lead
 
 
 @router.get("/contacts/sample.csv")

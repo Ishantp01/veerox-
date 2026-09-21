@@ -66,6 +66,28 @@ async def test_create_contact_records_creator(client: AsyncClient, db_session: A
     assert body["created_by_account_user_id"] is not None
 
 
+async def test_create_lead_from_contact_uses_contact_status_and_is_idempotent(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    headers = await _login_as(client, db_session, email="rep1@example.com", role="member")
+
+    with _require_session_auth(True):
+        contact = await client.post(
+            "/crm/contacts", json={"phone": "+919876543277", "name": "Asha"}, headers=headers
+        )
+        cid = contact.json()["id"]
+        first = await client.post(f"/crm/contacts/{cid}/lead", headers=headers)
+        second = await client.post(f"/crm/contacts/{cid}/lead", headers=headers)
+    assert first.status_code == 200
+    body = first.json()
+    assert body["status"] == "Contact"
+    assert body["contact_id"] == cid
+    assert body["phone"] == "+919876543277"
+    assert body["claimed_by_account_user_id"] is not None
+    assert second.json()["id"] == body["id"]
+
+
 async def test_create_contact_rejects_duplicate_within_own_list(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

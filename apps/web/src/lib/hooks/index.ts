@@ -103,6 +103,7 @@ export {
   useContacts,
   useContact,
   useCreateContact,
+  useCreateLeadFromContact,
   useUpdateContact,
   useDeleteContact,
   type ContactCreateInput,

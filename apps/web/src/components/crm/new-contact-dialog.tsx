@@ -17,6 +17,7 @@ import {
 } from "@/components/ui";
 import { useCreateContact, useOrgCountryCode } from "@/lib/hooks";
 import { PHONE_MESSAGE, isValidPhone, normalizePhone } from "@/lib/phone";
+import type { Contact } from "@/lib/types";
 
 type ContactForm = { name: string; phone: string; email: string; company: string };
 
@@ -47,7 +48,12 @@ function buildContactSchema(countryCode: string) {
 
 type ContactFieldErrors = Partial<Record<keyof ContactForm, string>>;
 
-export function NewContactDialog() {
+export interface NewContactDialogProps {
+  /** Called with the created contact (e.g. to also put it on the Leads page). */
+  onCreated?: (contact: Contact) => void;
+}
+
+export function NewContactDialog({ onCreated }: NewContactDialogProps = {}) {
   const [open, setOpen] = useState(false);
   const countryCode = useOrgCountryCode();
   const contactSchema = useMemo(() => buildContactSchema(countryCode), [countryCode]);
@@ -94,8 +100,9 @@ export function NewContactDialog() {
         company: form.company || null,
       },
       {
-        onSuccess: () => {
+        onSuccess: (contact) => {
           toast({ title: "Contact created", variant: "success" });
+          onCreated?.(contact);
           setForm(EMPTY);
           setFieldErrors({});
           setOpen(false);
