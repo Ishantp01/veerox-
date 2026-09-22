@@ -264,6 +264,16 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
             '<?xml version="1.0" encoding="UTF-8"?>'
             "<Response>"
             f'<Connect><Stream url="{_xml_escape(ws_url)}">{param_tags}</Stream></Connect>'
+            # Twilio resumes TwiML execution here if the Stream connection
+            # ends for any reason (bridge crash, network blip) instead of
+            # ending the call outright — with nothing after </Connect>,
+            # Twilio just hangs up silently, which reads to the caller as an
+            # unexplained cut. A brief apology + hangup at least gives them
+            # a reason instead of dead air/silence. Plivo's own
+            # keepCallAlive="true" (see the branch below) already leaves the
+            # PSTN leg open rather than closing it, so this is Twilio-only.
+            "<Say>Sorry, we're having a connection issue. Please try calling "
+            "again in a moment.</Say><Hangup/>"
             "</Response>"
         )
         logger.info("twilio_answer_served", caller=caller, call_uuid=call_uuid)

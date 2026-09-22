@@ -274,16 +274,25 @@ async def _dispatch_tool(
     # text, unaltered by the model — initiate_ai_call uses it as a
     # deterministic backstop against misreading "connect me to a human" as
     # a request to be called back (see core/tools.py).
-    result = await handler(
-        db,
-        user_id=user_id,
-        org_id=org_id,
-        channel=channel,
-        campaign_target_id=campaign_target_id,
-        conversation_id=conversation_id,
-        raw_message=raw_message,
-        **args,
-    )
+    try:
+        result = await handler(
+            db,
+            user_id=user_id,
+            org_id=org_id,
+            channel=channel,
+            campaign_target_id=campaign_target_id,
+            conversation_id=conversation_id,
+            raw_message=raw_message,
+            **args,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A handler can raise (most commonly TypeError for a required arg the
+        # model's tool-call payload left out) — surface it as a tool error the
+        # model can see and recover from, same as the voice path
+        # (channels/voice/adapter.py::_dispatch_realtime_tool), instead of
+        # letting it propagate and poison the whole turn.
+        logger.warning("tool_execution_failed", name=tool_call.name, exc_info=True)
+        return {"status": "error", "reason": f"tool_execution_failed:{type(exc).__name__}"}
     if not isinstance(result, dict):
         # Defensive: every handler advertises dict[str, Any] but be paranoid here
         # because malformed results would poison the next LLM iteration.

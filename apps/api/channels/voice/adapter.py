@@ -783,16 +783,28 @@ async def _dispatch_realtime_tool(
         return {"status": "error", "reason": "malformed_json_arguments"}
     if not isinstance(args, dict):
         return {"status": "error", "reason": "arguments_not_object"}
-    async with AsyncSessionLocal() as db:
-        result = await handler(
-            db,
-            user_id=user_id,
-            org_id=org_id,
-            channel="voice",
-            campaign_target_id=campaign_target_id,
-            conversation_id=conversation_id,
-            **args,
-        )
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await handler(
+                db,
+                user_id=user_id,
+                org_id=org_id,
+                channel="voice",
+                campaign_target_id=campaign_target_id,
+                conversation_id=conversation_id,
+                **args,
+            )
+    except Exception as exc:  # noqa: BLE001
+        # A tool handler can raise (most commonly TypeError for a required
+        # arg the model's function-call payload left out — more likely right
+        # after a language switch or while the model is juggling several
+        # queued questions at once). This used to propagate all the way up
+        # through handle_openai_event -> pump_openai_to_call's broad
+        # except Exception, which ends that pump and tears down the whole
+        # live call for what is really just one bad tool call. Fail this one
+        # tool call instead, so the call survives it.
+        logger.warning("voice_tool_dispatch_failed", name=name, exc_info=True)
+        return {"status": "error", "reason": f"tool_execution_failed:{type(exc).__name__}"}
     return result if isinstance(result, dict) else {"status": "ok", "result": str(result)}
 
 

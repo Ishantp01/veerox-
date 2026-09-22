@@ -85,6 +85,13 @@ async def _connect_to_openai(org_id: UUID | None = None) -> Any:
         f"{_OPENAI_REALTIME_URL}?model={settings.openai_realtime_model}",
         additional_headers={"Authorization": f"Bearer {api_key}"},
         max_size=None,
+        # Explicit rather than relying on library defaults, so a dropped
+        # connection is detected (and this leg's pump ends, per the
+        # try/except around it above) within a bounded, documented time
+        # instead of however the installed websockets version happens to
+        # default it.
+        ping_interval=20,
+        ping_timeout=20,
     )
 
 
@@ -458,6 +465,11 @@ async def voice_stream(ws: WebSocket) -> None:
     org_id = await _resolve_org_id(campaign_target_id, raw_org_id)
     log = logger.bind(caller=caller, call_uuid=call_uuid, provider=provider)
     log.info("voice_stream_connected")
+    # Wall-clock reference for every close/error log below, so a dropped
+    # call is immediately attributable to (or ruled out as) a duration cap —
+    # e.g. the Realtime API's session-length limit — from the log line
+    # alone, without cross-referencing a separate start timestamp.
+    call_started = time.monotonic()
 
     # Same fallback used for state.org_id below (billing/leads/conversation
     # attribution) — _system_instructions must resolve the org's script
@@ -572,9 +584,16 @@ async def voice_stream(ws: WebSocket) -> None:
                             log.info("call_stream_stop")
                             break
                 except WebSocketDisconnect:
-                    log.info("call_ws_disconnected")
+                    log.info(
+                        "call_ws_disconnected",
+                        call_duration_s=round(time.monotonic() - call_started, 1),
+                    )
                 except Exception as exc:  # noqa: BLE001
-                    log.warning("pump_call_error", error=str(exc))
+                    log.warning(
+                        "pump_call_error",
+                        error=str(exc),
+                        call_duration_s=round(time.monotonic() - call_started, 1),
+                    )
                 finally:
                     await oai.close()
 
@@ -582,13 +601,44 @@ async def voice_stream(ws: WebSocket) -> None:
                 try:
                     async for raw in oai:
                         event = json.loads(raw)
-                        await voice_adapter.handle_openai_event(
-                            event, ws, oai, state, log
-                        )
+                        try:
+                            await voice_adapter.handle_openai_event(
+                                event, ws, oai, state, log
+                            )
+                        except websockets.ConnectionClosed:
+                            # The OpenAI socket itself died mid-handler (e.g. a
+                            # send() raced a close) — this DOES end the call,
+                            # let it propagate to the outer handler below.
+                            raise
+                        except Exception as exc:  # noqa: BLE001
+                            # One malformed/racy event (a bad tool-call
+                            # payload, a stray state-machine edge case) used
+                            # to end the whole pump here, which tears down
+                            # the live call for what is really just one bad
+                            # turn. Drop the event, keep the call alive.
+                            log.warning(
+                                "voice_event_handler_error",
+                                event_type=event.get("type"),
+                                error=str(exc),
+                                call_duration_s=round(time.monotonic() - call_started, 1),
+                                exc_info=True,
+                            )
                 except websockets.ConnectionClosed:
-                    log.info("openai_ws_closed")
+                    # If this fires around the same call_duration_s across
+                    # multiple calls, that's a session-duration cap on the
+                    # Realtime model, not a random drop — see this
+                    # function's module docstring / the P1 note in the
+                    # voice-call-drop investigation.
+                    log.info(
+                        "openai_ws_closed",
+                        call_duration_s=round(time.monotonic() - call_started, 1),
+                    )
                 except Exception as exc:  # noqa: BLE001
-                    log.warning("pump_openai_error", error=str(exc))
+                    log.warning(
+                        "pump_openai_error",
+                        error=str(exc),
+                        call_duration_s=round(time.monotonic() - call_started, 1),
+                    )
 
             tasks = [
                 asyncio.create_task(pump_call_to_openai()),
@@ -605,7 +655,11 @@ async def voice_stream(ws: WebSocket) -> None:
             # where something above raised before the pumps ever started.
             await oai.close()
     except Exception as exc:  # noqa: BLE001
-        log.warning("voice_stream_error", error=str(exc))
+        log.warning(
+            "voice_stream_error",
+            error=str(exc),
+            call_duration_s=round(time.monotonic() - call_started, 1),
+        )
         await record_error()
     finally:
         # None when a precall connection was claimed (nothing of its own to
@@ -627,4 +681,4 @@ async def voice_stream(ws: WebSocket) -> None:
             await voice_adapter.close_voice_conversation(
                 conversation_id, campaign_target_id=campaign_target_id
             )
-        log.info("voice_stream_ended")
+        log.info("voice_stream_ended", call_duration_s=round(time.monotonic() - call_started, 1))
