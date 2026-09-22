@@ -173,6 +173,14 @@ class CallState:
     paused_text: str = ""
     paused_heard_pct: int = 0
     hold_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
+    # The most recent FULLY COMPLETED thing the agent said (set on every
+    # response.audio_transcript.done). Unlike resp_text (reset to "" at the
+    # start of every response, so often empty when an ack/restate beat needs
+    # a language sample) or paused_text (frozen once by a finish_first pause
+    # and, before this field existed, never refreshed afterwards — see
+    # _language_sample), this always reflects the call's actual current
+    # language, however long ago the last full turn finished.
+    last_spoken_text: str = ""
 
 
 # Pause between the caller finishing their question and the agent cutting in
@@ -266,8 +274,16 @@ def _oob_response(request: str, context: str) -> str:
 
 def _language_sample(state: CallState) -> str:
     """A snippet of what the agent has been saying, so an isolated response
-    speaks the call's language even though it can't see the conversation."""
-    return (state.paused_text or state.resp_text or "").strip()[:200]
+    speaks the call's language even though it can't see the conversation.
+    Freshest signal first: the in-progress response's text so far, then the
+    text frozen by an active finish_first pause (state.paused_text — only
+    meaningful between that pause and its own resume finishing, see the
+    response.done handler which clears it once consumed), then the last
+    fully-completed turn as the fallback for e.g. a beat firing right at the
+    very start of a new response before any transcript delta has arrived."""
+    return (
+        state.resp_text or state.paused_text or state.last_spoken_text or ""
+    ).strip()[:200]
 
 
 async def _send_ack(oai_ws: Any, state: CallState) -> None:
@@ -1141,6 +1157,7 @@ async def handle_openai_event(
     elif etype in ("response.audio_transcript.done", "response.output_audio_transcript.done"):
         assistant_text = (event.get("transcript") or "").strip()
         if assistant_text:
+            state.last_spoken_text = assistant_text
             await _persist_voice_turn(state, assistant_text)
             log.info("voice_assistant_transcript", text=assistant_text)
 
@@ -1237,6 +1254,12 @@ async def handle_openai_event(
             state.ack_stage = None
         if state.ack_stage == "resume":
             state.ack_stage = None
+            # Consumed — otherwise this stays set for the rest of the call
+            # and _language_sample keeps preferring it over whatever the
+            # agent is actually saying now (the original bug: one early
+            # interruption's frozen text would silently outrank every later
+            # ack/restate beat's language signal).
+            state.paused_text = ""
         if state.answer_after_restate:
             state.answer_after_restate = False
             # Restate beat is done. If the caller spoke again meanwhile, the
