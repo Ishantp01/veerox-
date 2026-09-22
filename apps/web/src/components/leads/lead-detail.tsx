@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, CalendarClock, Save, Tag, UserCircle } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, CalendarClock, Save, Tag, Trash2, UserCircle } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -27,10 +28,12 @@ import {
   Select,
   Skeleton,
   Textarea,
+  useConfirm,
   useToast,
 } from "@/components/ui";
 import {
   useCreateLeadStatusPreset,
+  useDeleteLead,
   useDeleteLeadStatusPreset,
   useLead,
   useLeadStatusPresets,
@@ -61,9 +64,12 @@ export interface LeadDetailProps {
  * per-channel /whatsapp/leads/[id] and /calling/leads/[id] pages.
  */
 export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
+  const router = useRouter();
   const { toast } = useToast();
+  const confirm = useConfirm();
   const lead = useLead(id);
   const updateLead = useUpdateLead();
+  const deleteLead = useDeleteLead();
   const { data: statusPresetsData } = useLeadStatusPresets();
   const statusPresets = statusPresetsData ?? [];
   const createStatusPreset = useCreateLeadStatusPreset();
@@ -120,6 +126,24 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
         },
       },
     );
+  }
+
+  async function handleDelete() {
+    if (!lead.data) return;
+    const label = lead.data.name ?? formatPhone(lead.data.phone);
+    const ok = await confirm({
+      title: "Delete lead",
+      description: `Delete ${label}? This can't be undone.`,
+    });
+    if (!ok) return;
+    deleteLead.mutate(id, {
+      onSuccess: () => {
+        toast({ title: "Lead deleted", variant: "success" });
+        router.push(backHref);
+      },
+      onError: (err) =>
+        toast({ title: "Could not delete lead", description: err.message, variant: "error" }),
+    });
   }
 
   function openManageStatuses(target: "followUp1" | "followUp2" | "followUp3") {
@@ -233,7 +257,18 @@ export function LeadDetail({ id, backHref, backLabel }: LeadDetailProps) {
               title={lead.data.name ?? formatPhone(lead.data.phone)}
               description={formatPhone(lead.data.phone)}
               action={
-                lead.data.channel ? <ChannelBadge channel={lead.data.channel} /> : undefined
+                <div className="flex items-center gap-2">
+                  {lead.data.channel && <ChannelBadge channel={lead.data.channel} />}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDelete}
+                    loading={deleteLead.isPending}
+                  >
+                    {!deleteLead.isPending && <Trash2 size={14} aria-hidden />}
+                    Delete lead
+                  </Button>
+                </div>
               }
             />
 

@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from apps.api.core.phone import normalize_phone
+from apps.api.core.tools import get_or_create_lead_for_user
 from apps.api.db.models import Contact, Lead, LeadStatusPreset, Org, User
 from apps.api.deps import (
     DbDep,
@@ -131,17 +132,6 @@ async def create_lead_from_contact(
     if contact is None:
         raise HTTPException(status_code=404, detail="Contact not found")
 
-    existing = (
-        await db.execute(
-            select(Lead)
-            .where(Lead.org_id == org_id, Lead.contact_id == contact.id)
-            .order_by(Lead.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        return existing
-
     # Leads hang off the messaging User (one per org+phone), not the Contact.
     user = (
         await db.execute(select(User).where(User.org_id == org_id, User.phone == contact.phone))
@@ -150,6 +140,19 @@ async def create_lead_from_contact(
         user = User(org_id=org_id, phone=contact.phone, name=contact.name)
         db.add(user)
         await db.flush()
+
+    # get_or_create_lead_for_user dedupes on (org_id, user_id) now (one Lead
+    # per user, ever — see migrations/versions/b4c5d6e7f8a9), not on
+    # contact_id like this endpoint used to. If this user already has a
+    # lead linked to a contact (this one or a prior one), leave it alone —
+    # same idempotent "untouched" contract as before.
+    lead = await get_or_create_lead_for_user(
+        db, org_id, user.id, name=contact.name, phone=contact.phone, intent="contact"
+    )
+    if lead.contact_id is not None:
+        await db.commit()
+        await db.refresh(lead)
+        return lead
 
     has_preset = (
         await db.execute(
@@ -161,21 +164,14 @@ async def create_lead_from_contact(
     if has_preset is None:
         db.add(LeadStatusPreset(org_id=org_id, name=CONTACT_LEAD_STATUS))
 
-    lead = Lead(
-        org_id=org_id,
-        user_id=user.id,
-        contact_id=contact.id,
-        name=contact.name,
-        phone=contact.phone,
-        intent="contact",
-        status=CONTACT_LEAD_STATUS,
-        tags=contact.tags,
-        # A member only sees leads they own, so they'd lose sight of the one
-        # they just created otherwise.
-        claimed_by_account_user_id=member_scope,
-        claimed_at=func.now() if member_scope else None,
-    )
-    db.add(lead)
+    lead.contact_id = contact.id
+    lead.status = CONTACT_LEAD_STATUS
+    lead.tags = contact.tags
+    # A member only sees leads they own, so they'd lose sight of the one
+    # they just created otherwise. Preserve an existing claim.
+    if member_scope and lead.claimed_by_account_user_id is None:
+        lead.claimed_by_account_user_id = member_scope
+        lead.claimed_at = func.now()
     await db.commit()
     await db.refresh(lead)
     return lead

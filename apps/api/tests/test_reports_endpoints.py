@@ -72,7 +72,8 @@ async def test_reports_timeseries_buckets_by_day_across_channels(
 ) -> None:
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000060")
-    db_session.add(user)
+    user2 = User(org_id=ORG_ID, phone="+910000000060b")
+    db_session.add_all([user, user2])
     await db_session.flush()
 
     today = datetime.now(UTC)
@@ -84,7 +85,7 @@ async def test_reports_timeseries_buckets_by_day_across_channels(
     )
     db_session.add(Lead(org_id=ORG_ID, user_id=user.id, channel="voice", status="qualified", created_at=today))
     db_session.add(
-        Lead(org_id=ORG_ID, user_id=user.id, channel="whatsapp", status="qualified", created_at=today)
+        Lead(org_id=ORG_ID, user_id=user2.id, channel="whatsapp", status="qualified", created_at=today)
     )
     await db_session.commit()
 

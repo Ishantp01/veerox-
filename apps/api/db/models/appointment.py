@@ -21,8 +21,10 @@ class Appointment(Base):
     contact_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
     )
+    # Indexed: without it, deleting a lead makes Postgres seq-scan this table
+    # to null out the FK (ON DELETE SET NULL), which gets slow as it grows.
     lead_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("leads.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("leads.id", ondelete="SET NULL"), nullable=True, index=True
     )
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="30")

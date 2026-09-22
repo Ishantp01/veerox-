@@ -25,6 +25,7 @@ export {
   useLeads,
   useLead,
   useUpdateLead,
+  useDeleteLead,
   type LeadFilters,
   type LeadUpdateInput,
 } from "./useLeads";

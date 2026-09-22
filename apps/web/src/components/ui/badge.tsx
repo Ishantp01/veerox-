@@ -6,10 +6,10 @@ import {
   Circle,
   CircleDot,
   Mic,
-  MessageSquare,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { WhatsappIcon } from "@/components/ui/whatsapp-icon";
 
 /**
  * Badge color language mirrors `styles/tokens.ts` (UI plan §8.2):
@@ -44,13 +44,12 @@ export type BadgeVariant = NonNullable<
  * Default icon per variant so color is never the only signal (a11y, plan §10).
  * Callers can override with the `icon` prop or hide it with `icon={null}`.
  */
-const DEFAULT_ICONS: Record<BadgeVariant, LucideIcon> = {
+const DEFAULT_ICONS: Partial<Record<BadgeVariant, LucideIcon>> = {
   live: CircleDot,
   ended: Circle,
   success: CheckCircle2,
   danger: AlertCircle,
   voice: Mic,
-  whatsapp: MessageSquare,
   neutral: Circle,
 };
 
@@ -70,6 +69,14 @@ export function Badge({
   ...props
 }: BadgeProps) {
   const resolved = variant ?? "neutral";
+  if (resolved === "whatsapp" && icon === undefined) {
+    return (
+      <span className={cn(badgeVariants({ variant }), className)} {...props}>
+        <WhatsappIcon size={12} animated />
+        {children}
+      </span>
+    );
+  }
   const Icon = icon === null ? null : (icon ?? DEFAULT_ICONS[resolved]);
   return (
     <span className={cn(badgeVariants({ variant }), className)} {...props}>

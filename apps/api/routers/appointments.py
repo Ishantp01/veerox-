@@ -14,6 +14,7 @@ from apps.api.core.tools import (
     _normalize_phone,
     DEFAULT_BOOKING_TIMEZONE,
     find_conflicting_appointment,
+    get_or_create_lead_for_user,
     schedule_appointment_reminders,
     send_appointment_confirmation,
 )
@@ -168,18 +169,19 @@ async def create_appointment(
         user = await _get_or_create_user_by_phone(
             db, org_id=org_id, phone=contact.phone, name=contact.name
         )
-        new_lead = Lead(
-            org_id=org_id,
-            user_id=user.id,
-            contact_id=contact.id,
-            name=contact.name,
-            phone=_normalize_phone(contact.phone),
-            intent="booking",
-            channel="dashboard",
-            claimed_by_account_user_id=member_scope,
-            claimed_at=func.now() if member_scope is not None else None,
+        new_lead = await get_or_create_lead_for_user(
+            db, org_id, user.id, name=contact.name, phone=_normalize_phone(contact.phone)
         )
-        db.add(new_lead)
+        # A dashboard booking is a stronger, more current signal than
+        # whatever intent/channel the lead had before, so it overrides
+        # rather than filling-if-blank — same pattern as
+        # core/tools.py::book_appointment.
+        new_lead.contact_id = contact.id
+        new_lead.intent = "booking"
+        new_lead.channel = "dashboard"
+        if member_scope is not None and new_lead.claimed_by_account_user_id is None:
+            new_lead.claimed_by_account_user_id = member_scope
+            new_lead.claimed_at = func.now()
         await db.flush()  # populate new_lead.id for the Appointment FK below
         lead_id = new_lead.id
         notify_phone = contact.phone

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
 from apps.api.core.phone import normalize_phone
+from apps.api.core.tools import get_or_create_lead_for_user
 from apps.api.db.models import Lead, Org
 from apps.api.deps import DbDep, RequestOrgDep, verify_admin_or_session
 from apps.api.schemas.lead import LeadCreate, LeadOut
@@ -30,19 +31,29 @@ async def list_leads(
 @router.post("", response_model=LeadOut, status_code=201)
 async def create_lead(payload: LeadCreate, db: DbDep, org_id: RequestOrgDep) -> Lead:
     org_row = await db.get(Org, org_id)
-    lead = Lead(
-        org_id=org_id,
-        user_id=payload.user_id,
-        name=payload.name,
-        phone=(
-            normalize_phone(payload.phone, org_row.default_country_code if org_row else None)
-            if payload.phone
-            else payload.phone
-        ),
-        intent=payload.intent,
-        metadata_=payload.metadata_,
+    normalized_phone = (
+        normalize_phone(payload.phone, org_row.default_country_code if org_row else None)
+        if payload.phone
+        else payload.phone
     )
-    db.add(lead)
+    # One Lead per (org_id, user_id) now — see get_or_create_lead_for_user
+    # and migrations/versions/b4c5d6e7f8a9. A caller POSTing for a user who
+    # already has a lead updates it in place instead of erroring on the new
+    # unique constraint; the fields below are explicit caller input, so they
+    # override rather than fill-blank, same pattern as core/tools.py's
+    # handlers.
+    lead = await get_or_create_lead_for_user(
+        db,
+        org_id,
+        payload.user_id,
+        name=payload.name,
+        phone=normalized_phone,
+        intent=payload.intent,
+    )
+    lead.name = payload.name
+    lead.phone = normalized_phone
+    lead.intent = payload.intent
+    lead.metadata_ = payload.metadata_
     await db.commit()
     await db.refresh(lead)
     return lead

@@ -4,7 +4,17 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from apps.api.db.base import Base
@@ -12,6 +22,10 @@ from apps.api.db.base import Base
 
 class Lead(Base):
     __tablename__ = "leads"
+    # One lead per customer, ever — every channel resolves a caller to the
+    # same deduped User row, so this is what keeps a returning phone number
+    # from spawning a second Lead. See core/tools.py::get_or_create_lead_for_user.
+    __table_args__ = (UniqueConstraint("org_id", "user_id", name="uq_leads_org_user"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     org_id: Mapped[UUID] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False)

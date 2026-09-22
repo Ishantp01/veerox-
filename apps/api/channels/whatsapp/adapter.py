@@ -24,7 +24,7 @@ from apps.api.config import settings
 from apps.api.core.agent import agent_core, appointment_booked_this_turn
 from apps.api.core.org_credentials import resolve_meta_credentials
 from apps.api.core.org_openai_key import resolve_openai_api_key
-from apps.api.core.tools import mark_not_interested
+from apps.api.core.tools import get_or_create_lead_for_user, mark_not_interested
 from apps.api.core.transcribe import transcribe
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
@@ -342,6 +342,14 @@ async def process_inbound(payload: dict[str, Any]) -> None:
                 )
 
             user = await _get_or_create_user(db, org_id, msg.from_phone)
+
+            # Every inbound message guarantees a Lead exists for this
+            # customer — not just when the AI decides to call capture_lead.
+            # Placed as early as possible after user resolution so even a
+            # stop-button/opt-out reply still gets a lead entry.
+            await get_or_create_lead_for_user(
+                db, org_id, user.id, name=user.name, phone=user.phone, channel="whatsapp"
+            )
 
             # A tap on the follow-up template's "Stop" quick-reply button is
             # handled deterministically here — no LLM call, no risk of the

@@ -5,7 +5,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
-  MessageSquare,
   FileText,
   Paperclip,
   Phone,
@@ -29,11 +28,14 @@ import {
 import { useAuth } from "@/lib/auth-context";
 import { ONBORDA_NAV_IDS } from "@/lib/onboarding/tours";
 import { featureForRoute, isFeatureDisabled } from "@/lib/orgFeatures";
+import { WhatsappIcon } from "@/components/ui/whatsapp-icon";
 
 interface NavItem {
   href: string;
   label: string;
-  Icon: LucideIcon;
+  /** Most items use a lucide icon; WhatsApp-channel items use the real
+   * WhatsappIcon glyph instead (same size/className/strokeWidth surface). */
+  Icon: LucideIcon | typeof WhatsappIcon;
   /** Fixed icon tint (independent of active state) — mirrors the mockup's
    * per-channel colored icons (WhatsApp green, AI purple, …) for the
    * Communication group. Omitted elsewhere so those icons keep the
@@ -63,9 +65,9 @@ const GROUPS: NavGroup[] = [
     label: "Communication",
     items: [
       { href: "/calling", label: "AI Calling", Icon: Phone, iconClassName: "text-purple-500" },
-      { href: "/whatsapp", label: "AI WhatsApp", Icon: MessageSquare, iconClassName: "text-green-500" },
+      { href: "/whatsapp", label: "AI WhatsApp", Icon: WhatsappIcon, iconClassName: "text-green-500" },
       { href: "/whatsapp/templates", label: "WhatsApp Templates", Icon: FileText, iconClassName: "text-blue-400" },
-      { href: "/whatsapp/media", label: "WhatsApp Media", Icon: Paperclip, iconClassName: "text-green-500" },
+      { href: "/whatsapp/media", label: "WhatsApp Media", Icon: WhatsappIcon, iconClassName: "text-green-500" },
     ],
   },
   {

@@ -33,7 +33,7 @@ from apps.api.channels.voice import language_detect
 from apps.api.channels.voice import turn_controller
 from apps.api.config import settings
 from apps.api.core.memory import persist_turn
-from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
+from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS, get_or_create_lead_for_user
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.user import User
@@ -704,6 +704,11 @@ async def open_voice_conversation(
     phone = _normalize_phone(caller)
     async with AsyncSessionLocal() as db:
         user = await _get_or_create_user(db, org_id, phone)
+        # Every inbound call guarantees a Lead exists for this caller — not
+        # just when the AI decides to call capture_lead.
+        await get_or_create_lead_for_user(
+            db, org_id, user.id, name=user.name, phone=user.phone, channel="voice"
+        )
         conversation = Conversation(
             org_id=org_id, user_id=user.id, channel="voice", plivo_call_uuid=call_uuid or None
         )

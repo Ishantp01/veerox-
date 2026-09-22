@@ -57,6 +57,7 @@ from apps.api.core.tools import (
     TOOL_DEFINITIONS,
     _get_or_create_user_by_phone,
     _normalize_phone,
+    get_or_create_lead_for_user,
 )
 from apps.api.core.whatsapp_assets import (
     MAX_ASSET_BYTES,
@@ -725,10 +726,18 @@ def _lead_tag_clause(tag: str):
 
 
 def _lead_search_clause(search: str):
-    """Unified search box (UI) — matches leads whose intent OR tags contain
-    the term, so one field can stand in for the separate intent/tag filters.
+    """Unified search box (UI) — matches leads whose name, phone, intent,
+    status, qualification status, or tags contain the search text.
     """
-    return or_(Lead.intent.ilike(f"%{search}%"), cast(Lead.tags, String).ilike(f"%{search}%"))
+    like = f"%{search}%"
+    return or_(
+        Lead.name.ilike(like),
+        Lead.phone.ilike(like),
+        Lead.intent.ilike(like),
+        Lead.status.ilike(like),
+        Lead.qualification_status.ilike(like),
+        cast(Lead.tags, String).ilike(like),
+    )
 
 
 def _lead_status_clause(status: str):
@@ -819,30 +828,12 @@ async def _claim_customer_lead_for_member(
     """
     if member_scope is None:
         return
-    existing = (
-        await db.execute(
-            select(Lead)
-            .where(Lead.org_id == org_id, Lead.user_id == user.id)
-            .order_by(Lead.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        if existing.claimed_by_account_user_id is None:
-            existing.claimed_by_account_user_id = member_scope
-            existing.claimed_at = func.now()
-        return
-    db.add(
-        Lead(
-            org_id=org_id,
-            user_id=user.id,
-            phone=user.phone,
-            channel=channel,
-            intent="outreach",
-            claimed_by_account_user_id=member_scope,
-            claimed_at=func.now(),
-        )
+    lead = await get_or_create_lead_for_user(
+        db, org_id, user.id, phone=user.phone, channel=channel, intent="outreach"
     )
+    if lead.claimed_by_account_user_id is None:
+        lead.claimed_by_account_user_id = member_scope
+        lead.claimed_at = func.now()
 
 
 def _guard_campaign_access(
@@ -882,7 +873,9 @@ async def list_leads(
     status: str | None = Query(None, max_length=20),
     qualification_status: str | None = Query(None, pattern=_LEAD_QUALIFICATION_STATUS_PATTERN),
     tag: str | None = Query(None, description="Filter by a single tag"),
-    search: str | None = Query(None, description="Match against intent or tags"),
+    search: str | None = Query(
+        None, description="Match against name, phone, intent, status, qualification status, or tags"
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[LeadOut]:
@@ -1103,6 +1096,31 @@ async def update_lead(
     return LeadOut.model_validate(lead)
 
 
+@router.delete("/leads/{lead_id}")
+async def delete_lead(
+    lead_id: UUID,
+    db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
+    x_admin_token: str | None = Header(None),
+) -> dict:
+    """Delete a lead. Its FollowUpTask rows cascade-delete (lead_id is NOT
+    NULL, ondelete=CASCADE); any Appointment referencing it just loses the
+    link (ondelete=SET NULL) — same trade-off as crm.py's delete_contact."""
+    lead = (await db.execute(select(Lead).where(Lead.id == lead_id))).scalar_one_or_none()
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if scope_org_id is not None and lead.org_id != scope_org_id:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    member_scope = _member_lead_scope(scope_org_id, org, payload)
+    if member_scope is not None and lead.claimed_by_account_user_id != member_scope:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    await db.delete(lead)
+    await db.commit()
+    return {"ok": True}
+
+
 def _leads_export_stmt(
     scope_org_id: UUID | None,
     member_scope: UUID | None,
@@ -1180,7 +1198,9 @@ async def export_leads_csv(
     status: str | None = Query(None, max_length=20),
     qualification_status: str | None = Query(None, pattern=_LEAD_QUALIFICATION_STATUS_PATTERN),
     tag: str | None = Query(None, description="Filter by a single tag"),
-    search: str | None = Query(None, description="Match against intent or tags"),
+    search: str | None = Query(
+        None, description="Match against name, phone, intent, status, qualification status, or tags"
+    ),
     limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
 ) -> StreamingResponse:
@@ -1227,7 +1247,9 @@ async def export_leads_xlsx(
     status: str | None = Query(None, max_length=20),
     qualification_status: str | None = Query(None, pattern=_LEAD_QUALIFICATION_STATUS_PATTERN),
     tag: str | None = Query(None, description="Filter by a single tag"),
-    search: str | None = Query(None, description="Match against intent or tags"),
+    search: str | None = Query(
+        None, description="Match against name, phone, intent, status, qualification status, or tags"
+    ),
     limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
 ) -> StreamingResponse:
@@ -1830,18 +1852,20 @@ async def _create_campaign_from_rows(
         )
         if auto_qualify:
             user = await _get_or_create_user_by_phone(db, org_id, normalized, row_name)
-            db.add(
-                Lead(
-                    org_id=org_id,
-                    user_id=user.id,
-                    name=row_name,
-                    phone=normalized,
-                    intent="imported",
-                    channel=channel,
-                    status=row_status,
-                    tags=row_tags,
-                )
+            lead = await get_or_create_lead_for_user(
+                db,
+                org_id,
+                user.id,
+                name=row_name,
+                phone=normalized,
+                channel=channel,
+                intent="imported",
             )
+            # An import explicitly sets status/tags regardless of what a
+            # prior lead for this user already had, same override pattern as
+            # core/tools.py's handlers (e.g. qualify_lead).
+            lead.status = row_status
+            lead.tags = row_tags
         seen_channels.add(channel)
         imported += 1
 
@@ -3549,9 +3573,13 @@ async def list_lead_human_support(
     session_payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> list[LeadOut]:
-    """Every Human Support request raised for this lead's contact (each
-    transfer_to_human writes its own Lead row, all sharing the user_id),
-    newest first — the lead itself included when it is one."""
+    """Every Human Support request raised for this lead's contact, newest
+    first — the lead itself included when it is one. Since there's now only
+    ever one Lead per (org_id, user_id) (see get_or_create_lead_for_user),
+    this returns at most one row in practice — the lead itself if its
+    intent is "human_support", otherwise empty. Kept as a query rather than
+    just checking the lead in hand so a future contact-merge (matching by
+    phone digits below) still surfaces it correctly."""
     lead = await _scoped_lead_or_404(lead_id, db, scope_org_id, org, session_payload)
     # One person can have several User rows ("+91…" vs "91…"), so match on the
     # phone's digits as well as the user_id.

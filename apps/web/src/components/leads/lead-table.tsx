@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useRouter } from "next/navigation";
+import { Trash2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { isFeatureDisabled } from "@/lib/orgFeatures";
 import {
@@ -10,7 +11,10 @@ import {
   TableHeader,
   TableRow,
   TableCell,
+  useConfirm,
+  useToast,
 } from "@/components/ui";
+import { useDeleteLead } from "@/lib/hooks";
 import { formatDateTime, formatPhone } from "@/lib/format";
 import type { Lead } from "@/lib/types";
 import { IntentBadge } from "./intent-badge";
@@ -33,6 +37,25 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
   const features = user?.enabled_features ?? null;
   const showConversation = !isFeatureDisabled(features, "conversations");
   const showHumanSupport = !isFeatureDisabled(features, "human_support");
+  const deleteLead = useDeleteLead();
+  const confirm = useConfirm();
+  const { toast } = useToast();
+
+  async function handleDelete(e: React.MouseEvent, lead: Lead) {
+    e.stopPropagation();
+    const label = lead.name ?? formatPhone(lead.phone);
+    const ok = await confirm({
+      title: "Delete lead",
+      description: `Delete ${label}? This can't be undone.`,
+    });
+    if (!ok) return;
+    deleteLead.mutate(lead.id, {
+      onSuccess: () => toast({ title: "Lead deleted", variant: "success" }),
+      onError: (err) =>
+        toast({ title: "Could not delete lead", description: err.message, variant: "error" }),
+    });
+  }
+
   return (
     <div
       data-tour="page-table"
@@ -51,6 +74,9 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
             {showConversation && <TableHeader>Conversation</TableHeader>}
             {showHumanSupport && <TableHeader>Human Support</TableHeader>}
             <TableHeader>Created</TableHeader>
+            <TableHeader>
+              <span className="sr-only">Delete</span>
+            </TableHeader>
           </TableRow>
         </thead>
         <tbody>
@@ -166,6 +192,16 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
                 )}
                 <TableCell className="text-xs text-slate-500">
                   {formatDateTime(lead.created_at)}
+                </TableCell>
+                <TableCell>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => handleDelete(e, lead)}
+                    aria-label={`Delete lead ${lead.name ?? lead.phone ?? lead.id}`}
+                  >
+                    <Trash2 size={14} aria-hidden />
+                  </Button>
                 </TableCell>
               </TableRow>
             );

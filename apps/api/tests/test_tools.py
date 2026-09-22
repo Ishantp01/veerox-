@@ -134,7 +134,9 @@ async def test_capture_lead_persists_row_and_returns_ok(
 async def test_capture_lead_idempotent_within_window(
     db_session: AsyncSession, fake_redis: _FakeRedis
 ) -> None:
-    """Second call with same (phone, intent) returns duplicate, writes nothing extra."""
+    """Second call for the same phone number updates the same lead in place
+    (one lead per (org_id, user_id) — see get_or_create_lead_for_user)
+    rather than writing a second row."""
     await _seed_org(db_session)
 
     first = await capture_lead(
@@ -145,7 +147,8 @@ async def test_capture_lead_idempotent_within_window(
     )
 
     assert first["status"] == "ok"
-    assert second["status"] == "duplicate"
+    assert second["status"] == "ok"
+    assert first["lead_id"] == second["lead_id"]
 
     rows = (await db_session.execute(select(Lead))).scalars().all()
     assert len(rows) == 1

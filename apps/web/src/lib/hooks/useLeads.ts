@@ -10,7 +10,7 @@ export interface LeadFilters {
   status?: LeadStatus;
   qualification_status?: LeadQualificationStatus;
   tag?: string;
-  /** Unified search box — matches against intent OR tags. */
+  /** Unified search box — matches against name, phone, intent, tag, or status. */
   search?: string;
   /** Page size — the backend defaults to 50 and caps at 200. */
   limit?: number;
@@ -104,6 +104,18 @@ export function useUpdateLead() {
     onSuccess: () => {
       // Single prefix invalidates every leads list variant plus all lead
       // detail queries (queryKeys.lead(id) shares the "leads" root key).
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+    },
+  });
+}
+
+/** DELETE /admin/leads/{id} → { ok: boolean } */
+export function useDeleteLead() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ ok: boolean }, Error, string>({
+    mutationFn: (id) => apiFetch<{ ok: boolean }>(`/admin/leads/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["leads"] });
     },
   });

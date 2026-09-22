@@ -13,7 +13,6 @@ Handlers are idempotent where possible — see the Redis-backed dedupe in
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -439,8 +438,6 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 
 # Redis key prefixes — keep names stable, the dashboard reads them too.
 _HANDOFF_QUEUE_KEY = "human_handoff_queue"
-_LEAD_DEDUPE_PREFIX = "veerox:lead_dedupe:"
-_LEAD_DEDUPE_TTL_SECS = 10 * 60  # 10 minutes per spec §2.3
 
 # Per-org round-robin pointer for transfer_to_human's team notification (see
 # below) — an ever-incrementing counter, not a bounded index, so the team
@@ -499,14 +496,6 @@ def _format_display_time(time_str: str) -> str:
         return time_str
 
 
-def _lead_dedupe_key(org_id: UUID, phone: str, intent: str) -> str:
-    """Stable Redis key for the ``(org_id, phone, intent)`` idempotency tuple."""
-    digest = hashlib.sha256(
-        f"{org_id}|{_normalize_phone(phone)}|{intent.strip().lower()}".encode()
-    ).hexdigest()
-    return f"{_LEAD_DEDUPE_PREFIX}{digest}"
-
-
 async def _get_or_create_user_by_phone(
     db: AsyncSession,
     org_id: UUID,
@@ -534,6 +523,57 @@ async def _get_or_create_user_by_phone(
     return user
 
 
+async def get_or_create_lead_for_user(
+    db: AsyncSession,
+    org_id: UUID,
+    user_id: UUID,
+    *,
+    name: str | None = None,
+    phone: str | None = None,
+    channel: str | None = None,
+    intent: str | None = None,
+) -> Lead:
+    """Resolve the one lead for ``(org_id, user_id)``, creating it if missing.
+
+    Every channel resolves a caller to the same deduped ``User`` row
+    (``_get_or_create_user_by_phone`` here, and each channel adapter's own
+    local copy), so ``user_id`` is the correct permanent dedup key for a
+    lead — one customer, one lead, no matter how many times they call or
+    message. The composite unique constraint on ``leads(org_id, user_id)``
+    keeps this safe under concurrent first-contact events, same as
+    ``_get_or_create_user_by_phone`` relies on for ``users``.
+
+    Fills in blank fields on an existing lead (e.g. a first WhatsApp message
+    with no name yet, followed by a call where the caller gives their name)
+    rather than overwriting anything already captured.
+    """
+    existing = (
+        await db.execute(select(Lead).where(Lead.org_id == org_id, Lead.user_id == user_id))
+    ).scalar_one_or_none()
+    if existing is not None:
+        if name and not existing.name:
+            existing.name = name
+        if phone and not existing.phone:
+            existing.phone = phone
+        if channel and not existing.channel:
+            existing.channel = channel
+        if intent and not existing.intent:
+            existing.intent = intent
+        return existing
+
+    lead = Lead(
+        org_id=org_id,
+        user_id=user_id,
+        name=name,
+        phone=phone,
+        channel=channel,
+        intent=intent,
+    )
+    db.add(lead)
+    await db.flush()  # populate lead.id without committing the outer transaction
+    return lead
+
+
 # ---------------------------------------------------------------------------
 # Handlers — each takes ``db`` first, then LLM-supplied args, plus an
 # optional ``user_id`` kwarg the agent layer may inject for caller context.
@@ -550,28 +590,16 @@ async def capture_lead(
     channel: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    """Persist a new lead. Idempotent on ``(org_id, phone, intent)`` for 10 min.
-
-    Idempotency uses Redis ``SET NX EX`` — a duplicate call within the window
-    returns ``status="duplicate"`` with no row written. ``org_id`` is caller
-    context injected by the dispatch layer (the call/message's already-
-    resolved tenant); falls back to the platform default only if the caller
-    genuinely has no org context to give (e.g. CLI/test invocations).
+    """Persist (or update) this customer's lead with the intent the AI just
+    captured. One lead per ``(org_id, user_id)`` — see
+    ``get_or_create_lead_for_user``; a returning customer's lead is updated
+    in place rather than duplicated. ``org_id`` is caller context injected
+    by the dispatch layer (the call/message's already-resolved tenant);
+    falls back to the platform default only if the caller genuinely has no
+    org context to give (e.g. CLI/test invocations).
     """
     org_id = org_id or _default_org_id()
     phone = await _org_phone(db, org_id, phone)
-    redis = get_redis_pool()
-    key = _lead_dedupe_key(org_id, phone, intent)
-
-    acquired = await redis.set(key, "1", nx=True, ex=_LEAD_DEDUPE_TTL_SECS)
-    if not acquired:
-        logger.info(
-            "capture_lead_duplicate_suppressed",
-            org_id=str(org_id),
-            phone=_normalize_phone(phone),
-            intent=intent,
-        )
-        return {"status": "duplicate", "reason": "recent_lead_for_phone_intent"}
 
     user = await _get_or_create_user_by_phone(
         db, org_id=org_id, phone=phone, name=name
@@ -579,15 +607,15 @@ async def capture_lead(
     # Prefer the explicit user_id passed by the agent (caller context) when present.
     effective_user_id = user_id or user.id
 
-    lead = Lead(
-        org_id=org_id,
-        user_id=effective_user_id,
+    lead = await get_or_create_lead_for_user(
+        db,
+        org_id,
+        effective_user_id,
         name=name or user.name,
         phone=_normalize_phone(phone),
-        intent=intent,
         channel=channel,
+        intent=intent,
     )
-    db.add(lead)
     await db.commit()
 
     logger.info(
@@ -736,16 +764,14 @@ async def book_appointment(
         "booked_at": datetime.now(UTC).isoformat(),
     }
 
-    lead = Lead(
-        org_id=org_id,
-        user_id=booking_user_id,
-        name=resolved_name,
-        phone=booking_user.phone,
-        intent="booking",
-        channel=channel,
-        metadata_=metadata,
+    lead = await get_or_create_lead_for_user(
+        db, org_id, booking_user_id, name=resolved_name, phone=booking_user.phone
     )
-    db.add(lead)
+    # A booking is a stronger, more current signal than whatever intent the
+    # lead had before, so it overrides rather than filling-if-blank.
+    lead.intent = "booking"
+    lead.channel = channel
+    lead.metadata_ = metadata
     await db.flush()  # populate lead.id for the Appointment FK below
 
     appointment = Appointment(
@@ -1032,18 +1058,17 @@ async def transfer_to_human(
 
     lead_id: str | None = None
     if user_id is not None:
-        lead = Lead(
-            org_id=org_id,
-            user_id=user_id,
-            phone=phone,
-            conversation_id=conversation_id,
-            intent="human_support",
-            channel=channel,
-            metadata_={"reason": reason, "urgency": urgency},
-            claimed_by_account_user_id=notify_account_user_id,
-            claimed_at=datetime.now(UTC) if notify_account_user_id else None,
-        )
-        db.add(lead)
+        lead = await get_or_create_lead_for_user(db, org_id, user_id, phone=phone, channel=channel)
+        # An escalation is a stronger, more current signal than whatever
+        # intent the lead had before, so it overrides rather than
+        # filling-if-blank. An existing claim is left alone if this
+        # escalation has nowhere new to route it.
+        lead.conversation_id = conversation_id
+        lead.intent = "human_support"
+        lead.metadata_ = {"reason": reason, "urgency": urgency}
+        if notify_account_user_id is not None:
+            lead.claimed_by_account_user_id = notify_account_user_id
+            lead.claimed_at = datetime.now(UTC)
         await db.commit()
         lead_id = str(lead.id)
 
@@ -1098,18 +1123,17 @@ async def qualify_lead(
         user = await _get_or_create_user_by_phone(
             db, org_id=org_id, phone=target.phone, name=resolved_name
         )
-        lead = Lead(
-            org_id=org_id,
-            user_id=user_id or user.id,
-            name=resolved_name,
-            phone=_normalize_phone(target.phone),
-            intent="qualified_campaign_lead",
-            channel=channel,
-            status="qualified",
-            metadata_={"campaign_id": str(target.campaign_id), "reason": reason},
-            tags=target.tags,
+        lead = await get_or_create_lead_for_user(
+            db, org_id, user_id or user.id, name=resolved_name, phone=_normalize_phone(target.phone)
         )
-        db.add(lead)
+        # A campaign qualification is a stronger, more current signal than
+        # whatever intent/status the lead had before, so it overrides
+        # rather than filling-if-blank.
+        lead.intent = "qualified_campaign_lead"
+        lead.channel = channel
+        lead.status = "qualified"
+        lead.metadata_ = {"campaign_id": str(target.campaign_id), "reason": reason}
+        lead.tags = target.tags
         await db.flush()
         lead_id = str(lead.id)
 

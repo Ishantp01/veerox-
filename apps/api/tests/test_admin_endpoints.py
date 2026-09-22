@@ -217,10 +217,11 @@ async def test_list_leads_filters_by_channel(
 ) -> None:
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000002")
-    db_session.add(user)
+    user2 = User(org_id=ORG_ID, phone="+910000000002b")
+    db_session.add_all([user, user2])
     await db_session.flush()
     db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", channel="whatsapp"))
-    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", channel="voice"))
+    db_session.add(Lead(org_id=ORG_ID, user_id=user2.id, intent="quote", channel="voice"))
     await db_session.commit()
 
     response = await client.get(
@@ -240,13 +241,14 @@ async def test_list_leads_filters_by_intent_substring(
     filter must be a case-insensitive substring match, not exact equality."""
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000009")
-    db_session.add(user)
+    user2 = User(org_id=ORG_ID, phone="+910000000009b")
+    db_session.add_all([user, user2])
     await db_session.flush()
     db_session.add(
         Lead(org_id=ORG_ID, user_id=user.id, intent="Book an appointment on July 8th")
     )
     db_session.add(
-        Lead(org_id=ORG_ID, user_id=user.id, intent="Interested in purchasing software")
+        Lead(org_id=ORG_ID, user_id=user2.id, intent="Interested in purchasing software")
     )
     await db_session.commit()
 
@@ -265,11 +267,13 @@ async def test_list_leads_filters_by_tag(
 ) -> None:
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000010")
-    db_session.add(user)
+    user2 = User(org_id=ORG_ID, phone="+910000000010b")
+    user3 = User(org_id=ORG_ID, phone="+910000000010c")
+    db_session.add_all([user, user2, user3])
     await db_session.flush()
     db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", tags=["hot", "enterprise"]))
-    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", tags=["cold"]))
-    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", tags=None))
+    db_session.add(Lead(org_id=ORG_ID, user_id=user2.id, intent="quote", tags=["cold"]))
+    db_session.add(Lead(org_id=ORG_ID, user_id=user3.id, intent="quote", tags=None))
     await db_session.commit()
 
     response = await client.get("/admin/leads", params={"tag": "hot"}, headers=ADMIN_HEADERS)
@@ -304,10 +308,11 @@ async def test_list_leads_filters_by_status(
 ) -> None:
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000040")
-    db_session.add(user)
+    user2 = User(org_id=ORG_ID, phone="+910000000040b")
+    db_session.add_all([user, user2])
     await db_session.flush()
     db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", status="new"))
-    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", status="contacted"))
+    db_session.add(Lead(org_id=ORG_ID, user_id=user2.id, intent="quote", status="contacted"))
     await db_session.commit()
 
     response = await client.get(
@@ -331,7 +336,9 @@ async def test_list_leads_status_qualified_also_matches_qualification_status(
     """
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000042")
-    db_session.add(user)
+    user2 = User(org_id=ORG_ID, phone="+910000000042b")
+    user3 = User(org_id=ORG_ID, phone="+910000000042c")
+    db_session.add_all([user, user2, user3])
     await db_session.flush()
     db_session.add(
         Lead(org_id=ORG_ID, user_id=user.id, intent="quote", status="qualified")
@@ -339,13 +346,13 @@ async def test_list_leads_status_qualified_also_matches_qualification_status(
     db_session.add(
         Lead(
             org_id=ORG_ID,
-            user_id=user.id,
+            user_id=user2.id,
             intent="quote",
             status="contacted",
             qualification_status="qualified",
         )
     )
-    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", status="new"))
+    db_session.add(Lead(org_id=ORG_ID, user_id=user3.id, intent="quote", status="new"))
     await db_session.commit()
 
     response = await client.get(
@@ -560,7 +567,8 @@ async def test_list_leads_member_only_sees_assigned_leads(
 ) -> None:
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000020")
-    db_session.add(user)
+    user2 = User(org_id=ORG_ID, phone="+910000000020b")
+    db_session.add_all([user, user2])
     await db_session.flush()
 
     member_headers = await _login_as(
@@ -571,7 +579,7 @@ async def test_list_leads_member_only_sees_assigned_leads(
     ).scalar_one().id
 
     assigned = Lead(org_id=ORG_ID, user_id=user.id, intent="assigned", claimed_by_account_user_id=member_id)
-    unassigned = Lead(org_id=ORG_ID, user_id=user.id, intent="unassigned")
+    unassigned = Lead(org_id=ORG_ID, user_id=user2.id, intent="unassigned")
     db_session.add_all([assigned, unassigned])
     await db_session.commit()
 
@@ -587,7 +595,8 @@ async def test_list_leads_admin_sees_all_org_leads(
 ) -> None:
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000021")
-    db_session.add(user)
+    user2 = User(org_id=ORG_ID, phone="+910000000021b")
+    db_session.add_all([user, user2])
     await db_session.flush()
 
     admin_headers = await _login_as(client, db_session, email="admin@example.com", role="admin")
@@ -595,7 +604,7 @@ async def test_list_leads_admin_sees_all_org_leads(
     db_session.add_all(
         [
             Lead(org_id=ORG_ID, user_id=user.id, intent="a"),
-            Lead(org_id=ORG_ID, user_id=user.id, intent="b"),
+            Lead(org_id=ORG_ID, user_id=user2.id, intent="b"),
         ]
     )
     await db_session.commit()
@@ -703,10 +712,11 @@ async def test_leads_csv_includes_tags_and_filters_by_tag(
 ) -> None:
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000012")
-    db_session.add(user)
+    user2 = User(org_id=ORG_ID, phone="+910000000012b")
+    db_session.add_all([user, user2])
     await db_session.flush()
     db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="a", tags=["hot", "enterprise"]))
-    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="b", tags=["cold"]))
+    db_session.add(Lead(org_id=ORG_ID, user_id=user2.id, intent="b", tags=["cold"]))
     await db_session.commit()
 
     response = await client.get("/admin/leads.csv", params={"tag": "hot"}, headers=ADMIN_HEADERS)
@@ -722,10 +732,11 @@ async def test_leads_csv_filters_by_status(
 ) -> None:
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000005")
-    db_session.add(user)
+    user2 = User(org_id=ORG_ID, phone="+910000000005b")
+    db_session.add_all([user, user2])
     await db_session.flush()
     db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="a", status="qualified"))
-    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="b", status="new"))
+    db_session.add(Lead(org_id=ORG_ID, user_id=user2.id, intent="b", status="new"))
     await db_session.commit()
 
     response = await client.get(
@@ -1139,7 +1150,8 @@ async def test_stats_includes_whatsapp_and_per_channel_leads(
 ) -> None:
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000004")
-    db_session.add(user)
+    user2 = User(org_id=ORG_ID, phone="+910000000004b")
+    db_session.add_all([user, user2])
     await db_session.flush()
     conv = Conversation(org_id=ORG_ID, user_id=user.id, channel="whatsapp")
     db_session.add(conv)
@@ -1155,7 +1167,7 @@ async def test_stats_includes_whatsapp_and_per_channel_leads(
         )
     )
     db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", channel="whatsapp"))
-    db_session.add(Lead(org_id=ORG_ID, user_id=user.id, intent="quote", channel="voice"))
+    db_session.add(Lead(org_id=ORG_ID, user_id=user2.id, intent="quote", channel="voice"))
     await db_session.commit()
 
     response = await client.get("/admin/stats", headers=ADMIN_HEADERS)
@@ -1172,13 +1184,14 @@ async def test_human_support_filters_queue_entries_by_channel(
 ) -> None:
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000005")
-    db_session.add(user)
+    user2 = User(org_id=ORG_ID, phone="+910000000005b")
+    db_session.add_all([user, user2])
     await db_session.flush()
     db_session.add(
         Lead(org_id=ORG_ID, user_id=user.id, intent="human_support", channel="voice")
     )
     db_session.add(
-        Lead(org_id=ORG_ID, user_id=user.id, intent="human_support", channel="whatsapp")
+        Lead(org_id=ORG_ID, user_id=user2.id, intent="human_support", channel="whatsapp")
     )
     await db_session.commit()
 
@@ -1265,25 +1278,30 @@ async def test_request_human_support_from_lead_flags_and_claims(
 async def test_list_lead_human_support_returns_all_requests_for_the_contact(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """The Lead page's Human Support list: every human_support Lead row for the
-    same user_id, and nothing from other users or other intents."""
+    """The Lead page's Human Support list: since there's only one Lead per
+    (org_id, user_id) now (get_or_create_lead_for_user), this returns the
+    lead itself when its intent is human_support, and nothing for a lead
+    with a different intent or for another user's lead."""
     await _seed_org(db_session)
     user = User(org_id=ORG_ID, phone="+910000000017")
     other = User(org_id=ORG_ID, phone="+910000000018")
     db_session.add_all([user, other])
     await db_session.flush()
     base = Lead(org_id=ORG_ID, user_id=user.id, intent="pricing", channel="whatsapp")
-    hs1 = Lead(org_id=ORG_ID, user_id=user.id, intent="human_support", channel="voice")
-    hs2 = Lead(org_id=ORG_ID, user_id=user.id, intent="human_support", channel="whatsapp")
-    other_hs = Lead(org_id=ORG_ID, user_id=other.id, intent="human_support", channel="voice")
-    db_session.add_all([base, hs1, hs2, other_hs])
+    hs = Lead(org_id=ORG_ID, user_id=other.id, intent="human_support", channel="voice")
+    db_session.add_all([base, hs])
     await db_session.commit()
     await db_session.refresh(base)
+    await db_session.refresh(hs)
 
     response = await client.get(f"/admin/leads/{base.id}/human-support", headers=ADMIN_HEADERS)
     assert response.status_code == 200
-    ids = {row["id"] for row in response.json()}
-    assert ids == {str(hs1.id), str(hs2.id)}
+    assert response.json() == []
+
+    response2 = await client.get(f"/admin/leads/{hs.id}/human-support", headers=ADMIN_HEADERS)
+    assert response2.status_code == 200
+    ids = {row["id"] for row in response2.json()}
+    assert ids == {str(hs.id)}
 
 
 async def test_claim_human_support_conflict_when_already_claimed(

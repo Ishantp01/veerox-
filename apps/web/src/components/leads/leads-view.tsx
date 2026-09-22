@@ -116,10 +116,11 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
   // per-channel pages already have `channel` fixed by their caller.
   const effectiveChannel = channel ?? (channelFilter || undefined);
 
-  // Single search box matches against intent (a freeform sentence captured
-  // by the LLM, e.g. "Book an appointment on July 8th") OR tags — so this is
-  // a debounced substring search rather than an exact-match dropdown. See
-  // apps/api/routers/admin.py's _lead_search_clause().
+  // Single search box matches against name, phone, intent (a freeform
+  // sentence captured by the LLM, e.g. "Book an appointment on July 8th"),
+  // tags, and status — so this is a debounced substring search rather than
+  // an exact-match dropdown. See apps/api/routers/admin.py's
+  // _lead_search_clause().
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput.trim()), INTENT_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
@@ -216,8 +217,8 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
                 type="search"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="Search intent or tag…"
-                aria-label="Search leads by intent or tag"
+                placeholder="Search name, phone, intent, tag…"
+                aria-label="Search leads by name, phone, intent, or tag"
                 className="w-48 pl-8 sm:w-56"
               />
             </div>

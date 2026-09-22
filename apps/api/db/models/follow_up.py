@@ -100,7 +100,13 @@ class FollowUpTask(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     org_id: Mapped[UUID] = mapped_column(ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False)
-    lead_id: Mapped[UUID] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), nullable=False)
+    # Indexed: the two unique indexes above are partial, so they can't serve
+    # a plain "lead_id = x" lookup — without a full index here, deleting a
+    # lead makes Postgres seq-scan this table to cascade-delete its rows,
+    # which gets slow as it grows.
+    lead_id: Mapped[UUID] = mapped_column(
+        ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     rule_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("follow_up_rules.id", ondelete="SET NULL"), nullable=True
     )
