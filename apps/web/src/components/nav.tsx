@@ -272,11 +272,11 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
           )}
 
           <div className="px-3 py-3 mt-2 border-t border-slate-200 flex items-center gap-2.5 dark:border-slate-700">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-slate-300 to-slate-400 text-[11px] font-bold text-slate-700 ring-1 ring-slate-200 dark:from-slate-700 dark:to-slate-800 dark:text-slate-300 dark:ring-white/10">
-              VX
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white ring-1 ring-slate-200 dark:ring-white/10">
+              <img src="/icon-mark.png" alt="Work Assign Ai" className="h-5 w-5 object-contain" />
             </div>
             <div>
-              <p className="text-xs font-medium text-slate-500 dark:text-slate-400">v0.1.0 · Dev Mode</p>
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400">v0.1.0</p>
               <p className="text-[11px] text-slate-400 dark:text-slate-600">Voice + WhatsApp Agent</p>
             </div>
           </div>
