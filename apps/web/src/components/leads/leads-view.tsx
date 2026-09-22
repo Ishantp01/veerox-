@@ -6,6 +6,7 @@ import { Download, FileSpreadsheet, Search, Upload, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
+import { ContactsPopup } from "@/components/crm/contacts-popup";
 import { NewContactDialog } from "@/components/crm/new-contact-dialog";
 import { LeadTable } from "@/components/leads/lead-table";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
@@ -295,6 +296,7 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
               {!exporting && <Download size={15} aria-hidden />}
               Export CSV
             </Button>
+            <ContactsPopup />
             <NewContactDialog
               onCreated={(contact) =>
                 createLeadFromContact.mutate(contact.id, {
