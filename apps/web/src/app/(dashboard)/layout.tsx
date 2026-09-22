@@ -12,7 +12,8 @@ import { featureForRoute, isFeatureDisabled } from "@/lib/orgFeatures";
 
 function FullScreenLoader() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-canvas-950 bg-mesh-dark">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-canvas-950 bg-mesh-dark">
+      <img src="/icon-mark.png" alt="Work Assign Ai" className="h-28 w-28 object-contain drop-shadow-[0_0_40px_rgba(59,130,246,0.35)]" />
       <Spinner size={28} label="Loading" className="text-white" />
     </div>
   );

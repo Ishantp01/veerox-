@@ -141,7 +141,7 @@ export default function LoginPage() {
       {/* Brand panel */}
       <div className="hidden shrink-0 flex-col justify-between px-14 py-14 lg:flex lg:w-[46%]">
         <div className="flex items-center gap-3">
-          <img src="/logo.jpg" alt="Work Assign Ai" className="h-9 w-9 rounded-[10px] object-contain" />
+          <img src="/icon-mark.png" alt="Work Assign Ai" className="h-9 w-9 rounded-[10px] object-contain" />
           <div className="leading-tight">
             <div className="text-[17px] font-extrabold tracking-wide text-white">Work Assign Ai</div>
             <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-300">VIROX</div>
@@ -217,7 +217,7 @@ export default function LoginPage() {
 
         <div className="w-full max-w-sm rounded-2xl border border-white/15 bg-white/10 p-6 shadow-2xl backdrop-blur-md sm:p-8">
           <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <img src="/logo.jpg" alt="Work Assign Ai" className="h-9 w-9 rounded-[10px] object-contain" />
+            <img src="/icon-mark.png" alt="Work Assign Ai" className="h-9 w-9 rounded-[10px] object-contain" />
             <div className="text-[17px] font-extrabold tracking-wide text-white">Work Assign Ai</div>
           </div>
 
