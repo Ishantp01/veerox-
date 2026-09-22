@@ -285,15 +285,12 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
             '<Stream bidirectional="true" keepCallAlive="true" '
             'contentType="audio/x-mulaw;rate=8000" '
             f'streamTimeout="3600">{_xml_escape(ws_url)}</Stream>'
-            # keepCallAlive keeps the PSTN leg open if the bridge dies, but
-            # leaves the caller on dead air with no indication anything went
-            # wrong until streamTimeout (1hr) finally ends the call — read by
-            # the caller as an unexplained cut. Plivo resumes XML execution
-            # here when the Stream ends for any reason, same as Twilio's
-            # <Connect><Stream> above, so give it the same apology + hangup
-            # instead of silence.
-            "<Say>Sorry, we're having a connection issue. Please try calling "
-            "again in a moment.</Say><Hangup/>"
+            # Deliberately no follow-up verb after </Stream>: Plivo resumes
+            # XML execution here any time the Stream connection blips (even
+            # transiently, e.g. during normal handshake), and a <Hangup/>
+            # here was cutting live calls within ~1s of connecting. Rely on
+            # keepCallAlive to hold the PSTN leg open instead — only the
+            # caller hanging up (or streamTimeout after 1hr) should end it.
             "</Response>"
         )
         logger.info("plivo_answer_served", caller=caller, call_uuid=call_uuid)
