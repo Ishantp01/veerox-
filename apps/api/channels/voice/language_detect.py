@@ -164,3 +164,57 @@ async def detect_caller_language(text: str) -> str | None:
     if from_script is not None:
         return from_script
     return await classify_via_llm(text)
+
+
+async def classify_switch_target_via_llm(text: str) -> str | None:
+    """Ask specifically which language a caller's explicit mid-call
+    switch request is asking FOR — not what language the request itself
+    happens to be phrased in. Those diverge for a sentence like "बांग्ला में
+    बात करो" ("speak in Bengali"), which is grammatically Hindi but names
+    Bengali as the target: classify_via_llm's "what language is this text
+    in" question would (correctly, for that question) answer Hindi, which is
+    the wrong answer here. Only worth the extra call for the cases the cheap
+    name/script matches already failed on — see detect_switch_target."""
+    if not text.strip():
+        return None
+
+    prompt = (
+        "This is a transcribed snippet from a live phone call. The caller is "
+        "explicitly asking the AI agent on the call to change which language "
+        "it speaks. Identify the TARGET language they are asking the agent "
+        "to switch to (not the language the caller's own sentence is written "
+        "in, if those differ). Reply with exactly one word: one of "
+        f"{', '.join(_CANDIDATE_LANGUAGES)}, or Unclear if you genuinely "
+        "can't tell. No punctuation, no explanation.\n\n"
+        f'Snippet: "{text.strip()}"'
+    )
+    try:
+        result = await chat_completion([{"role": "user", "content": prompt}])
+    except Exception:  # noqa: BLE001
+        logger.warning("language_switch_target_llm_failed", exc_info=True)
+        return None
+
+    guess = (result.content or "").strip().strip(".")
+    for lang in _CANDIDATE_LANGUAGES:
+        if guess.casefold() == lang.casefold():
+            return lang
+    return None
+
+
+async def detect_switch_target(text: str) -> str | None:
+    """Resolve the target language of an explicit mid-call switch request
+    (the caller already said something matching a switch-intent cue — see
+    adapter.py's _LANGUAGE_SWITCH_CUE_RE). Cheapest, most certain signal
+    first: a directly named language (covers "switch to Tamil", "Telugu
+    mein baat karo" — any of the 24 candidates, named in Latin script),
+    then the dedicated LLM question for whatever's left, e.g. a switch
+    request typed entirely in a non-Latin script that names its target in
+    that same script ("हिंदी में बात करो", "বাংলা তে বলো"). Deliberately does
+    NOT fall back to detect_from_script or the generic classify_via_llm —
+    both answer "what language is this text in", which is the wrong
+    question when the request names a target language different from the
+    one it's phrased in."""
+    from_name = detect_from_name(text)
+    if from_name is not None:
+        return from_name
+    return await classify_switch_target_via_llm(text)
