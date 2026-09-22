@@ -402,13 +402,17 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "initiate_ai_call",
             "description": (
-                "Place an outbound AI voice call to the caller — use this ONLY when someone "
+                "Place an outbound AI voice call to the caller — use this when someone "
                 "chatting over WhatsApp wants to keep talking to the AI itself but over voice "
-                "instead of text. Do NOT use this for 'connect me to an agent/human/team "
-                "member' or any request for a person to reach out — that's transfer_to_human, "
-                "even if their wording says 'call' or 'connect'. If they don't give a "
-                "different number, it calls their own number automatically. Not usable while "
-                "already on a voice call."
+                "instead of text, OR when someone already on a voice call asks to be called "
+                "back on a DIFFERENT number (e.g. \"call me on this other number instead\"). "
+                "Do NOT use this for 'connect me to an agent/human/team member' or any request "
+                "for a person to reach out — that's transfer_to_human, even if their wording "
+                "says 'call' or 'connect'. On WhatsApp, if they don't give a different number, "
+                "it calls their own number automatically. On an active voice call, `phone` is "
+                "REQUIRED (you're already talking to their own number, so there's nothing to "
+                "default to) — the current call keeps running as-is while the new one is "
+                "placed; don't end or mention ending this call because of it."
             ),
             "parameters": {
                 "type": "object",
@@ -417,7 +421,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": (
                             "Phone number to call (E.164 preferred). Omit to use the "
-                            "current caller's own number."
+                            "current caller's own number — WhatsApp only; required when "
+                            "already on a voice call."
                         ),
                     },
                     "reason": {
@@ -459,6 +464,16 @@ def _normalize_phone(phone: str) -> str:
     """Strip non-digit characters except a leading ``+`` for E.164 friendliness."""
     cleaned = re.sub(r"[^\d+]", "", phone or "")
     return cleaned
+
+
+def _same_phone(a: str, b: str) -> bool:
+    """Loose equality for two phone numbers that may differ in country-code
+    formatting (``+919876543210`` vs ``9876543210``) — compares the last 10
+    digits (an Indian mobile number's full national significant number) so
+    a +91 prefix mismatch doesn't cause a false "different number"."""
+    digits_a = re.sub(r"\D", "", a or "")
+    digits_b = re.sub(r"\D", "", b or "")
+    return bool(digits_a) and bool(digits_b) and digits_a[-10:] == digits_b[-10:]
 
 
 async def _org_phone(db: AsyncSession, org_id: UUID, phone: str) -> str:
@@ -1637,15 +1652,17 @@ async def initiate_ai_call(
     raw_message: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    """Place an outbound AI voice call to the caller, from a WhatsApp chat.
+    """Place an outbound AI voice call to the caller.
 
-    Refuses on the voice channel itself (already on a call). Reuses the same
-    Plivo/Twilio failover ``routers/admin.py``'s ``outbound_call`` endpoint
-    uses, dialing from the org's own number when it has one.
+    From WhatsApp: defaults to the chatting contact's own number if none is
+    given. From an active voice call: places a SECOND, independent call to
+    an explicitly-given different number, alongside (not instead of) the
+    one in progress — that call keeps running untouched; this just starts
+    another one, same as the campaign dialer or the WhatsApp path do,
+    reusing the same Plivo/Twilio failover ``routers/admin.py``'s
+    ``outbound_call`` endpoint uses, dialing from the org's own number when
+    it has one.
     """
-    if channel == "voice":
-        return {"status": "error", "reason": "already_on_a_call"}
-
     if raw_message and _HUMAN_HANDOFF_KEYWORDS.search(raw_message):
         logger.info(
             "initiate_ai_call_blocked_human_request",
@@ -1658,10 +1675,20 @@ async def initiate_ai_call(
 
     org_id = org_id or _default_org_id()
 
+    caller = await db.get(User, user_id) if user_id is not None else None
+
+    if channel == "voice":
+        # Already mid-call with the caller's own number — there's nothing
+        # sensible to default to, and calling that same number again would
+        # just ring the call already in progress a second time.
+        if not phone:
+            return {"status": "error", "reason": "phone_required_while_on_a_call"}
+        if caller is not None and caller.phone and _same_phone(phone, caller.phone):
+            return {"status": "error", "reason": "already_on_a_call_with_this_number"}
+
     target_phone = phone
-    if not target_phone and user_id is not None:
-        caller = await db.get(User, user_id)
-        target_phone = caller.phone if caller else None
+    if not target_phone and caller is not None:
+        target_phone = caller.phone
 
     if not target_phone:
         return {"status": "error", "reason": "no_phone_number_available"}

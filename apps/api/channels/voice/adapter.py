@@ -779,6 +779,7 @@ async def _dispatch_realtime_tool(
     org_id: UUID,
     campaign_target_id: UUID | None = None,
     conversation_id: UUID | None = None,
+    raw_message: str | None = None,
 ) -> dict[str, Any]:
     """Run a Realtime function call through the shared ``DISPATCH_TABLE``.
 
@@ -788,6 +789,11 @@ async def _dispatch_realtime_tool(
     see ``_resolve_org_id`` in realtime_bridge.py) — threaded through so tool
     handlers write leads/appointments/human-support to the org that actually
     owns the call, instead of falling back to the platform's default org.
+    ``raw_message`` is the caller's current-turn transcript (best-effort —
+    the caller may have said something several turns before this specific
+    function call landed) — passed through so initiate_ai_call's human-
+    handoff keyword guard (core/tools.py) can also catch that case on
+    voice, the same way it already does on WhatsApp.
     """
     handler = DISPATCH_TABLE.get(name)
     if handler is None:
@@ -808,6 +814,7 @@ async def _dispatch_realtime_tool(
                 channel="voice",
                 campaign_target_id=campaign_target_id,
                 conversation_id=conversation_id,
+                raw_message=raw_message,
                 **args,
             )
     except Exception as exc:  # noqa: BLE001
@@ -1203,6 +1210,7 @@ async def handle_openai_event(
             state.org_id,
             campaign_target_id=state.campaign_target_id,
             conversation_id=state.conversation_id,
+            raw_message=state.pending_user_transcript,
         )
         # Feed the tool result back into the session, then ask the model to
         # continue speaking with that result in context.
