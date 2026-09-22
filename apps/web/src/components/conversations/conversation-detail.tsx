@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ArrowLeft, FileText, MessageSquare, Save, Sparkles, Tag } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
@@ -46,6 +46,8 @@ export interface ConversationDetailProps {
  * detail route and the per-channel /whatsapp and /calling sections.
  */
 export function ConversationDetail({ id, backHref, backLabel, channel }: ConversationDetailProps) {
+  const router = useRouter();
+
   // The messages endpoint doesn't report whether the conversation has ended, so
   // we read ended_at from the (already cached + polled) conversation list. If
   // the row isn't found we default to live so we don't prematurely stop polling.
@@ -88,13 +90,26 @@ export function ConversationDetail({ id, backHref, backLabel, channel }: Convers
 
   return (
     <div className="mx-auto max-w-3xl">
-      <Link
-        href={backHref}
+      <button
+        type="button"
+        onClick={() => {
+          // Prefer real browser back — this page is reached from several
+          // places (the Conversations list, a lead's conversation history,
+          // Human Support, …), and `backHref` alone would always dump the
+          // caller onto one fixed page, losing whichever one they actually
+          // came from. Falls back to `backHref` when there's no in-app
+          // history to go back to (e.g. this page was opened directly).
+          if (typeof window !== "undefined" && window.history.length > 1) {
+            router.back();
+          } else {
+            router.push(backHref);
+          }
+        }}
         className="mb-4 inline-flex items-center gap-1.5 rounded-md text-sm text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
       >
         <ArrowLeft size={15} aria-hidden />
         {backLabel}
-      </Link>
+      </button>
 
       <PageHeader
         title="Transcript"

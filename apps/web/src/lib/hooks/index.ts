@@ -26,6 +26,7 @@ export {
   useLead,
   useUpdateLead,
   useDeleteLead,
+  useAddLeadToContacts,
   type LeadFilters,
   type LeadUpdateInput,
 } from "./useLeads";

@@ -69,6 +69,7 @@ from apps.api.db.models import (
     AccountUser,
     CallCampaign,
     CampaignTarget,
+    Contact,
     Conversation,
     FollowUpTask,
     Lead,
@@ -1119,6 +1120,66 @@ async def delete_lead(
     await db.delete(lead)
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/leads/{lead_id}/contact", response_model=LeadOut)
+async def add_lead_to_contacts(
+    lead_id: UUID,
+    db: DbDep,
+    scope_org_id: AnalyticsScopeDep,
+    org: CurrentOrgDep,
+    payload: SessionPayloadDep,
+    account_user_id: RequestAccountUserDep,
+    x_admin_token: str | None = Header(None),
+) -> LeadOut:
+    """Turn a lead with no linked Contact into one, in a single click (the
+    Leads page's "Add to contacts" row action). Creates a Contact from the
+    lead's name/phone and links it — or, if this caller already has a
+    contact for that phone number, reuses it instead of erroring (Contact
+    is siloed per creator, see db/models/contact.py's
+    uq_contacts_org_phone_creator). A no-op if the lead already has one."""
+    lead = (await db.execute(select(Lead).where(Lead.id == lead_id))).scalar_one_or_none()
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if scope_org_id is not None and lead.org_id != scope_org_id:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    member_scope = _member_lead_scope(scope_org_id, org, payload)
+    if member_scope is not None and lead.claimed_by_account_user_id != member_scope:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    if lead.contact_id is not None:
+        return LeadOut.model_validate(lead)
+    if not lead.phone:
+        raise HTTPException(status_code=422, detail="Lead has no phone number to save as a contact")
+
+    contact = Contact(
+        org_id=lead.org_id,
+        name=lead.name,
+        phone=lead.phone,
+        created_by_account_user_id=account_user_id,
+    )
+    db.add(contact)
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        contact = (
+            await db.execute(
+                select(Contact).where(
+                    Contact.org_id == lead.org_id,
+                    Contact.phone == lead.phone,
+                    Contact.created_by_account_user_id == account_user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if contact is None:
+            raise
+        lead = await db.get(Lead, lead_id)  # re-fetch — rollback expired the earlier instance
+
+    lead.contact_id = contact.id
+    await db.commit()
+    await db.refresh(lead)
+    return LeadOut.model_validate(lead)
 
 
 def _leads_export_stmt(

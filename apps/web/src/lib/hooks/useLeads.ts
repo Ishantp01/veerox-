@@ -120,3 +120,23 @@ export function useDeleteLead() {
     },
   });
 }
+
+/**
+ * Save a lead (that has no linked Contact yet) as a Contact, in one click —
+ * the Leads page's "Add to contacts" row action. A no-op if the lead
+ * already has one; reuses an existing contact for that phone number rather
+ * than erroring if this caller already has one on file.
+ *
+ * POST /admin/leads/{id}/contact → Lead
+ */
+export function useAddLeadToContacts() {
+  const queryClient = useQueryClient();
+
+  return useMutation<Lead, Error, string>({
+    mutationFn: (id) => apiFetch<Lead>(`/admin/leads/${id}/contact`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: ["contacts"] });
+    },
+  });
+}

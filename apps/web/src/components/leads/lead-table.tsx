@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useRouter } from "next/navigation";
-import { Trash2 } from "lucide-react";
+import { Trash2, UserPlus } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { isFeatureDisabled } from "@/lib/orgFeatures";
 import {
@@ -14,7 +14,7 @@ import {
   useConfirm,
   useToast,
 } from "@/components/ui";
-import { useDeleteLead } from "@/lib/hooks";
+import { useAddLeadToContacts, useDeleteLead } from "@/lib/hooks";
 import { formatDateTime, formatPhone } from "@/lib/format";
 import type { Lead } from "@/lib/types";
 import { IntentBadge } from "./intent-badge";
@@ -38,6 +38,7 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
   const showConversation = !isFeatureDisabled(features, "conversations");
   const showHumanSupport = !isFeatureDisabled(features, "human_support");
   const deleteLead = useDeleteLead();
+  const addToContacts = useAddLeadToContacts();
   const confirm = useConfirm();
   const { toast } = useToast();
 
@@ -53,6 +54,15 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
       onSuccess: () => toast({ title: "Lead deleted", variant: "success" }),
       onError: (err) =>
         toast({ title: "Could not delete lead", description: err.message, variant: "error" }),
+    });
+  }
+
+  function handleAddToContacts(e: React.MouseEvent, lead: Lead) {
+    e.stopPropagation();
+    addToContacts.mutate(lead.id, {
+      onSuccess: () => toast({ title: "Added to contacts", variant: "success" }),
+      onError: (err) =>
+        toast({ title: "Could not add to contacts", description: err.message, variant: "error" }),
     });
   }
 
@@ -74,6 +84,9 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
             {showConversation && <TableHeader>Conversation</TableHeader>}
             {showHumanSupport && <TableHeader>Human Support</TableHeader>}
             <TableHeader>Created</TableHeader>
+            <TableHeader>
+              <span className="sr-only">Add to contacts</span>
+            </TableHeader>
             <TableHeader>
               <span className="sr-only">Delete</span>
             </TableHeader>
@@ -192,6 +205,22 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
                 )}
                 <TableCell className="text-xs text-slate-500">
                   {formatDateTime(lead.created_at)}
+                </TableCell>
+                <TableCell>
+                  {lead.contact_id ? (
+                    <span className="text-slate-400 dark:text-slate-600">—</span>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      loading={addToContacts.isPending}
+                      onClick={(e) => handleAddToContacts(e, lead)}
+                      aria-label={`Add ${lead.name ?? lead.phone ?? "lead"} to contacts`}
+                      title="Add to contacts"
+                    >
+                      {!addToContacts.isPending && <UserPlus size={14} aria-hidden />}
+                    </Button>
+                  )}
                 </TableCell>
                 <TableCell>
                   <Button
