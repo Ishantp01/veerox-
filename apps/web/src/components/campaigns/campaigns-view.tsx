@@ -2,9 +2,20 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Calendar, FileSpreadsheet, Megaphone, PauseCircle, PlayCircle, Upload } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Calendar,
+  Check,
+  FileSpreadsheet,
+  Megaphone,
+  PauseCircle,
+  PlayCircle,
+  Upload,
+} from "lucide-react";
 import { z } from "zod";
 
+import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import {
@@ -114,6 +125,31 @@ const START_MODE_BUTTON_LABEL: Record<CampaignStartMode, string> = {
   scheduled: "Schedule Campaign",
 };
 
+/** Purely presentational — groups the New campaign form's existing fields
+ * into a step wizard (UI only; validation/submit logic is unchanged). */
+const WIZARD_STEPS = ["Basics", "Audience", "Qualification", "Channel & messaging", "Review"] as const;
+
+/** Which wizard step each validation error belongs to, so a failed submit
+ * (which can happen from the Review step) jumps back to where the problem is. */
+const STEP_FOR_FIELD: Record<keyof CampaignFieldErrors, number> = {
+  name: 0,
+  scheduledAt: 0,
+  file: 1,
+  criteriaPresetId: 2,
+  templateParams: 3,
+  templateHeaderParam: 3,
+  maxAttempts: 3,
+};
+
+function ReviewRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4 border-b border-slate-100 py-2.5 text-sm last:border-0 dark:border-slate-800">
+      <span className="text-slate-500 dark:text-slate-400">{label}</span>
+      <span className="font-semibold text-slate-800 dark:text-slate-100">{value}</span>
+    </div>
+  );
+}
+
 /**
  * Bulk-upload a lead list, criteria included, and let the background worker
  * — the voice dialer (apps/api/workers/campaign_dialer.py) or the WhatsApp
@@ -154,6 +190,7 @@ export function CampaignsView() {
   const [maxAttempts, setMaxAttempts] = useState("3");
   const [fieldErrors, setFieldErrors] = useState<CampaignFieldErrors>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [step, setStep] = useState(0);
 
   const [reschedulingId, setReschedulingId] = useState<string | null>(null);
   const [rescheduleValue, setRescheduleValue] = useState("");
@@ -307,6 +344,13 @@ export function CampaignsView() {
 
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
+      // The field with a problem may live on an earlier wizard step than the
+      // one the user submitted from (e.g. Review) — jump back to it so the
+      // inline error message is actually visible.
+      const stepsWithErrors = Object.keys(errors).map(
+        (key) => STEP_FOR_FIELD[key as keyof CampaignFieldErrors],
+      );
+      setStep(Math.min(...stepsWithErrors));
       return;
     }
     if (!file || !selectedPreset) return;
@@ -381,6 +425,7 @@ export function CampaignsView() {
           setWhatsappNumberId("");
           setMaxAttempts("3");
           setFieldErrors({});
+          setStep(0);
           if (fileInputRef.current) fileInputRef.current.value = "";
         },
         onError: (err) => {
@@ -440,7 +485,38 @@ export function CampaignsView() {
           <CardTitle>New campaign</CardTitle>
         </CardHeader>
         <CardContent>
+          <div className="mb-6 flex items-center overflow-x-auto pb-1">
+            {WIZARD_STEPS.map((label, i) => (
+              <div key={label} className="flex shrink-0 items-center gap-2">
+                <div
+                  className={cn(
+                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold",
+                    i < step
+                      ? "border-emerald-500 bg-emerald-500 text-white"
+                      : i === step
+                        ? "border-primary-500 bg-primary-500 text-white"
+                        : "border-slate-300 bg-slate-100 text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400",
+                  )}
+                >
+                  {i < step ? <Check size={13} aria-hidden /> : i + 1}
+                </div>
+                <span
+                  className={cn(
+                    "whitespace-nowrap text-xs font-semibold",
+                    i <= step ? "text-slate-800 dark:text-slate-100" : "text-slate-400 dark:text-slate-500",
+                  )}
+                >
+                  {label}
+                </span>
+                {i < WIZARD_STEPS.length - 1 && (
+                  <div className="mx-3 h-px w-8 shrink-0 bg-slate-200 dark:bg-slate-700" />
+                )}
+              </div>
+            ))}
+          </div>
+
           <form onSubmit={handleSubmit} className="flex flex-col gap-6" noValidate>
+            {step === 0 && (
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <Label htmlFor="campaign-name" required>
@@ -494,8 +570,10 @@ export function CampaignsView() {
                 )}
               </div>
             </div>
+            )}
 
-            <div className="border-t border-slate-100 pt-5 dark:border-slate-800">
+            {step === 1 && (
+            <div>
               <Label htmlFor="campaign-file" required>
                 Contact list (.csv or .xlsx)
               </Label>
@@ -546,8 +624,10 @@ export function CampaignsView() {
                 both.
               </p>
             </div>
+            )}
 
-            <div className="border-t border-slate-100 pt-5 dark:border-slate-800">
+            {step === 2 && (
+            <div>
               <div className="flex items-center justify-between gap-2">
                 <Label htmlFor="campaign-criteria" required>
                   Qualification criteria
@@ -674,8 +754,11 @@ export function CampaignsView() {
                 verdict — only prospects it marks interested become CRM leads.
               </p>
             </div>
+            )}
 
-            <div className="border-t border-slate-100 pt-5 dark:border-slate-800">
+            {step === 3 && (
+            <div className="flex flex-col gap-6">
+            <div>
               <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
                 Voice &amp; WhatsApp overrides (optional)
               </p>
@@ -895,11 +978,73 @@ export function CampaignsView() {
                 </div>
               </div>
             )}
-            <div data-tour="campaign-submit">
-              <Button type="submit" variant="primary" loading={createCampaign.isPending}>
-                {!createCampaign.isPending && <Upload size={15} aria-hidden />}
-                {START_MODE_BUTTON_LABEL[startMode]}
+            </div>
+            )}
+
+            {step === 4 && (
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                Review
+              </p>
+              <div className="rounded-lg border border-slate-200 px-4 dark:border-slate-800">
+                <ReviewRow label="Campaign name" value={name.trim() || "—"} />
+                <ReviewRow
+                  label="When to start"
+                  value={
+                    startMode === "now"
+                      ? "Start immediately"
+                      : startMode === "scheduled"
+                        ? scheduledAt
+                          ? `Scheduled — ${new Date(scheduledAt).toLocaleString()}`
+                          : "Scheduled — pick a date and time"
+                        : "Save as draft"
+                  }
+                />
+                <ReviewRow label="Contact list" value={file?.name ?? "No file selected"} />
+                <ReviewRow label="Qualification preset" value={selectedPreset?.name ?? "No preset selected"} />
+                <ReviewRow
+                  label="Call from"
+                  value={phoneNumbers.find((n) => n.id === phoneNumberId)?.phone_number ?? "Automatic"}
+                />
+                <ReviewRow
+                  label="Voice script"
+                  value={scripts.find((s) => s.id === scriptId)?.name ?? "Org default"}
+                />
+                <ReviewRow label="Call attempts" value={maxAttempts || "3"} />
+                <ReviewRow
+                  label="WhatsApp template"
+                  value={selectedTemplate ? `${selectedTemplate.name} (${selectedTemplate.language})` : "No template"}
+                />
+              </div>
+              <p className="mt-3 text-xs text-slate-400 dark:text-slate-500">
+                Nothing sends until you click {START_MODE_BUTTON_LABEL[startMode]} below.
+              </p>
+            </div>
+            )}
+
+            <div className="flex items-center justify-between border-t border-slate-100 pt-5 dark:border-slate-800">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setStep((s) => Math.max(0, s - 1))}
+                disabled={step === 0}
+              >
+                <ArrowLeft size={14} aria-hidden />
+                Back
               </Button>
+              {step < WIZARD_STEPS.length - 1 ? (
+                <Button type="button" variant="primary" onClick={() => setStep((s) => Math.min(WIZARD_STEPS.length - 1, s + 1))}>
+                  Continue
+                  <ArrowRight size={14} aria-hidden />
+                </Button>
+              ) : (
+                <div data-tour="campaign-submit">
+                  <Button type="submit" variant="primary" loading={createCampaign.isPending}>
+                    {!createCampaign.isPending && <Upload size={15} aria-hidden />}
+                    {START_MODE_BUTTON_LABEL[startMode]}
+                  </Button>
+                </div>
+              )}
             </div>
           </form>
         </CardContent>

@@ -47,7 +47,7 @@ export function SectionTabs({ items, sectionRoot }: { items: SectionTabItem[]; s
             <Icon size={15} strokeWidth={2} className="shrink-0" />
             {label}
             {active && (
-              <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary-500" />
+              <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary-600 dark:bg-primary-500" />
             )}
           </Link>
         );

@@ -11,81 +11,124 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Blue brand scale — "Lumina Dark" accent (#2f81f7), matches the
-        // VeeROX mockup's sidebar active state, primary buttons, links, and
-        // chart line.
+        // Blue accent — matches the Veerox console mockup's --gold token
+        // (#4C82F0), used for sidebar active state, primary buttons, links,
+        // and chart line.
+        // 500 is the mockup's dark-theme --gold (#4C82F0); 600 is its
+        // light-theme --gold (#265CC9) — more saturated so text/fills stay
+        // readable on a white surface. The rest of the app already follows
+        // this "600 for light, 400/500 for dark" convention (badges, links,
+        // Select's highlighted row, …), so most components pick up the exact
+        // mockup accent per theme automatically.
         primary: {
-          50: "#eff6ff",
-          100: "#dbeafe",
-          200: "#bfdbfe",
-          300: "#93c5fd",
-          400: "#60a5fa",
-          500: "#2f81f7",
-          600: "#0052cc",
-          700: "#0043a6",
-          800: "#003480",
-          900: "#00265c",
-          950: "#001838",
+          50: "#eff5ff",
+          100: "#dbe8fe",
+          200: "#bdd6fd",
+          300: "#8fbafb",
+          400: "#6a9ef7",
+          500: "#4C82F0",
+          600: "#265CC9",
+          700: "#1e49a1",
+          800: "#1c3d84",
+          900: "#1a326a",
+          950: "#122043",
         },
-        // Flat, slightly-cool neutral scale used for the sidebar and other
-        // near-black surfaces — plain gray rather than slate's blue tint,
-        // for a calmer "console" feel.
+        // Flat, slightly-warm neutral scale used for the page canvas and
+        // other near-black surfaces — matches the mockup's --bg exactly in
+        // both themes (#F6F6F4 light / #0A0C0E dark).
         canvas: {
-          50: "#fafafa",
-          100: "#f4f4f5",
+          50: "#F6F6F4",
+          100: "#EFEEEA",
           200: "#e4e4e7",
           300: "#d4d4d8",
           400: "#a1a1aa",
           500: "#71717a",
           600: "#52525b",
           700: "#3f3f46",
-          800: "#201f22",
-          900: "#0a0d14",
-          950: "#0a0d14",
+          800: "#121519",
+          900: "#0A0C0E",
+          950: "#0A0C0E",
         },
-        // Override Tailwind's stock `slate` so every existing `dark:bg-slate-900`
-        // / `dark:border-slate-800` / `dark:text-slate-400` class across the
-        // app (Card, Table, Button, badges, dialogs, …) picks up the VeeROX
-        // "Lumina Dark" surface palette (bg #0a0d14, sidebar #0d1117, card
-        // #161b22, border #30363d) without touching every component file.
-        // Light-mode shades (50-300) are left close to stock.
+        // Override Tailwind's stock `slate` so every existing `bg-slate-*`
+        // / `border-slate-*` / `text-slate-*` class across the app (Card,
+        // Table, Button, badges, dialogs, …) picks up the Veerox console
+        // mockup's surface palette in BOTH themes without touching every
+        // component file: light = surface #FFFFFF (native white, unchanged),
+        // surface-2 #FBFAF8, surface-3 #F0EFEC, border #E4E2DD, text-mid
+        // #5C6570, text-low #8B9198; dark = surface #121519, surface-2
+        // #191D22, surface-3 #20252B, border #262B31, bg #0A0C0E.
         slate: {
-          50: "#f8fafc",
-          100: "#f1f5f9",
-          200: "#e2e8f0",
-          300: "#cbd5e1",
-          400: "#8b93a7",
-          500: "#5b6478",
-          600: "#4b5468",
-          700: "#30363d",
-          800: "#161b22",
-          900: "#0a0d14",
-          950: "#0d1117",
+          50: "#FBFAF8",
+          100: "#F0EFEC",
+          200: "#E4E2DD",
+          300: "#D6D3CC",
+          400: "#8B9198",
+          500: "#5C6570",
+          600: "#495059",
+          700: "#262B31",
+          800: "#191D22",
+          900: "#121519",
+          950: "#0A0C0E",
+        },
+        // Override stock `emerald`/`red` so success/whatsapp badges and
+        // danger buttons pick up the mockup's --teal (#35C7B0) and --danger
+        // (#E5584F) accents everywhere those Tailwind classes are already
+        // used, the same trick as the `slate` override above.
+        // 400/500 (dark-mode wash + text) = the mockup's dark-theme --teal
+        // (#35C7B0); 700 (light-mode text, e.g. badge/link success color) =
+        // its light-theme --teal (#128F7C).
+        emerald: {
+          50: "#e9faf6",
+          100: "#cdf3ea",
+          200: "#9de7d6",
+          300: "#65d5bd",
+          400: "#35C7B0",
+          500: "#35C7B0",
+          600: "#189981",
+          700: "#128F7C",
+          800: "#0f7565",
+          900: "#0d5d51",
+          950: "#0a2b26",
+        },
+        // Same pattern for danger: 400/500 = dark-theme --danger (#E5584F);
+        // 700 (light-mode text) = light-theme --danger (#C4443C).
+        red: {
+          50: "#fdeeed",
+          100: "#fbd9d6",
+          200: "#f7b8b3",
+          300: "#f0918a",
+          400: "#e97169",
+          500: "#E5584F",
+          600: "#d14d43",
+          700: "#C4443C",
+          800: "#a13830",
+          900: "#7d2c26",
+          950: "#3a1512",
         },
       },
       fontFamily: {
         sans: ["var(--font-inter)", "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
       boxShadow: {
         // Hairline elevation — a single soft, low-opacity layer instead of
         // stacked colored shadows, so surfaces read as flat + precise with
-        // depth coming mostly from borders.
+        // depth coming mostly from borders, matching the mockup's flat
+        // "console" direction rather than a colored glow.
         elevated: "0 1px 2px 0 rgb(0 0 0 / 0.04)",
         "elevated-lg": "0 4px 16px -4px rgb(0 0 0 / 0.10)",
-        // Premium tiers: a soft ambient card shadow and a colored "glow" used
-        // sparingly on primary actions / active nav states for the rich-SaaS
-        // direction — depth + a touch of brand color instead of pure gray.
-        card: "0 1px 2px 0 rgb(15 23 42 / 0.04), 0 12px 24px -12px rgb(15 23 42 / 0.10)",
-        "card-lg": "0 2px 4px 0 rgb(15 23 42 / 0.04), 0 24px 48px -16px rgb(15 23 42 / 0.16)",
-        glow: "0 8px 24px -8px rgb(47 129 247 / 0.45)",
-        "glow-lg": "0 16px 40px -12px rgb(47 129 247 / 0.5)",
+        card: "0 1px 2px rgba(0,0,0,.4)",
+        "card-lg": "0 8px 24px rgba(0,0,0,.45)",
+        glow: "0 1px 2px rgba(0,0,0,.4)",
+        "glow-lg": "0 8px 24px rgba(0,0,0,.45)",
       },
       backgroundImage: {
-        "mesh-light":
-          "radial-gradient(at 20% 0%, rgb(47 129 247 / 0.10) 0px, transparent 50%), radial-gradient(at 90% 10%, rgb(56 189 248 / 0.10) 0px, transparent 45%), radial-gradient(at 90% 90%, rgb(16 185 129 / 0.06) 0px, transparent 50%)",
-        "mesh-dark":
-          "radial-gradient(at 20% 0%, rgb(47 129 247 / 0.18) 0px, transparent 50%), radial-gradient(at 90% 10%, rgb(56 189 248 / 0.10) 0px, transparent 45%), radial-gradient(at 90% 90%, rgb(16 185 129 / 0.08) 0px, transparent 50%)",
-        "sidebar-fade": "linear-gradient(180deg, rgb(255 255 255 / 0.06), transparent 20%)",
+        // Flat backgrounds only — the mockup's canvas has no colored mesh
+        // wash, so these resolve to nothing (kept as no-ops so any remaining
+        // `bg-mesh-*`/`bg-sidebar-fade` class reference doesn't error).
+        "mesh-light": "none",
+        "mesh-dark": "none",
+        "sidebar-fade": "none",
       },
       keyframes: {
         "fade-up": {

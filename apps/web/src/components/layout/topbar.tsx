@@ -64,7 +64,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
   const { startTour, startPageGuide, hasPageGuide } = useTour();
 
   return (
-    <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-slate-200/80 bg-white/80 px-4 backdrop-blur-md sm:px-6 lg:px-8 dark:border-slate-700/80 dark:bg-slate-950/70">
+    <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-slate-200/80 bg-white px-4 sm:px-6 lg:px-8 dark:border-slate-700 dark:bg-slate-950">
       <div className="flex min-w-0 items-center gap-2">
         <button
           type="button"

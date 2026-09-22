@@ -155,7 +155,7 @@ export function DialogContent({
         if (e.target === e.currentTarget) setOpen(false);
       }}
     >
-      <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm dark:bg-black/70" aria-hidden />
+      <div className="absolute inset-0 bg-black/60" aria-hidden />
       <div
         ref={panelRef}
         role="dialog"
@@ -168,7 +168,7 @@ export function DialogContent({
           // without this it silently inherits text-align from whatever
           // ancestor happens to set one (e.g. a table's right-aligned
           // Actions cell), even though nothing in the dialog asked for that.
-          "relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col animate-fade-up rounded-2xl border border-slate-200 bg-white text-left shadow-card-lg focus-visible:outline-none dark:border-slate-800 dark:bg-slate-900",
+          "relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col animate-fade-up rounded-xl border border-slate-200 bg-white text-left shadow-card-lg focus-visible:outline-none dark:border-slate-700 dark:bg-slate-900",
           className,
         )}
         {...props}

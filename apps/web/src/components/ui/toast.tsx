@@ -35,21 +35,16 @@ interface ToastContextValue {
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
-const VARIANT_META: Record<
-  ToastVariant,
-  { icon: LucideIcon; accent: string; iconColor: string }
-> = {
+const VARIANT_META: Record<ToastVariant, { icon: LucideIcon; iconColor: string }> = {
   success: {
     icon: CheckCircle2,
-    accent: "border-l-emerald-500",
     iconColor: "text-emerald-600 dark:text-emerald-400",
   },
   error: {
     icon: AlertCircle,
-    accent: "border-l-red-500",
     iconColor: "text-red-600 dark:text-red-400",
   },
-  info: { icon: Info, accent: "border-l-primary-500", iconColor: "text-primary-600 dark:text-primary-400" },
+  info: { icon: Info, iconColor: "text-primary-600 dark:text-primary-400" },
 };
 
 let nextId = 0;
@@ -127,10 +122,7 @@ export function Toaster({ toasts, onDismiss }: ToasterProps) {
           <div
             key={t.id}
             role={t.variant === "error" ? "alert" : "status"}
-            className={cn(
-              "pointer-events-auto flex animate-fade-up items-start gap-3 rounded-xl border border-slate-200 border-l-4 bg-white px-4 py-3 shadow-card-lg dark:border-slate-700 dark:bg-slate-900",
-              meta.accent,
-            )}
+            className="pointer-events-auto flex animate-fade-up items-start gap-3 rounded-md border border-slate-200 bg-white px-4 py-3 shadow-card-lg dark:border-slate-700 dark:bg-slate-800"
           >
             <Icon size={18} className={cn("mt-0.5 shrink-0", meta.iconColor)} aria-hidden />
             <div className="min-w-0 flex-1">

@@ -183,7 +183,7 @@ export function Select({
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onButtonKeyDown}
         className={cn(
-          "flex items-center justify-between gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-left text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100",
+          "flex items-center justify-between gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100",
           className,
         )}
       >
@@ -215,7 +215,7 @@ export function Select({
               // the table render their option list off-screen.
               maxHeight: rect.maxHeight,
             }}
-            className="z-50 w-max overflow-auto rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-card-lg focus-visible:outline-none dark:border-slate-700 dark:bg-slate-900"
+            className="z-50 w-max overflow-auto rounded-md border border-slate-200 bg-white py-1 text-sm shadow-card-lg focus-visible:outline-none dark:border-slate-700 dark:bg-slate-800"
           >
             {options.map((opt, idx) => (
               <li

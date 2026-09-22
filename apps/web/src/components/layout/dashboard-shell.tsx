@@ -22,7 +22,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
   const features = user?.enabled_features ?? null;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-mesh-light dark:bg-mesh-dark">
+    <div className="flex h-screen overflow-hidden bg-canvas-50 dark:bg-slate-950">
       <Nav mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Topbar onMenuClick={() => setMobileNavOpen(true)} />

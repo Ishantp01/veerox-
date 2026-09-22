@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Public_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+const publicSans = Public_Sans({ subsets: ["latin"], variable: "--font-inter" });
+const jetbrainsMono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
   title: "Work Assign Ai — Admin",
@@ -20,8 +21,8 @@ export const metadata: Metadata = {
  */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning className={inter.variable}>
-      <body className="bg-canvas-50 text-slate-700 antialiased font-sans dark:bg-[#0b1120] dark:text-slate-200">
+    <html lang="en" suppressHydrationWarning className={`${publicSans.variable} ${jetbrainsMono.variable}`}>
+      <body className="bg-canvas-50 text-slate-700 antialiased font-sans dark:bg-slate-950 dark:text-slate-200">
         <Providers>{children}</Providers>
       </body>
     </html>

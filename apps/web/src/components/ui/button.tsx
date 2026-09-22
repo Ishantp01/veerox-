@@ -9,27 +9,25 @@ import { Spinner } from "./spinner";
  * (they pass `variant="default"`). New code should prefer `primary`.
  */
 export const buttonVariants = cva(
-  "inline-flex cursor-pointer select-none items-center justify-center rounded-xl font-medium transition-all duration-150 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 disabled:pointer-events-none disabled:opacity-50 disabled:active:scale-100",
+  "inline-flex cursor-pointer select-none items-center justify-center rounded-md border border-transparent font-semibold transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900 disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
-        primary:
-          "bg-gradient-to-b from-primary-500 to-primary-600 text-white shadow-glow hover:shadow-glow-lg hover:from-primary-500 hover:to-primary-700",
-        default:
-          "bg-gradient-to-b from-primary-500 to-primary-600 text-white shadow-glow hover:shadow-glow-lg hover:from-primary-500 hover:to-primary-700",
+        primary: "bg-primary-600 text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-400",
+        default: "bg-primary-600 text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-400",
         secondary:
-          "bg-slate-100 text-slate-700 hover:bg-slate-200 focus-visible:ring-slate-400 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700",
+          "border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200 focus-visible:ring-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700",
         ghost:
           "bg-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus-visible:ring-slate-400 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100",
         danger:
-          "bg-gradient-to-b from-red-500 to-red-600 text-white shadow-elevated hover:from-red-500 hover:to-red-700 focus-visible:ring-red-500",
+          "border-red-200 bg-red-50 text-red-700 hover:bg-red-100 focus-visible:ring-red-500 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/20",
         outline:
-          "border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 focus-visible:ring-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800",
+          "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 focus-visible:ring-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800",
       },
       size: {
-        sm: "px-3 py-1.5 text-xs gap-1.5",
-        md: "px-4 py-2.5 text-sm gap-2",
-        lg: "px-6 py-3 text-base gap-2",
+        sm: "px-2.5 py-1.5 text-xs gap-1.5",
+        md: "px-3.5 py-2 text-sm gap-2",
+        lg: "px-5 py-2.5 text-[15px] gap-2",
       },
     },
     defaultVariants: {

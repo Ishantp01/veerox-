@@ -30,8 +30,8 @@ export function TableRow({
     <tr
       className={cn(
         isHeader
-          ? "bg-slate-50/80 dark:bg-slate-800/60"
-          : "border-t border-slate-100 transition-colors duration-100 hover:bg-primary-50/50 dark:border-slate-800 dark:hover:bg-primary-500/[0.06]",
+          ? "bg-slate-50/80 dark:bg-slate-900"
+          : "border-t border-slate-100 transition-colors duration-100 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60",
         className,
       )}
       {...props}
