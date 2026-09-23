@@ -314,7 +314,15 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
                     "create_response": False,
                 },
                 "noise_reduction": {"type": "far_field"},
-                "transcription": {"model": "whisper-1"},
+                # language="hi" is a bias hint, not a hard constraint - Whisper
+                # still transcribes other languages when the caller clearly
+                # speaks one. Without it, whisper-1 auto-detects the language
+                # per utterance from audio alone, and short/accented Hindi
+                # speech was being misheard as English words entirely (a
+                # caller's Hindi reply showing up as "And hello" in transcripts)
+                # - the language-matching logic below then dutifully "matched"
+                # the caller's language based on that wrong transcript.
+                "transcription": {"model": "whisper-1", "language": "hi"},
             },
             "output": {
                 "format": {"type": "audio/pcmu"},

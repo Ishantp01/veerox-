@@ -333,9 +333,15 @@ class LiveTranscriber:
                                 "input": {
                                     # Same format the phone provider sends — no resampling.
                                     "format": {"type": "audio/pcmu"},
+                                    # language="hi" is a bias hint, not a hard
+                                    # constraint — see realtime_bridge.py's main
+                                    # transcription config for why: without it,
+                                    # short/ambiguous Hindi speech was getting
+                                    # hallucinated as text in unrelated languages.
                                     "transcription": {
                                         "model": settings.voice_live_transcribe_model,
                                         "delay": settings.voice_live_transcribe_delay,
+                                        "language": "hi",
                                     },
                                     # This model does its own segmentation; passing
                                     # server VAD settings is rejected.
