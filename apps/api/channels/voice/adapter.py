@@ -952,6 +952,26 @@ async def _teardown_elevenlabs_turn(state: CallState) -> None:
     if state.eleven_session is not None:
         await state.eleven_session.__aexit__(None, None, None)
         state.eleven_session = None
+
+
+async def cancel_pending_tasks(state: CallState) -> None:
+    """Cancel every background task that still holds a reference to the
+    OpenAI socket realtime_bridge.py is about to replace (a reconnect after
+    the Realtime session dropped mid-call — see that module's reconnect
+    loop). Each of these was created with the *old* ``oai_ws`` closed over,
+    so left running they'd try to ``.send()`` on a dead connection instead
+    of picking up the fresh one. Turn-state fields (ack_stage etc.) are reset
+    by the caller after this; here we only stop the tasks themselves."""
+    for attr in ("cut_task", "ack_task", "hold_task", "reply_task", "live_llm_task"):
+        task = getattr(state, attr)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        setattr(state, attr, None)
+    await _teardown_elevenlabs_turn(state)
     state.eleven_text_buffer = ""
 
 

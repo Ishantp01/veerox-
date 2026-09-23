@@ -63,6 +63,12 @@ router = APIRouter(tags=["voice"])
 
 _OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 
+# How many times to reconnect the OpenAI leg after it drops on its own mid-call
+# before giving up and ending the call. Bounded so a persistent outage (bad
+# key, OpenAI down) doesn't loop forever billing/holding a live phone call —
+# see the reconnect loop in voice_stream below.
+_MAX_OAI_RECONNECTS = 8
+
 
 async def _connect_to_openai(org_id: UUID | None = None) -> Any:
     """Open the raw OpenAI Realtime WebSocket — no instructions sent yet.
@@ -642,15 +648,19 @@ async def voice_stream(ws: WebSocket) -> None:
                                 call_duration_s=round(time.monotonic() - call_started, 1),
                                 exc_info=True,
                             )
-                except websockets.ConnectionClosed:
+                except websockets.ConnectionClosed as exc:
                     # If this fires around the same call_duration_s across
                     # multiple calls, that's a session-duration cap on the
                     # Realtime model, not a random drop — see this
                     # function's module docstring / the P1 note in the
-                    # voice-call-drop investigation.
+                    # voice-call-drop investigation. close_code/close_reason
+                    # are OpenAI's own WS close frame — the actual reason it
+                    # dropped the session, not just that it happened.
                     log.info(
                         "openai_ws_closed",
                         call_duration_s=round(time.monotonic() - call_started, 1),
+                        close_code=exc.code,
+                        close_reason=exc.reason,
                     )
                 except Exception as exc:  # noqa: BLE001
                     log.warning(
@@ -659,14 +669,89 @@ async def voice_stream(ws: WebSocket) -> None:
                         call_duration_s=round(time.monotonic() - call_started, 1),
                     )
 
-            tasks = [
-                asyncio.create_task(pump_call_to_openai()),
-                asyncio.create_task(pump_openai_to_call()),
-            ]
-            _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+            # The caller's own leg (call_task) runs for the life of the real
+            # phone call and is the only thing allowed to end it. The OpenAI
+            # leg (oai_task) is recreated in a loop: if the Realtime session
+            # drops on its own mid-call (rate limit, transient error, etc. —
+            # see openai_ws_closed's close_code/close_reason above) that must
+            # NOT hang up on the caller. Reconnect a fresh session and keep
+            # going instead — only the caller hanging up (call_task finishing)
+            # ends the call.
+            call_task = asyncio.create_task(pump_call_to_openai())
+            oai_reconnects = 0
+            try:
+                while True:
+                    oai_task = asyncio.create_task(pump_openai_to_call())
+                    done, _pending = await asyncio.wait(
+                        {call_task, oai_task}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    if call_task in done:
+                        oai_task.cancel()
+                        await asyncio.gather(oai_task, return_exceptions=True)
+                        break
+                    oai_reconnects += 1
+                    if oai_reconnects > _MAX_OAI_RECONNECTS:
+                        log.warning(
+                            "openai_ws_reconnect_exhausted",
+                            attempts=oai_reconnects,
+                            call_duration_s=round(time.monotonic() - call_started, 1),
+                        )
+                        call_task.cancel()
+                        await asyncio.gather(call_task, return_exceptions=True)
+                        break
+                    log.warning(
+                        "openai_ws_reconnecting",
+                        attempt=oai_reconnects,
+                        call_duration_s=round(time.monotonic() - call_started, 1),
+                    )
+                    await voice_adapter.cancel_pending_tasks(state)
+                    try:
+                        oai = await _connect_to_openai(resolved_org_id)
+                        await oai.send(json.dumps(_session_update_event(state.base_instructions)))
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("openai_ws_reconnect_failed", error=str(exc))
+                        await asyncio.sleep(min(2**oai_reconnects, 8))
+                        continue
+                    # pump_call_to_openai and every handler below read `oai`
+                    # as a free variable off this enclosing scope, so
+                    # reassigning it here is what makes the still-running
+                    # call_task (and the next handle_openai_event call) start
+                    # using the new connection — no restart of call_task
+                    # needed.
+                    state.oai_ws = oai
+                    state.response_active = False
+                    state.ack_stage = None
+                    state.suppress_response_audio = False
+                    state.reply_pending = False
+                    # New session = no conversation history and nothing else
+                    # will fire the next response on its own (unlike a normal
+                    # turn, create_response=False means only we do that) — so
+                    # without this the caller is just left in silence after a
+                    # reconnect they can't see happened. Ask the model to own
+                    # up to the gap and hand the turn back rather than
+                    # guessing at content it no longer has.
+                    try:
+                        await oai.send(
+                            json.dumps(
+                                {
+                                    "type": "response.create",
+                                    "response": {
+                                        "instructions": (
+                                            "The connection glitched for a moment. In "
+                                            "Hindi, briefly and naturally apologize for "
+                                            "the interruption and ask them to repeat what "
+                                            "they were saying. Keep it short."
+                                        ),
+                                    },
+                                }
+                            )
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("openai_ws_reconnect_resume_failed", error=str(exc))
+            finally:
+                if not call_task.done():
+                    call_task.cancel()
+                await asyncio.gather(call_task, return_exceptions=True)
         finally:
             await _stop_live_transcriber(state, live_start_task)
             # pump_call_to_openai already closes oai in its own finally on
