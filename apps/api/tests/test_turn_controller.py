@@ -473,8 +473,9 @@ async def test_finish_first_pause_starts_when_their_turn_commits(finish_first: N
     state.caller_speaking = False  # they finished asking
     await _event(state, oai, call, "input_audio_buffer.committed")
     assert call.sent == [{"event": "clearAudio"}]
-    assert oai.types() == ["response.cancel"]  # pauses the answer; ack follows response.done
+    assert oai.types() == []  # muted, not cancelled; ack follows the muted response's response.done
     assert state.ack_stage == "cancelling"
+    assert state.suppress_response_audio is True
     assert state.restate_next is True
     assert state.finish_first_pending is False
 
@@ -484,8 +485,9 @@ async def test_finish_first_pause_is_immediate_if_verdict_lands_after_they_stopp
 ) -> None:
     state, oai, call = _state(live=_LiveOk(), caller_speaking=False), _FakeOai(), _FakeCall()
     await _feed(state, oai, call, " lekin", " price")
-    assert oai.types() == ["response.cancel"]
+    assert oai.types() == []
     assert state.ack_stage == "cancelling"
+    assert state.suppress_response_audio is True
 
 
 async def test_finish_first_when_only_audio_is_still_playing_sends_the_ack_directly(
@@ -516,7 +518,7 @@ async def test_finish_first_full_sequence(
     oai, call = _FakeOai(), _FakeCall()
 
     await adapter._start_finish_first(oai, call, state, _Log())  # type: ignore[arg-type]
-    assert oai.types() == ["response.cancel"]
+    assert oai.types() == []
 
     await _event(state, oai, call, "response.done")  # paused answer ended -> ack
     assert "heard their question" in _instructions(oai)
@@ -615,7 +617,8 @@ async def test_finish_first_makes_no_duplicate_pause(finish_first: None) -> None
     state, oai, call = _state(live=_LiveOk(), caller_speaking=False), _FakeOai(), _FakeCall()
     await _feed(state, oai, call, " lekin", " price")
     await _feed(state, oai, call, " kya", " hai")
-    assert oai.types() == ["response.cancel"]  # only one pause
+    assert oai.types() == []  # only one pause (muted, not cancelled)
+    assert state.suppress_response_audio is True
 
 
 async def test_answer_now_mode_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:

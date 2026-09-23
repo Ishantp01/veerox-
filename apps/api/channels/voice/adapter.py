@@ -362,15 +362,19 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
         state.interrupted_mid_response = False
         state.overlap_transcripts = []
         if state.response_active:
+            # No response.cancel while generating — see _cut_now's docstring:
+            # this exact action was found to make OpenAI silently close the
+            # whole Realtime session a couple of seconds later. Mute locally
+            # (already done above) and let it finish naturally instead.
             state.ack_stage = "cancelling"
-            await oai_ws.send(json.dumps({"type": "response.cancel"}))
+            state.suppress_response_audio = True
         else:
             await _fire_pending_reply(oai_ws, state)
         return
     if state.response_active:
-        # Wait for the cancelled response's response.done, then ack.
+        # Wait for the muted response's own response.done, then ack.
         state.ack_stage = "cancelling"
-        await oai_ws.send(json.dumps({"type": "response.cancel"}))
+        state.suppress_response_audio = True
     else:
         await _send_ack(oai_ws, state)
 
@@ -421,8 +425,12 @@ async def _start_finish_first(oai_ws: Any, call_ws: WebSocket, state: CallState,
     await _teardown_elevenlabs_turn(state)
     await _send_clear(call_ws, state)
     if state.response_active:
+        # No response.cancel while generating — see _cut_now's docstring.
+        # paused_text/paused_heard_pct above already captured what to resume
+        # later; the muted response finishing quietly in the background
+        # doesn't affect that.
         state.ack_stage = "cancelling"
-        await oai_ws.send(json.dumps({"type": "response.cancel"}))
+        state.suppress_response_audio = True
     else:
         await _send_ack(oai_ws, state)
 
