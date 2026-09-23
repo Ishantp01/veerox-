@@ -980,7 +980,20 @@ async def _apply_language_hint(oai_ws: Any, state: CallState, text: str, log: An
     call and, if it resolves, nudge the session with the detected language
     instead of leaving the model to guess unaided. Runs as a background
     task (see its call site) so the LLM-fallback branch never stalls audio
-    handling on the hot event-processing path."""
+    handling on the hot event-processing path.
+
+    A bare "hello"/"haan"/"ok" as the caller's very first utterance used to
+    be enough to flip the whole call to English — "hello" alone is a real
+    English word, so language_detect confidently (and correctly, for that
+    one word) called it English, and every later turn inherited that even
+    though the caller went on to speak Hindi. The agent's default is Hindi
+    (see the opening-greeting instructions in realtime_bridge.py); only
+    override it once the caller has said enough for the signal to actually
+    mean something."""
+    stripped = text.strip()
+    if turn_controller.is_backchannel(stripped) or len(stripped.split()) < 3:
+        log.info("voice_language_hint_skipped_short", text=text)
+        return
     language = await language_detect.detect_caller_language(text)
     if language is None:
         return
