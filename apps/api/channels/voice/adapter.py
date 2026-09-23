@@ -209,11 +209,15 @@ EARLY_CUT_SECONDS = 0.8
 # With the live transcriber up, the agent is cut off by what the caller SAYS
 # (see handle_live_delta), not by how long they talk. If no verdict has
 # formed after this long of overlapping speech, cut anyway unless the text
-# so far is known to be filler. Kept close to judge_turn's own timeout
-# (turn_controller.judge_turn) below so a slow/failed LLM call doesn't add
-# its own wait on top of this one — lowered from 2.5s after that ceiling
-# was found to be exactly the mid-interruption delay callers noticed.
-LIVE_FALLBACK_CUT_SECONDS = 1.3
+# so far is known to be filler. NOT purely a wait-for-the-LLM budget — the
+# live transcript itself lags real speech by up to ~1s (see
+# LIVE_EVAL_TAIL_SECONDS below), so pushing this below that lag (0.5s was
+# tried and reverted) makes the fallback fire on an empty/partial fragment
+# before "ok"/"achha" has even fully arrived as text, misreading it as a
+# real turn and cutting on plain fillers. 0.8s is the floor found safe in
+# practice — below it, speed comes at the cost of exactly the false-cutoff
+# problem this classifier exists to prevent.
+LIVE_FALLBACK_CUT_SECONDS = 0.8
 # Live text lags speech by up to ~1s, so keep judging for this long after
 # the caller stops speaking.
 LIVE_EVAL_TAIL_SECONDS = 3.0

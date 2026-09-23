@@ -533,10 +533,21 @@ async def voice_stream(ws: WebSocket) -> None:
                     {
                         "type": "response.create",
                         "response": {
+                            # Spelled out explicitly (not just "as your instructions
+                            # describe") because this is the call's very first
+                            # response — there's no conversation history yet for the
+                            # model to fall back on, so a per-response instructions
+                            # override that only gestures at the session instructions
+                            # was leaving the model with nothing concrete to open
+                            # with, and it defaulted to a generic English greeting
+                            # regardless of what the org's script said.
                             "instructions": (
-                                "Begin the call now: open with a short, warm, natural greeting "
-                                "exactly as your instructions describe for your first reply. Do "
-                                "not ask which language they want - just start the conversation."
+                                "Begin the call now: open with a short, warm, natural "
+                                "greeting in Hindi - something like 'Namaste, "
+                                "WorkAssign AI se Veer bol raha hoon. Main aapki kya "
+                                "madad kar sakta hoon?' - adapted to match your "
+                                "persona and script. Do not ask which language they "
+                                "want - just start the conversation in Hindi."
                             ),
                         },
                     }

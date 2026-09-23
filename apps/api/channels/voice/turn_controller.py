@@ -81,7 +81,9 @@ QUESTION_CUES = frozenset(
 )
 
 # Longer than this with anything beyond fillers is not a "haan haan, ok".
-_LONG_UTTERANCE_WORDS = 8
+# Lowered from 8 so more real interruptions resolve instantly off the cheap
+# rules instead of waiting on the (still fast, but non-zero) LLM check.
+_LONG_UTTERANCE_WORDS = 5
 _MAX_FILLER_WORDS = 6
 
 _STRIP = " \t\n.,!?;:।|\"'“”‘’()-…¿？،؟"
@@ -250,7 +252,7 @@ def parse_judgement(content: str | None) -> TurnJudgement | None:
     return TurnJudgement(label=label, confidence=max(0.0, min(1.0, confidence)))
 
 
-async def judge_turn(text: str, api_key: str | None, timeout: float = 1.2) -> TurnJudgement | None:
+async def judge_turn(text: str, api_key: str | None, timeout: float = 0.8) -> TurnJudgement | None:
     """Ask a small, fast model to label ``text`` (any language) with a
     confidence, or None if it couldn't answer in time."""
     from apps.api.core.llm import chat_completion  # local: keeps import cost off startup
