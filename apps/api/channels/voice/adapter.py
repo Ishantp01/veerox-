@@ -1060,10 +1060,21 @@ async def handle_openai_event(
             return
         state.caller_speaking = True
         _clear_hold(state)
-        state.utterance_text = ""
-        state.live_llm_calls = 0
-        state.live_llm_last_words = 0
-        state.live_llm_said_filler = False
+        # OpenAI's VAD can fire speech_started more than once for what is
+        # really one continuous overlap (a brief gap it reads as a new
+        # segment). Wiping the accumulated live-transcript text/verdict state
+        # on every one of those bursts was resetting the judge's progress
+        # back to a short fragment each time, so it kept re-classifying "I
+        # already have tele..." as CONTINUATION forever and never reached a
+        # confident "real" verdict before the agent's answer finished on its
+        # own. Only reset when this is a genuinely new overlap episode
+        # (interrupted_mid_response is cleared once the episode resolves —
+        # see _on_real_turn/_cut_now/input_audio_buffer.committed).
+        if not state.interrupted_mid_response:
+            state.utterance_text = ""
+            state.live_llm_calls = 0
+            state.live_llm_last_words = 0
+            state.live_llm_said_filler = False
         state.finish_first_pending = False
         if _agent_busy(state):
             state.interrupted_mid_response = True
