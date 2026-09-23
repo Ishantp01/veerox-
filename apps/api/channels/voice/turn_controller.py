@@ -250,7 +250,7 @@ def parse_judgement(content: str | None) -> TurnJudgement | None:
     return TurnJudgement(label=label, confidence=max(0.0, min(1.0, confidence)))
 
 
-async def judge_turn(text: str, api_key: str | None, timeout: float = 2.5) -> TurnJudgement | None:
+async def judge_turn(text: str, api_key: str | None, timeout: float = 1.2) -> TurnJudgement | None:
     """Ask a small, fast model to label ``text`` (any language) with a
     confidence, or None if it couldn't answer in time."""
     from apps.api.core.llm import chat_completion  # local: keeps import cost off startup

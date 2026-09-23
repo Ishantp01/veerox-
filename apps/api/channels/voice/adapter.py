@@ -122,6 +122,12 @@ class CallState:
     # waiting for its response.done; "ack" = the short acknowledgment is
     # playing; "resume" = the interrupted answer is being continued.
     ack_stage: str | None = None
+    # True while a response is being muted-not-cancelled (see _cut_now):
+    # generation keeps running server-side so we don't risk killing the
+    # session, but its audio/text deltas must not reach the caller. Cleared
+    # on that response's response.done, right where ack_stage=="cancelling"
+    # is otherwise consumed.
+    suppress_response_audio: bool = False
     ack_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
     reply_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
     # ``time.monotonic()`` moment the audio already sent to the caller
@@ -203,8 +209,11 @@ EARLY_CUT_SECONDS = 0.8
 # With the live transcriber up, the agent is cut off by what the caller SAYS
 # (see handle_live_delta), not by how long they talk. If no verdict has
 # formed after this long of overlapping speech, cut anyway unless the text
-# so far is known to be filler.
-LIVE_FALLBACK_CUT_SECONDS = 2.5
+# so far is known to be filler. Kept close to judge_turn's own timeout
+# (turn_controller.judge_turn) below so a slow/failed LLM call doesn't add
+# its own wait on top of this one — lowered from 2.5s after that ceiling
+# was found to be exactly the mid-interruption delay callers noticed.
+LIVE_FALLBACK_CUT_SECONDS = 1.3
 # Live text lags speech by up to ~1s, so keep judging for this long after
 # the caller stops speaking.
 LIVE_EVAL_TAIL_SECONDS = 3.0
@@ -431,8 +440,19 @@ async def _on_real_turn(
 
 
 async def _cut_now(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, reason: str) -> None:
-    """Stop the agent mid-speech: drop queued audio, cancel the in-flight
-    response, and make sure the caller's turn gets answered."""
+    """Stop the agent mid-speech: drop queued audio and make sure the
+    caller's turn gets answered.
+
+    Deliberately does NOT send response.cancel for a response that's
+    actively streaming (still_generating=True) — a live call was observed
+    to have its OpenAI Realtime session close itself (silently, no error
+    event) a couple of seconds after a cancel landed mid-generation. Muting
+    the audio locally (_send_clear/_teardown_elevenlabs_turn, already done
+    above) already stops the caller hearing it; letting the response finish
+    generating in the background and answering on its natural response.done
+    (same ack_stage="cancelling" bookkeeping response.cancel would have
+    relied on) gets the same caller-facing result without risking the whole
+    call. Costs a little latency on the rare case this branch is taken."""
     if not _agent_busy(state):
         return
     if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
@@ -446,8 +466,12 @@ async def _cut_now(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, 
         # earlier); make sure it is answered now.
         state.reply_pending = True
     if state.response_active:
-        # response.done for the cancelled response fires the pending reply.
-        await oai_ws.send(json.dumps({"type": "response.cancel"}))
+        # response.done (whenever the muted response naturally finishes)
+        # fires the pending reply — see the ack_stage=="cancelling" branch
+        # in handle_openai_event's response.done handler. suppress_response_audio
+        # stops its still-arriving deltas reaching the caller in the meantime.
+        state.ack_stage = "cancelling"
+        state.suppress_response_audio = True
     elif state.reply_pending:
         _schedule_reply(oai_ws, state)
 
@@ -1037,7 +1061,7 @@ async def handle_openai_event(
     # exact final names post-migration — accept both until confirmed live.
     if etype in ("response.audio.delta", "response.output_audio.delta"):
         delta = event.get("delta")
-        if delta:
+        if delta and not state.suppress_response_audio:
             await _send_media(call_ws, state, delta)
             _note_first_output(state, log, "audio")
 
@@ -1179,7 +1203,9 @@ async def handle_openai_event(
 
     elif etype in ("response.audio_transcript.done", "response.output_audio_transcript.done"):
         assistant_text = (event.get("transcript") or "").strip()
-        if assistant_text:
+        # Muted response the caller never heard (see _cut_now) — don't log or
+        # persist it as something the agent actually said.
+        if assistant_text and not state.suppress_response_audio:
             state.last_spoken_text = assistant_text
             await _persist_voice_turn(state, assistant_text)
             log.info("voice_assistant_transcript", text=assistant_text)
@@ -1192,6 +1218,8 @@ async def handle_openai_event(
         # full response to finish.
         delta = event.get("delta") or ""
         state.resp_text += delta
+        if state.suppress_response_audio:
+            return
         if delta:
             _note_first_output(state, log, "text")
         if state.tts_provider == "elevenlabs" and delta:
@@ -1247,6 +1275,7 @@ async def handle_openai_event(
 
     elif etype == "response.done":
         state.response_active = False
+        state.suppress_response_audio = False
         # The opening greeting has finished playing — lift the barge-in
         # suppression so normal interruption works for the rest of the call.
         # (its audio may still be queued at the provider, so hold the guard

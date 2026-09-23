@@ -141,10 +141,16 @@ async def test_filler_does_not_cut_the_agent() -> None:
 
 
 async def test_real_question_cuts_the_agent_immediately() -> None:
+    # No response.cancel while the answer is still generating — see _cut_now's
+    # docstring: a live call had its OpenAI Realtime session close itself a
+    # couple of seconds after a cancel landed mid-generation. Audio is muted
+    # locally instead and the pending reply fires on the muted response's own
+    # (natural) response.done via ack_stage="cancelling".
     state, oai, call = _state(), _FakeOai(), _FakeCall()
     await _feed(state, oai, call, " haan", ",", " lekin", " price")
-    assert oai.types() == ["response.cancel"]
+    assert oai.types() == []
     assert call.sent == [{"event": "clearAudio"}]
+    assert state.ack_stage == "cancelling"
     assert state.cut_eval_deadline == 0.0  # only cut once
 
 
@@ -182,7 +188,8 @@ async def test_unsure_text_is_judged_by_the_llm(monkeypatch: pytest.MonkeyPatch)
     assert state.live_llm_task is not None
     await state.live_llm_task
     assert calls, "LLM was never consulted"
-    assert oai.types() == ["response.cancel"]
+    assert oai.types() == []
+    assert state.ack_stage == "cancelling"
 
 
 async def test_llm_saying_filler_keeps_the_agent_talking(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -229,8 +236,9 @@ async def test_real_turn_after_their_speech_ended_still_gets_answered() -> None:
     state = _state(caller_speaking=False, reply_pending=False)
     oai, call = _FakeOai(), _FakeCall()
     await _feed(state, oai, call, " haan", " lekin", " price")
-    assert state.reply_pending is True  # fires from the cancelled response's response.done
-    assert oai.types() == ["response.cancel"]
+    assert state.reply_pending is True  # fires from the muted response's own response.done
+    assert oai.types() == []
+    assert state.ack_stage == "cancelling"
 
 
 async def test_cut_answers_immediately_when_audio_is_queued_but_generation_is_done() -> None:
@@ -614,7 +622,8 @@ async def test_answer_now_mode_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(adapter.settings, "voice_interruption_mode", "answer_now")
     state, oai, call = _state(live=_LiveOk()), _FakeOai(), _FakeCall()
     await _feed(state, oai, call, " lekin", " price")
-    assert oai.types() == ["response.cancel"]
+    assert oai.types() == []
+    assert state.ack_stage == "cancelling"
     assert state.finish_first_pending is False
 
 
