@@ -71,20 +71,12 @@ class CallState:
     # The system instructions currently in force on the Realtime session —
     # starts as whatever realtime_bridge.py sent in the initial
     # session.update, and is kept in sync every time this adapter sends a
-    # later session.update with new instructions (the one-shot
-    # language-detection hint, and any explicit mid-call language switch —
-    # see _apply_language_hint / _apply_language_switch below). Every place
-    # that rebuilds a one-off response.instructions string reads this field
+    # later session.update with new instructions (an explicit mid-call
+    # language switch — see _apply_language_switch below). Every place that
+    # rebuilds a one-off response.instructions string reads this field
     # rather than a connect-time snapshot, so it never regenerates a reply
     # from stale (e.g. pre-switch) instructions.
     base_instructions: str = ""
-    # Set once language_detect has run on the caller's first transcript of
-    # the call, whether or not it resolved to anything — this fires at most
-    # once per call. Later turns are instead covered by
-    # _LANGUAGE_SWITCH_CUE_RE / _handle_language_switch_request, which run on
-    # every transcript and reinforce the session the moment the caller
-    # explicitly asks to change language.
-    language_hint_sent: bool = False
     # ``time.monotonic()`` deadline before which caller speech does NOT
     # barge in on the agent's response. Set by realtime_bridge.py when it
     # fires the opening greeting: on an outbound call the callee almost
@@ -975,52 +967,6 @@ async def cancel_pending_tasks(state: CallState) -> None:
     state.eleven_text_buffer = ""
 
 
-async def _apply_language_hint(oai_ws: Any, state: CallState, text: str, log: Any) -> None:
-    """One-shot: run language_detect on the caller's first transcript of the
-    call and, if it resolves, nudge the session with the detected language
-    instead of leaving the model to guess unaided. Runs as a background
-    task (see its call site) so the LLM-fallback branch never stalls audio
-    handling on the hot event-processing path.
-
-    A bare "hello"/"haan"/"ok" as the caller's very first utterance used to
-    be enough to flip the whole call to English — "hello" alone is a real
-    English word, so language_detect confidently (and correctly, for that
-    one word) called it English, and every later turn inherited that even
-    though the caller went on to speak Hindi. The agent's default is Hindi
-    (see the opening-greeting instructions in realtime_bridge.py); only
-    override it once the caller has said enough for the signal to actually
-    mean something."""
-    stripped = text.strip()
-    if turn_controller.is_backchannel(stripped) or len(stripped.split()) < 3:
-        log.info("voice_language_hint_skipped_short", text=text)
-        return
-    language = await language_detect.detect_caller_language(text)
-    if language is None:
-        return
-    updated_instructions = (
-        f"{state.base_instructions}\n\n"
-        f"Live language signal: the caller's own words indicate their language "
-        f"is {language} - use it for your very next reply and the rest of the "
-        f"call unless they explicitly ask you to switch."
-    )
-    try:
-        await oai_ws.send(
-            json.dumps(
-                {
-                    "type": "session.update",
-                    "session": {"type": "realtime", "instructions": updated_instructions},
-                }
-            )
-        )
-        # Keep base_instructions in sync so any later one-off response (e.g.
-        # _answer_after_readback) rebuilds from the live instructions instead
-        # of the pre-hint, connect-time snapshot.
-        state.base_instructions = updated_instructions
-        log.info("voice_language_hint_applied", language=language)
-    except Exception:  # noqa: BLE001
-        log.warning("voice_language_hint_send_failed", exc_info=True)
-
-
 # Cues that indicate the caller is explicitly asking the agent to change
 # what language it speaks — as opposed to merely saying a sentence that
 # happens to be in (or names) some language. This is deliberately about
@@ -1046,9 +992,9 @@ _LANGUAGE_SWITCH_CUE_RE = re.compile(
 async def _handle_language_switch_request(oai_ws: Any, state: CallState, text: str, log: Any) -> None:
     """Background task kicked off the moment a transcript matches
     _LANGUAGE_SWITCH_CUE_RE: resolve which language the caller meant and, if
-    resolved, reinforce it on the live session. Runs as a task (like
-    _apply_language_hint) so the LLM fallback inside detect_switch_target
-    never stalls the hot event-processing path. Uses
+    resolved, reinforce it on the live session. Runs as a task so the LLM
+    fallback inside detect_switch_target never stalls the hot
+    event-processing path. Uses
     language_detect.detect_switch_target rather than detect_caller_language:
     the latter answers "what language is this text in", which is the wrong
     question when a switch request names one language while being phrased in
@@ -1237,14 +1183,14 @@ async def handle_openai_event(
             state.overlap_transcripts.append(state.pending_user_transcript)
         log.info("voice_user_transcript", text=state.pending_user_transcript)
         text = state.pending_user_transcript
+        # Only switch language on an explicit request ("English mein baat
+        # karo"). The old auto-hint (detect the caller's language from their
+        # first transcript and switch to it unasked) used to flip the whole
+        # call to English off a bare first "hello" — the agent now stays on
+        # the Hindi greeting's language until the caller actually asks to
+        # change it, never on a guess.
         if text and _LANGUAGE_SWITCH_CUE_RE.search(text):
             asyncio.create_task(_handle_language_switch_request(oai_ws, state, text, log))
-        elif not state.language_hint_sent:
-            state.language_hint_sent = True
-            if state.pending_user_transcript:
-                asyncio.create_task(
-                    _apply_language_hint(oai_ws, state, state.pending_user_transcript, log)
-                )
 
     elif etype in ("response.audio_transcript.done", "response.output_audio_transcript.done"):
         assistant_text = (event.get("transcript") or "").strip()
