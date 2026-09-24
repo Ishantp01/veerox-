@@ -222,3 +222,47 @@ async def test_create_appointment_rejects_slot_within_30_minutes(
     )
 
     assert response.status_code == 409
+
+
+async def test_create_and_patch_appointment_callback_at(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The Call Back column's field round-trips through the API: settable on
+    create, patchable afterwards (e.g. from the edit dialog), and clearable
+    by patching it back to null."""
+    await _seed_org(db_session)
+    scheduled_at = datetime.now(UTC) + timedelta(days=2)
+    callback_at = datetime.now(UTC) + timedelta(days=1)
+
+    create_response = await client.post(
+        "/appointments",
+        json={
+            "scheduled_at": scheduled_at.isoformat(),
+            "callback_at": callback_at.isoformat(),
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["callback_at"] is not None
+
+    new_callback_at = (callback_at + timedelta(hours=2)).isoformat()
+    patch_response = await client.patch(
+        f"/appointments/{created['id']}",
+        json={"callback_at": new_callback_at},
+        headers=ADMIN_HEADERS,
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["callback_at"] is not None
+
+    clear_response = await client.patch(
+        f"/appointments/{created['id']}",
+        json={"callback_at": None},
+        headers=ADMIN_HEADERS,
+    )
+    assert clear_response.status_code == 200
+    assert clear_response.json()["callback_at"] is None
+
+    list_response = await client.get("/appointments", headers=ADMIN_HEADERS)
+    assert list_response.status_code == 200
+    assert any(a["id"] == created["id"] for a in list_response.json())

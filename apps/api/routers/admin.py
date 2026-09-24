@@ -95,6 +95,7 @@ from apps.api.deps import (
     RequestAccountUserDep,
     RequestOrgDep,
     SessionPayloadDep,
+    is_org_feature_enabled,
     owned_lead_user_ids,
     require_feature,
     verify_admin_or_session,
@@ -329,7 +330,11 @@ async def get_stats(
     }
 
 
-@router.get("/reports/timeseries", response_model=list[ReportsTimeseriesPoint])
+@router.get(
+    "/reports/timeseries",
+    response_model=list[ReportsTimeseriesPoint],
+    dependencies=[Depends(require_feature("reports"))],
+)
 async def get_reports_timeseries(
     db: DbDep,
     scope_org_id: AnalyticsScopeDep,
@@ -448,7 +453,11 @@ async def get_reports_timeseries(
     ]
 
 
-@router.get("/reports/campaigns", response_model=list[ReportsCampaignRow])
+@router.get(
+    "/reports/campaigns",
+    response_model=list[ReportsCampaignRow],
+    dependencies=[Depends(require_feature("reports"))],
+)
 async def get_reports_campaigns(
     db: DbDep,
     scope_org_id: AnalyticsScopeDep,
@@ -489,7 +498,7 @@ async def get_reports_campaigns(
     return rows
 
 
-@router.get("/reports/export.xlsx")
+@router.get("/reports/export.xlsx", dependencies=[Depends(require_feature("reports"))])
 async def export_reports_xlsx(
     db: DbDep,
     scope_org_id: AnalyticsScopeDep,
@@ -837,6 +846,28 @@ async def _claim_customer_lead_for_member(
         lead.claimed_at = func.now()
 
 
+_CAMPAIGN_CHANNEL_FEATURE = {"voice": "campaigns_voice", "whatsapp": "campaigns_whatsapp"}
+
+
+async def _require_campaign_channel_feature(db: DbDep, org_id: UUID, channel: str) -> None:
+    """Gate a channel-locked campaign create/list call (the per-channel
+    Voice/WhatsApp Campaigns pages always pass ``channel``) behind
+    AVAILABLE_ORG_FEATURES' "campaigns_voice"/"campaigns_whatsapp" — mirrors
+    routers/follow_ups.py's _require_channel_feature. A caller that omits
+    ``channel`` (mixed-channel upload from the unified CRM leads page) isn't
+    gated here since it may span both channels."""
+    feature = _CAMPAIGN_CHANNEL_FEATURE[channel]
+    if not await is_org_feature_enabled(db, org_id, feature):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "feature_disabled",
+                "feature": feature,
+                "message": "This feature is not enabled for your organization. Contact the platform admin.",
+            },
+        )
+
+
 def _guard_campaign_access(
     campaign: CallCampaign | None,
     scope_org_id: UUID | None,
@@ -858,7 +889,7 @@ def _guard_campaign_access(
     return campaign
 
 
-@router.get("/leads")
+@router.get("/leads", dependencies=[Depends(require_feature("leads"))])
 async def list_leads(
     db: DbDep,
     scope_org_id: AnalyticsScopeDep,
@@ -927,7 +958,7 @@ def _csv_streaming_response(csv_text: str, filename: str) -> StreamingResponse:
     )
 
 
-@router.get("/leads/sample.csv")
+@router.get("/leads/sample.csv", dependencies=[Depends(require_feature("leads"))])
 async def sample_leads_csv(x_admin_token: str | None = Header(None)) -> StreamingResponse:
     """Blank-data template for POST /leads/import — same columns that
     endpoint reads (name, phone, call, whatsapp, status), so a unified-page
@@ -948,7 +979,7 @@ async def sample_leads_csv(x_admin_token: str | None = Header(None)) -> Streamin
     return _csv_streaming_response(buf.getvalue(), "leads-sample.csv")
 
 
-@router.get("/leads/sample.xlsx")
+@router.get("/leads/sample.xlsx", dependencies=[Depends(require_feature("leads"))])
 async def sample_leads_xlsx(x_admin_token: str | None = Header(None)) -> StreamingResponse:
     """Same template as GET /leads/sample.csv, as an .xlsx workbook."""
     workbook = openpyxl.Workbook()
@@ -971,7 +1002,11 @@ async def sample_leads_xlsx(x_admin_token: str | None = Header(None)) -> Streami
     )
 
 
-@router.get("/leads/{lead_id}", response_model=LeadDetailOut)
+@router.get(
+    "/leads/{lead_id}",
+    response_model=LeadDetailOut,
+    dependencies=[Depends(require_feature("leads"))],
+)
 async def get_lead(
     lead_id: UUID,
     db: DbDep,
@@ -1023,7 +1058,11 @@ async def get_lead(
     return LeadDetailOut(**lead_out.model_dump(), conversations=conversations)
 
 
-@router.patch("/leads/{lead_id}", response_model=LeadOut)
+@router.patch(
+    "/leads/{lead_id}",
+    response_model=LeadOut,
+    dependencies=[Depends(require_feature("leads"))],
+)
 async def update_lead(
     lead_id: UUID,
     payload: LeadUpdateIn,
@@ -1097,7 +1136,7 @@ async def update_lead(
     return LeadOut.model_validate(lead)
 
 
-@router.delete("/leads/{lead_id}")
+@router.delete("/leads/{lead_id}", dependencies=[Depends(require_feature("leads"))])
 async def delete_lead(
     lead_id: UUID,
     db: DbDep,
@@ -1122,7 +1161,11 @@ async def delete_lead(
     return {"ok": True}
 
 
-@router.post("/leads/{lead_id}/contact", response_model=LeadOut)
+@router.post(
+    "/leads/{lead_id}/contact",
+    response_model=LeadOut,
+    dependencies=[Depends(require_feature("leads"))],
+)
 async def add_lead_to_contacts(
     lead_id: UUID,
     db: DbDep,
@@ -1243,7 +1286,7 @@ def _lead_export_row(lead: Lead) -> list[str]:
     ]
 
 
-@router.get("/leads.csv")
+@router.get("/leads.csv", dependencies=[Depends(require_feature("leads"))])
 async def export_leads_csv(
     db: DbDep,
     scope_org_id: AnalyticsScopeDep,
@@ -1292,7 +1335,7 @@ async def export_leads_csv(
     return _csv_streaming_response(buf.getvalue(), "leads.csv")
 
 
-@router.get("/leads.xlsx")
+@router.get("/leads.xlsx", dependencies=[Depends(require_feature("leads"))])
 async def export_leads_xlsx(
     db: DbDep,
     scope_org_id: AnalyticsScopeDep,
@@ -1501,7 +1544,11 @@ _DEFAULT_IMPORT_CRITERIA = (
 )
 
 
-@router.post("/leads/import", response_model=CampaignCreateResult)
+@router.post(
+    "/leads/import",
+    response_model=CampaignCreateResult,
+    dependencies=[Depends(require_feature("leads"))],
+)
 async def import_leads_file(
     db: DbDep,
     org: RequestOrgDep,
@@ -1550,6 +1597,8 @@ async def import_leads_file(
     default — uploading a list never starts calling/messaging on its own),
     or begin at a future ``scheduled_start_at`` ("scheduled").
     """
+    if channel is not None:
+        await _require_campaign_channel_feature(db, org, channel)
     if start_mode == "scheduled" and (
         scheduled_start_at is None or scheduled_start_at <= datetime.now(UTC)
     ):
@@ -1594,7 +1643,11 @@ async def import_leads_file(
     )
 
 
-@router.post("/leads/bulk", response_model=CampaignCreateResult)
+@router.post(
+    "/leads/bulk",
+    response_model=CampaignCreateResult,
+    dependencies=[Depends(require_feature("leads"))],
+)
 async def import_leads_bulk(
     payload: LeadBulkImportIn,
     db: DbDep,
@@ -2103,6 +2156,8 @@ async def create_campaign(
     to this many times; a target that connects is marked done after that one
     call.
     """
+    if channel is not None:
+        await _require_campaign_channel_feature(db, org, channel)
     if start_mode == "scheduled" and (
         scheduled_start_at is None or scheduled_start_at <= datetime.now(UTC)
     ):
@@ -2218,6 +2273,9 @@ async def list_campaigns(
             .correlate(CallCampaign)
             .scalar_subquery()
         )
+
+    if channel is not None and scope_org_id is not None:
+        await _require_campaign_channel_feature(db, scope_org_id, channel)
 
     stmt = (
         select(
@@ -3334,7 +3392,11 @@ async def delete_lead_status_preset(
     return {"ok": True}
 
 
-@router.get("/whatsapp-assets", response_model=list[WhatsAppAssetOut])
+@router.get(
+    "/whatsapp-assets",
+    response_model=list[WhatsAppAssetOut],
+    dependencies=[Depends(require_feature("whatsapp_media"))],
+)
 async def list_whatsapp_assets(
     db: DbDep,
     org: RequestOrgDep,
@@ -3352,7 +3414,12 @@ async def list_whatsapp_assets(
     return [WhatsAppAssetOut.model_validate(a) for a in result.scalars().all()]
 
 
-@router.post("/whatsapp-assets", response_model=WhatsAppAssetOut, status_code=201)
+@router.post(
+    "/whatsapp-assets",
+    response_model=WhatsAppAssetOut,
+    status_code=201,
+    dependencies=[Depends(require_feature("whatsapp_media"))],
+)
 async def create_whatsapp_asset(
     db: DbDep,
     org: RequestOrgDep,
@@ -3395,7 +3462,11 @@ async def create_whatsapp_asset(
     return WhatsAppAssetOut.model_validate(asset)
 
 
-@router.patch("/whatsapp-assets/{asset_id}", response_model=WhatsAppAssetOut)
+@router.patch(
+    "/whatsapp-assets/{asset_id}",
+    response_model=WhatsAppAssetOut,
+    dependencies=[Depends(require_feature("whatsapp_media"))],
+)
 async def update_whatsapp_asset(
     asset_id: UUID,
     body: WhatsAppAssetUpdateIn,
@@ -3419,7 +3490,10 @@ async def update_whatsapp_asset(
     return WhatsAppAssetOut.model_validate(asset)
 
 
-@router.delete("/whatsapp-assets/{asset_id}")
+@router.delete(
+    "/whatsapp-assets/{asset_id}",
+    dependencies=[Depends(require_feature("whatsapp_media"))],
+)
 async def delete_whatsapp_asset(
     asset_id: UUID,
     db: DbDep,
@@ -3702,7 +3776,11 @@ async def request_human_support(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/outbound/whatsapp", response_model=OutboundWhatsappOut)
+@router.post(
+    "/outbound/whatsapp",
+    response_model=OutboundWhatsappOut,
+    dependencies=[Depends(require_feature("whatsapp"))],
+)
 @limiter.limit("30/minute")
 async def outbound_whatsapp(
     request: Request,
@@ -3890,7 +3968,11 @@ async def outbound_whatsapp(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/outbound/call", response_model=OutboundCallOut)
+@router.post(
+    "/outbound/call",
+    response_model=OutboundCallOut,
+    dependencies=[Depends(require_feature("calling"))],
+)
 @limiter.limit("10/minute")
 async def outbound_call(
     request: Request,

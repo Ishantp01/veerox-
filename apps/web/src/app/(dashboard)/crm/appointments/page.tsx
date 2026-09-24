@@ -145,7 +145,7 @@ export default function AppointmentsPage() {
           <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
-                <SkeletonRows rows={5} cols={8} />
+                <SkeletonRows rows={5} cols={9} />
               </tbody>
             </Table>
           </div>
@@ -168,6 +168,7 @@ export default function AppointmentsPage() {
                 <TableHeader>Name</TableHeader>
                 <TableHeader>Number</TableHeader>
                 <TableHeader>When</TableHeader>
+                <TableHeader>Call Back</TableHeader>
                 <TableHeader>Duration</TableHeader>
                 <TableHeader>Notes</TableHeader>
                 <TableHeader>Tags</TableHeader>
@@ -184,6 +185,15 @@ export default function AppointmentsPage() {
                   <TableCell className="text-xs text-slate-500">{appt.phone ?? "—"}</TableCell>
                   <TableCell className="font-semibold text-slate-800 dark:text-slate-100">
                     {formatDateTime(appt.scheduled_at)}
+                  </TableCell>
+                  <TableCell className="text-xs text-slate-600 dark:text-slate-400">
+                    {appt.callback_at ? (
+                      <Badge variant="live" icon={null}>
+                        {formatDateTime(appt.callback_at)}
+                      </Badge>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
                   </TableCell>
                   <TableCell className="text-xs text-slate-500">{appt.duration_minutes} min</TableCell>
                   <TableCell className="max-w-xs truncate text-xs text-slate-600 dark:text-slate-400">

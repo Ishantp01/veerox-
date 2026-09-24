@@ -34,6 +34,7 @@ from apps.api.deps import (
     CurrentUserDep,
     DbDep,
     RedisDep,
+    require_feature,
     require_role,
 )
 from apps.api.schemas.team import (
@@ -44,7 +45,9 @@ from apps.api.schemas.team import (
     UpdateMemberIn,
 )
 
-router = APIRouter(prefix="/team", tags=["team"])
+router = APIRouter(
+    prefix="/team", tags=["team"], dependencies=[Depends(require_feature("team"))]
+)
 
 OrgMemberDep = CurrentOrgDep
 ManagerDep = Annotated[CurrentOrg, Depends(require_role("admin"))]

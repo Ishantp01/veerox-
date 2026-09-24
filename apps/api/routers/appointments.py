@@ -195,6 +195,7 @@ async def create_appointment(
         duration_minutes=payload.duration_minutes,
         assigned_user_id=payload.assigned_user_id,
         notes=payload.notes,
+        callback_at=payload.callback_at,
     )
     db.add(appointment)
 

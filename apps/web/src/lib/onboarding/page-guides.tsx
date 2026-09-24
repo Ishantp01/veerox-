@@ -383,12 +383,11 @@ export const PAGE_GUIDES: Record<string, GuideStep[]> = {
     },
   ],
 
-  "/automation/campaigns": [
+  "/automation/campaigns/voice": [
     {
       anchor: "header",
-      title: "Campaigns",
-      content:
-        "Reach a whole contact list by voice or WhatsApp, automatically. Let's create one — step by step.",
+      title: "Voice Campaigns",
+      content: "Reach a whole contact list by phone, automatically. Let's create one — step by step.",
     },
     {
       selector: '[data-tour="campaign-form"]',
@@ -414,7 +413,7 @@ export const PAGE_GUIDES: Record<string, GuideStep[]> = {
       side: "bottom",
       title: "3. Upload the contact list",
       content:
-        "A .csv or .xlsx with a phone column (+country code), an optional name column, and call / whatsapp columns (yes/no) that set each contact's channel. Use Sample CSV if you're not sure of the format.",
+        "A .csv or .xlsx with a phone column (+country code) and an optional name column. Every contact goes out by call. Use Sample CSV if you're not sure of the format.",
     },
     {
       selector: "#campaign-criteria",
@@ -428,32 +427,20 @@ export const PAGE_GUIDES: Record<string, GuideStep[]> = {
       side: "top",
       title: "5. Voice options (optional)",
       content:
-        "For calls: choose which number to call from, which script to use, and Call attempts — the most times one contact is ever called (they're re-tried until this cap only while they don't pick up). Leave on Automatic / default if unsure.",
-    },
-    {
-      selector: "#campaign-template",
-      side: "top",
-      title: "6. WhatsApp template (optional)",
-      content:
-        "For WhatsApp contacts, pick an approved template so the message sends even outside the 24-hour reply window. Create templates on the WhatsApp Templates page.",
+        "Choose which number to call from, which script to use, and Call attempts — the most times one contact is ever called (they're re-tried until this cap only while they don't pick up). Leave on Automatic / default if unsure.",
     },
     {
       selector: '[data-tour="campaign-submit"]',
       side: "top",
-      title: "7. Launch it",
+      title: "6. Launch it",
       content:
         "When everything's set, click here — the button label matches your \"When to start\" choice. The campaign then appears in the table below with live progress.",
-    },
-    {
-      anchor: "action",
-      title: "Filter later",
-      content: "Use this to show only voice or only WhatsApp campaigns once you have a few running.",
     },
     {
       anchor: "table",
       title: "Your campaigns",
       content:
-        "Every campaign you've made. Name and Channel identify it; Status is draft / scheduled / running / paused / completed; Progress is how many contacts have been reached so far; Qualified counts the leads it produced; Created is when you set it up.",
+        "Every campaign you've made. Status is draft / scheduled / running / paused / completed; Progress is how many contacts have been reached so far; Qualified counts the leads it produced; Created is when you set it up.",
     },
     {
       anchor: "table",
@@ -462,17 +449,96 @@ export const PAGE_GUIDES: Record<string, GuideStep[]> = {
         "The Actions column has Start now / Schedule for a draft, and Pause / Resume once it's running. Click any row to open the campaign for the full contact-by-contact breakdown.",
     },
   ],
-  "/automation/follow-ups": [
+  "/automation/campaigns/whatsapp": [
     {
       anchor: "header",
-      title: "Automated Follow-up",
-      content: "Automatically re-contacts leads that go quiet.",
+      title: "WhatsApp Campaigns",
+      content: "Reach a whole contact list over WhatsApp, automatically. Let's create one — step by step.",
+    },
+    {
+      selector: '[data-tour="campaign-form"]',
+      side: "bottom",
+      title: "The New campaign form",
+      content: "Fill this in top to bottom. We'll go through each field now.",
+    },
+    {
+      selector: "#campaign-name",
+      side: "bottom",
+      title: "1. Name it",
+      content: "Something you'll recognise later in the list below — e.g. \"July outreach\".",
+    },
+    {
+      selector: "#campaign-start-mode",
+      side: "bottom",
+      title: "2. When to start",
+      content:
+        "Save as draft to set everything up now and launch later, Start now to begin immediately, or Schedule for… to pick a date and time.",
+    },
+    {
+      selector: "#campaign-file",
+      side: "bottom",
+      title: "3. Upload the contact list",
+      content:
+        "A .csv or .xlsx with a phone column (+country code) and an optional name column. Every contact goes out by WhatsApp. Use Sample CSV if you're not sure of the format.",
+    },
+    {
+      selector: "#campaign-criteria",
+      side: "top",
+      title: "4. Qualification criteria",
+      content:
+        "Describe what makes a prospect worth pursuing. The AI asks questions against this bar and only the ones it marks interested become CRM leads.",
+    },
+    {
+      selector: "#campaign-template",
+      side: "top",
+      title: "5. WhatsApp template (optional)",
+      content:
+        "Pick an approved template so the message sends even outside the 24-hour reply window. Create templates on the WhatsApp Templates page.",
+    },
+    {
+      selector: '[data-tour="campaign-submit"]',
+      side: "top",
+      title: "6. Launch it",
+      content:
+        "When everything's set, click here — the button label matches your \"When to start\" choice. The campaign then appears in the table below with live progress.",
+    },
+    {
+      anchor: "table",
+      title: "Your campaigns",
+      content:
+        "Every campaign you've made. Status is draft / scheduled / running / paused / completed; Progress is how many contacts have been reached so far; Qualified counts the leads it produced; Created is when you set it up.",
+    },
+    {
+      anchor: "table",
+      title: "Run controls",
+      content:
+        "The Actions column has Start now / Schedule for a draft, and Pause / Resume once it's running. Click any row to open the campaign for the full contact-by-contact breakdown.",
+    },
+  ],
+  "/automation/follow-ups/voice": [
+    {
+      anchor: "header",
+      title: "Voice Follow-ups",
+      content: "Automatically re-contacts leads that go quiet, with an automated call.",
     },
     {
       anchor: "action",
       title: "Set it up",
       content:
-        "Choose how long to wait, how many attempts, and the message or call script for each. Turn it on — leads are nudged on schedule until they reply.",
+        "Choose how long to wait and how many attempts. Turn it on — leads are called on schedule until they reply or you turn it off.",
+    },
+  ],
+  "/automation/follow-ups/whatsapp": [
+    {
+      anchor: "header",
+      title: "WhatsApp Follow-ups",
+      content: "Automatically re-contacts leads that go quiet, over WhatsApp.",
+    },
+    {
+      anchor: "action",
+      title: "Set it up",
+      content:
+        "Choose how long to wait, how many attempts, and the message or template. Turn it on — leads are nudged on schedule until they reply.",
     },
   ],
 

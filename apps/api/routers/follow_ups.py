@@ -13,8 +13,8 @@ from apps.api.deps import (
     DbDep,
     MemberScopeDep,
     RequestOrgDep,
+    is_org_feature_enabled,
     owned_lead_ids,
-    require_feature,
     verify_admin_or_session,
 )
 from apps.api.schemas.follow_up import (
@@ -26,8 +26,27 @@ from apps.api.schemas.follow_up import (
 
 router = APIRouter(
     tags=["follow-ups"],
-    dependencies=[Depends(verify_admin_or_session), Depends(require_feature("follow_ups"))],
+    dependencies=[Depends(verify_admin_or_session)],
 )
+
+_CHANNEL_FEATURE = {"voice": "follow_ups_voice", "whatsapp": "follow_ups_whatsapp"}
+
+
+async def _require_channel_feature(db: DbDep, org: UUID, channel: str) -> None:
+    """Per-channel replacement for the old single router-wide
+    require_feature("follow_ups") gate — rules are now split into
+    "follow_ups_voice"/"follow_ups_whatsapp" so an org can have one channel
+    without the other (see AVAILABLE_ORG_FEATURES in db/models/org.py)."""
+    feature = _CHANNEL_FEATURE[channel]
+    if not await is_org_feature_enabled(db, org, feature):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "feature_disabled",
+                "feature": feature,
+                "message": "This feature is not enabled for your organization. Contact the platform admin.",
+            },
+        )
 
 
 async def _resolve_header_params(
@@ -60,12 +79,18 @@ async def _resolve_header_params(
 
 
 @router.get("/follow-up-rules", response_model=list[FollowUpRuleOut])
-async def list_follow_up_rules(db: DbDep, org: RequestOrgDep) -> list[FollowUpRule]:
+async def list_follow_up_rules(
+    db: DbDep, org: RequestOrgDep, channel: str | None = Query(None)
+) -> list[FollowUpRule]:
+    if channel is not None:
+        await _require_channel_feature(db, org, channel)
     stmt = (
         select(FollowUpRule)
         .where(FollowUpRule.org_id == org)
         .order_by(FollowUpRule.created_at.desc())
     )
+    if channel is not None:
+        stmt = stmt.where(FollowUpRule.channel == channel)
     result = await db.execute(stmt)
     return list(result.scalars().all())
 
@@ -74,6 +99,7 @@ async def list_follow_up_rules(db: DbDep, org: RequestOrgDep) -> list[FollowUpRu
 async def create_follow_up_rule(
     payload: FollowUpRuleCreate, db: DbDep, org: RequestOrgDep
 ) -> FollowUpRule:
+    await _require_channel_feature(db, org, payload.channel)
     header_params = await _resolve_header_params(
         db, org, payload.template_name, payload.template_header_params
     )
@@ -106,6 +132,7 @@ async def update_follow_up_rule(
     rule = await db.get(FollowUpRule, rule_id)
     if rule is None or rule.org_id != org:
         raise HTTPException(status_code=404, detail="Follow-up rule not found")
+    await _require_channel_feature(db, org, rule.channel)
     updates = payload.model_dump(exclude_unset=True)
     if "template_header_params" in updates:
         template_name = updates.get("template_name", rule.template_name)
@@ -146,6 +173,7 @@ async def delete_follow_up_rule(rule_id: UUID, db: DbDep, org: RequestOrgDep) ->
     rule = await db.get(FollowUpRule, rule_id)
     if rule is None or rule.org_id != org:
         raise HTTPException(status_code=404, detail="Follow-up rule not found")
+    await _require_channel_feature(db, org, rule.channel)
 
     rule_tasks_stmt = select(FollowUpTask).where(FollowUpTask.rule_id == rule_id)
     rule_tasks = (await db.execute(rule_tasks_stmt)).scalars().all()

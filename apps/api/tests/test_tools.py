@@ -22,6 +22,7 @@ from apps.api.core.tools import (
     lookup_customer,
     mark_not_interested,
     qualify_lead,
+    request_callback,
     transfer_to_human,
 )
 from apps.api.db.models import (
@@ -201,6 +202,74 @@ async def test_book_appointment_persists_channel_when_provided(
     ).scalars().one()
     expected = f"{future.date().isoformat()}T10:00:00"
     assert appointment.scheduled_at.replace(tzinfo=None).isoformat() == expected
+
+
+async def test_request_callback_persists_appointment_with_callback_at(
+    db_session: AsyncSession, fake_redis: _FakeRedis
+) -> None:
+    """Caller says 'I'm busy, call me tomorrow at 5' — the AI calls
+    request_callback, which should land an Appointment row with callback_at
+    set (what the Appointments page's Call Back column reads) without going
+    through book_appointment's slot-conflict/reminder/confirmation logic."""
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000099", name="Busy Caller")
+    db_session.add(user)
+    await db_session.commit()
+
+    future = datetime.now(UTC) + timedelta(days=1)
+    result = await request_callback(
+        db_session,
+        user_id=user.id,
+        org_id=ORG_ID,
+        date=future.date().isoformat(),
+        time="17:00",
+        timezone="UTC",
+        channel="voice",
+        notes="Said they're busy right now",
+    )
+
+    assert result["status"] == "ok"
+    appointment = (
+        await db_session.execute(
+            select(Appointment).where(Appointment.id == uuid.UUID(result["appointment_id"]))
+        )
+    ).scalars().one()
+    expected = f"{future.date().isoformat()}T17:00:00"
+    assert appointment.callback_at is not None
+    assert appointment.callback_at.replace(tzinfo=None).isoformat() == expected
+    assert appointment.scheduled_at.replace(tzinfo=None).isoformat() == expected
+    assert appointment.notes == "Said they're busy right now"
+
+
+async def test_request_callback_does_not_require_a_name(
+    db_session: AsyncSession, fake_redis: _FakeRedis
+) -> None:
+    """Unlike book_appointment, logging a callback time shouldn't be blocked
+    on the agent stopping to ask the caller for their name."""
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000097", name=None)
+    db_session.add(user)
+    await db_session.commit()
+
+    future = datetime.now(UTC) + timedelta(days=1)
+    result = await request_callback(
+        db_session,
+        user_id=user.id,
+        org_id=ORG_ID,
+        date=future.date().isoformat(),
+        time="09:30",
+        timezone="UTC",
+    )
+
+    assert result["status"] == "ok"
+
+
+async def test_request_callback_rejects_missing_user_id(
+    db_session: AsyncSession, fake_redis: _FakeRedis
+) -> None:
+    await _seed_org(db_session)
+    result = await request_callback(db_session, date="2026-01-01", time="10:00")
+    assert result == {"status": "error", "reason": "missing_user_id"}
 
 
 async def test_book_appointment_rejects_stale_user_id(

@@ -159,14 +159,22 @@ function ReviewRow({ label, value }: { label: string; value: string }) {
  * apps/api/routers/admin.py's _create_campaigns_from_rows. The AI's
  * qualify_lead tool call is what decides whether a contact reaches the CRM.
  */
-export function CampaignsView() {
+export interface CampaignsViewProps {
+  /** Locks this page to one channel — the Voice/WhatsApp Campaigns pages
+   * each render this with their own value, replacing the old "All
+   * channels" dropdown. Passed through to useCampaigns (list filter) and
+   * useCreateCampaign (forces every uploaded row into this one channel,
+   * same as any other caller of POST /admin/campaigns's `channel` field). */
+  channel: "voice" | "whatsapp";
+}
+
+export function CampaignsView({ channel }: CampaignsViewProps) {
   const router = useRouter();
   const { toast } = useToast();
   const countryCode = useOrgCountryCode();
-  const [channelFilter, setChannelFilter] = useState<"voice" | "whatsapp" | "">("");
-  const { data, isLoading, isError, error, refetch } = useCampaigns(channelFilter || undefined);
+  const { data, isLoading, isError, error, refetch } = useCampaigns(channel);
   const campaigns = data ?? [];
-  const pager = useClientPagination(campaigns, 20, channelFilter);
+  const pager = useClientPagination(campaigns, 20, channel);
   // Only shown to admins — a "member" only ever gets their own campaigns back,
   // so the API leaves created_by_name null for them.
   const showCreator = campaigns.some((c) => c.created_by_name);
@@ -378,6 +386,7 @@ export function CampaignsView() {
         name,
         criteria: selectedPreset.criteria_text,
         file,
+        channel,
         startMode,
         scheduledStartAt: startMode === "scheduled" ? new Date(scheduledAt).toISOString() : undefined,
         templateName: selectedTemplate?.name,
@@ -465,18 +474,11 @@ export function CampaignsView() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
-        title="Campaigns"
-        description="Upload a lead list with qualification criteria — the AI agent reaches each one by voice or WhatsApp, and only qualified prospects reach the CRM."
-        action={
-          <Select
-            value={channelFilter}
-            onChange={(v) => setChannelFilter(v as "voice" | "whatsapp" | "")}
-            aria-label="Filter by channel"
-          >
-            <option value="">All channels</option>
-            <option value="voice">Voice</option>
-            <option value="whatsapp">WhatsApp</option>
-          </Select>
+        title={channel === "voice" ? "Voice Campaigns" : "WhatsApp Campaigns"}
+        description={
+          channel === "voice"
+            ? "Upload a lead list with qualification criteria — the AI agent calls each one, and only qualified prospects reach the CRM."
+            : "Upload a lead list with qualification criteria — the AI agent messages each one on WhatsApp, and only qualified prospects reach the CRM."
         }
       />
 
@@ -619,9 +621,8 @@ export function CampaignsView() {
               )}
               <p className="mt-1.5 max-w-2xl text-xs text-slate-400 dark:text-slate-500">
                 Needs a &quot;phone&quot; column (numbers without a country code get {countryCode} added
-                automatically), optional &quot;name&quot; and &quot;tags&quot; columns, and &quot;call&quot;/&quot;whatsapp&quot; columns (yes/no)
-                to pick each contact&apos;s channel(s) — a row can be call-only, WhatsApp-only, or
-                both.
+                automatically) and an optional &quot;name&quot; column. Every contact in this file goes out by{" "}
+                {channel === "voice" ? "voice call" : "WhatsApp"} — this page is locked to that channel.
               </p>
             </div>
             )}
@@ -758,9 +759,10 @@ export function CampaignsView() {
 
             {step === 3 && (
             <div className="flex flex-col gap-6">
+            {channel === "voice" && (
             <div>
               <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
-                Voice &amp; WhatsApp overrides (optional)
+                Voice overrides (optional)
               </p>
               <div className="grid gap-4 sm:grid-cols-2">
                   <div>
@@ -779,9 +781,6 @@ export function CampaignsView() {
                       </option>
                     ))}
                   </Select>
-                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                    Voice calls only — ignored for WhatsApp contacts in this upload.
-                  </p>
                 </div>
                 <div>
                   <Label htmlFor="campaign-script">Script</Label>
@@ -794,29 +793,6 @@ export function CampaignsView() {
                       </option>
                     ))}
                   </Select>
-                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                    Voice calls only — ignored for WhatsApp contacts in this upload.
-                  </p>
-                </div>
-                <div>
-                  <Label htmlFor="campaign-whatsapp-number">Send WhatsApp from</Label>
-                  <Select
-                    id="campaign-whatsapp-number"
-                    value={whatsappNumberId}
-                    onChange={setWhatsappNumberId}
-                    className="w-full max-w-xs"
-                  >
-                    <option value="">Use org default WhatsApp number</option>
-                    {whatsappNumbers.map((n) => (
-                      <option key={n.id} value={n.id}>
-                        {n.phone_number}
-                        {n.is_default ? ", default" : ""}
-                      </option>
-                    ))}
-                  </Select>
-                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                    WhatsApp contacts only — ignored for voice contacts in this upload.
-                  </p>
                 </div>
                 <div>
                   <Label htmlFor="campaign-max-attempts">Call attempts</Label>
@@ -839,15 +815,43 @@ export function CampaignsView() {
                     </p>
                   )}
                   <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                    Voice calls only — the most times one contact will ever be called in this
-                    campaign (default 3, minimum 1). A contact who doesn&apos;t pick up is
-                    re-tried until this cap; once a call connects, that contact isn&apos;t
-                    called again.
+                    The most times one contact will ever be called in this campaign (default 3,
+                    minimum 1). A contact who doesn&apos;t pick up is re-tried until this cap;
+                    once a call connects, that contact isn&apos;t called again.
                   </p>
                 </div>
               </div>
             </div>
+            )}
 
+            {channel === "whatsapp" && (
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                WhatsApp overrides (optional)
+              </p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="campaign-whatsapp-number">Send WhatsApp from</Label>
+                  <Select
+                    id="campaign-whatsapp-number"
+                    value={whatsappNumberId}
+                    onChange={setWhatsappNumberId}
+                    className="w-full max-w-xs"
+                  >
+                    <option value="">Use org default WhatsApp number</option>
+                    {whatsappNumbers.map((n) => (
+                      <option key={n.id} value={n.id}>
+                        {n.phone_number}
+                        {n.is_default ? ", default" : ""}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              </div>
+            </div>
+            )}
+
+            {channel === "whatsapp" && (
             <div className="border-t border-slate-100 pt-5 dark:border-slate-800">
               <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
                 WhatsApp message (optional)
@@ -887,6 +891,7 @@ export function CampaignsView() {
                 </div>
               </div>
             </div>
+            )}
             {selectedTemplate?.header_type &&
               (isMediaHeaderTemplate ? (
                 <div>
@@ -1002,19 +1007,25 @@ export function CampaignsView() {
                 />
                 <ReviewRow label="Contact list" value={file?.name ?? "No file selected"} />
                 <ReviewRow label="Qualification preset" value={selectedPreset?.name ?? "No preset selected"} />
-                <ReviewRow
-                  label="Call from"
-                  value={phoneNumbers.find((n) => n.id === phoneNumberId)?.phone_number ?? "Automatic"}
-                />
-                <ReviewRow
-                  label="Voice script"
-                  value={scripts.find((s) => s.id === scriptId)?.name ?? "Org default"}
-                />
-                <ReviewRow label="Call attempts" value={maxAttempts || "3"} />
-                <ReviewRow
-                  label="WhatsApp template"
-                  value={selectedTemplate ? `${selectedTemplate.name} (${selectedTemplate.language})` : "No template"}
-                />
+                {channel === "voice" && (
+                  <>
+                    <ReviewRow
+                      label="Call from"
+                      value={phoneNumbers.find((n) => n.id === phoneNumberId)?.phone_number ?? "Automatic"}
+                    />
+                    <ReviewRow
+                      label="Voice script"
+                      value={scripts.find((s) => s.id === scriptId)?.name ?? "Org default"}
+                    />
+                    <ReviewRow label="Call attempts" value={maxAttempts || "3"} />
+                  </>
+                )}
+                {channel === "whatsapp" && (
+                  <ReviewRow
+                    label="WhatsApp template"
+                    value={selectedTemplate ? `${selectedTemplate.name} (${selectedTemplate.language})` : "No template"}
+                  />
+                )}
               </div>
               <p className="mt-3 text-xs text-slate-400 dark:text-slate-500">
                 Nothing sends until you click {START_MODE_BUTTON_LABEL[startMode]} below.

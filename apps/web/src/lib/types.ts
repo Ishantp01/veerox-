@@ -219,6 +219,9 @@ export interface Appointment {
   notes: string | null;
   tags: string[] | null;
   created_at: string;
+  // Set when the lead asked to be called back at a specific time (e.g. "I'm
+  // busy, call me tomorrow") instead of booking a real appointment.
+  callback_at: string | null;
   // Not stored on the appointment itself — resolved server-side from
   // whichever of lead_id/contact_id is set.
   name: string | null;

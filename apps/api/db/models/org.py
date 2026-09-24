@@ -24,13 +24,22 @@ ORG_LICENSE_STATUSES = ("active", "suspended", "expired")
 AVAILABLE_ORG_FEATURES = (
     "crm",
     "appointments",
-    "follow_ups",
+    "campaigns_voice",
+    "campaigns_whatsapp",
+    "follow_ups_voice",
+    "follow_ups_whatsapp",
     "sales",
     "tickets",
     "templates",
     "conversations",
     "human_support",
     "follow_up_tasks",
+    "calling",
+    "whatsapp",
+    "whatsapp_media",
+    "leads",
+    "reports",
+    "team",
 )
 
 

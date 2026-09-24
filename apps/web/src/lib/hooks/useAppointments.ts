@@ -59,6 +59,7 @@ export interface AppointmentUpdateInput {
   duration_minutes?: number;
   notes?: string | null;
   tags?: string[] | null;
+  callback_at?: string | null;
 }
 
 /** PATCH /appointments/{id} → Appointment */

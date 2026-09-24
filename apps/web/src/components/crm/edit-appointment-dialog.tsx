@@ -24,9 +24,12 @@ const editAppointmentSchema = z.object({
     .min(1, "Pick a date and time"),
   duration: z.coerce.number().int().min(5).max(480),
   notes: z.string().trim().max(2000, "Notes must be under 2000 characters").optional(),
+  callbackAt: z.string().trim().optional(),
 });
 
-type EditAppointmentFieldErrors = Partial<Record<"scheduledAt" | "duration" | "notes", string>>;
+type EditAppointmentFieldErrors = Partial<
+  Record<"scheduledAt" | "duration" | "notes" | "callbackAt", string>
+>;
 
 /** datetime-local input needs "YYYY-MM-DDTHH:mm" in local time, not the ISO string from the API. */
 function toLocalInputValue(iso: string): string {
@@ -45,6 +48,7 @@ export function EditAppointmentDialog({ appointment, onClose }: EditAppointmentD
   const [duration, setDuration] = useState("30");
   const [notes, setNotes] = useState("");
   const [tagsInput, setTagsInput] = useState("");
+  const [callbackAt, setCallbackAt] = useState("");
   const [fieldErrors, setFieldErrors] = useState<EditAppointmentFieldErrors>({});
   const updateAppointment = useUpdateAppointment();
   const { toast } = useToast();
@@ -55,13 +59,14 @@ export function EditAppointmentDialog({ appointment, onClose }: EditAppointmentD
     setDuration(String(appointment.duration_minutes));
     setNotes(appointment.notes ?? "");
     setTagsInput((appointment.tags ?? []).join(", "));
+    setCallbackAt(appointment.callback_at ? toLocalInputValue(appointment.callback_at) : "");
     setFieldErrors({});
   }, [appointment]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!appointment) return;
-    const result = editAppointmentSchema.safeParse({ scheduledAt, duration, notes });
+    const result = editAppointmentSchema.safeParse({ scheduledAt, duration, notes, callbackAt });
     if (!result.success) {
       const errors: EditAppointmentFieldErrors = {};
       for (const issue of result.error.issues) {
@@ -85,6 +90,7 @@ export function EditAppointmentDialog({ appointment, onClose }: EditAppointmentD
         duration_minutes: result.data.duration,
         notes: notes.trim() ? notes.trim() : null,
         tags: tags.length > 0 ? tags : null,
+        callback_at: callbackAt ? new Date(callbackAt).toISOString() : null,
       },
       {
         onSuccess: () => {
@@ -139,6 +145,19 @@ export function EditAppointmentDialog({ appointment, onClose }: EditAppointmentD
                   {fieldErrors.duration}
                 </p>
               )}
+            </div>
+            <div>
+              <Label htmlFor="edit-appointment-callback">Call back at</Label>
+              <input
+                id="edit-appointment-callback"
+                type="datetime-local"
+                value={callbackAt}
+                onChange={(e) => setCallbackAt(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-600">
+                Set if the caller asked to be called back at a specific time. Leave blank to clear.
+              </p>
             </div>
             <div>
               <Label htmlFor="edit-appointment-notes">Notes</Label>

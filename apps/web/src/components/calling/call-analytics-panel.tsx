@@ -51,7 +51,7 @@ export function CallAnalyticsPanel() {
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Recent Campaigns</CardTitle>
           <Link
-            href="/automation/campaigns"
+            href="/automation/campaigns/voice"
             className="flex items-center gap-1 text-xs font-semibold text-primary-600 hover:text-primary-700"
           >
             View all <ArrowRight size={12} aria-hidden />

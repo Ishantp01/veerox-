@@ -34,10 +34,15 @@ type RuleFieldErrors = Partial<
   Record<"name" | "delayHours" | "messageTemplate" | "templateParams" | "templateHeaderParam", string>
 >;
 
-export function NewFollowUpRuleDialog() {
+export interface NewFollowUpRuleDialogProps {
+  /** Locks this dialog to one channel — the Voice/WhatsApp Follow-ups pages
+   * each pass their own value, hiding the old in-dialog channel picker. */
+  channel: "whatsapp" | "voice";
+}
+
+export function NewFollowUpRuleDialog({ channel }: NewFollowUpRuleDialogProps) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [channel, setChannel] = useState<"whatsapp" | "voice">("whatsapp");
   const [status, setStatus] = useState<string>("contacted");
   const { options: statusOptions } = useLeadStatusOptions();
   const [delayHours, setDelayHours] = useState("24");
@@ -91,7 +96,6 @@ export function NewFollowUpRuleDialog() {
 
   function reset() {
     setName("");
-    setChannel("whatsapp");
     setStatus("contacted");
     setDelayHours("24");
     setTemplateId("");
@@ -181,7 +185,7 @@ export function NewFollowUpRuleDialog() {
         </Button>
       </DialogTrigger>
       <DialogContent>
-        <DialogTitle>New follow-up rule</DialogTitle>
+        <DialogTitle>{channel === "voice" ? "New voice follow-up rule" : "New WhatsApp follow-up rule"}</DialogTitle>
         <form onSubmit={handleSubmit} noValidate>
           <DialogBody className="flex flex-col gap-4">
             <div>
@@ -203,25 +207,11 @@ export function NewFollowUpRuleDialog() {
                 </p>
               )}
             </div>
-            <div>
-              <Label htmlFor="rule-channel" required>
-                Channel
-              </Label>
-              <Select
-                id="rule-channel"
-                value={channel}
-                onChange={(v) => setChannel(v as "whatsapp" | "voice")}
-                className="w-full"
-              >
-                <option value="whatsapp">WhatsApp message</option>
-                <option value="voice">Phone call</option>
-              </Select>
-              <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
-                {channel === "voice"
-                  ? "Only matches leads captured over a call — places an automated outbound call via your AI calling agent."
-                  : "Only matches leads captured over WhatsApp."}
-              </p>
-            </div>
+            <p className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400">
+              {channel === "voice"
+                ? "Only matches leads captured over a call — places an automated outbound call via your AI calling agent."
+                : "Only matches leads captured over WhatsApp."}
+            </p>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <Label htmlFor="rule-status" required>

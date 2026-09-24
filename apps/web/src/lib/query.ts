@@ -66,7 +66,7 @@ export const queryKeys = {
   contact: (id: string) => ["contacts", "detail", id] as const,
   appointments: (filters?: { status?: string; sort?: string }) =>
     ["appointments", filters ?? {}] as const,
-  followUpRules: () => ["follow-up-rules"] as const,
+  followUpRules: (channel?: string) => ["follow-up-rules", channel ?? null] as const,
   followUpTasks: (filters?: { status?: string }) => ["follow-up-tasks", filters ?? {}] as const,
   leadFollowUps: (filters?: { due?: boolean }) => ["lead-follow-ups", filters ?? {}] as const,
   templates: (filters?: { active?: boolean }) => ["whatsapp-templates", filters ?? {}] as const,

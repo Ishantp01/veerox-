@@ -4,11 +4,14 @@ import { apiFetch } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
 import type { FollowUpRule, FollowUpTask, FollowUpTaskStatus } from "@/lib/types";
 
-/** GET /follow-up-rules → FollowUpRule[] */
-export function useFollowUpRules() {
+/** GET /follow-up-rules[?channel=] → FollowUpRule[] — `channel` locks both
+ * the result set and (server-side) the feature gate to that one channel, for
+ * the Voice/WhatsApp Follow-ups pages. */
+export function useFollowUpRules(channel?: "voice" | "whatsapp") {
+  const qs = channel ? `?channel=${channel}` : "";
   return useQuery<FollowUpRule[]>({
-    queryKey: queryKeys.followUpRules(),
-    queryFn: () => apiFetch<FollowUpRule[]>("/follow-up-rules"),
+    queryKey: queryKeys.followUpRules(channel),
+    queryFn: () => apiFetch<FollowUpRule[]>(`/follow-up-rules${qs}`),
   });
 }
 
@@ -41,7 +44,7 @@ export function useCreateFollowUpRule() {
         body: JSON.stringify(body),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.followUpRules() });
+      queryClient.invalidateQueries({ queryKey: ["follow-up-rules"] });
     },
   });
 }
@@ -57,7 +60,7 @@ export function useUpdateFollowUpRule() {
         body: JSON.stringify(body),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.followUpRules() });
+      queryClient.invalidateQueries({ queryKey: ["follow-up-rules"] });
     },
   });
 }
@@ -69,7 +72,7 @@ export function useDeleteFollowUpRule() {
   return useMutation<{ ok: boolean }, Error, string>({
     mutationFn: (id) => apiFetch<{ ok: boolean }>(`/follow-up-rules/${id}`, { method: "DELETE" }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.followUpRules() });
+      queryClient.invalidateQueries({ queryKey: ["follow-up-rules"] });
     },
   });
 }

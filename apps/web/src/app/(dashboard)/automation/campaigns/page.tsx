@@ -1,7 +1,5 @@
-"use client";
-
-import { CampaignsView } from "@/components/campaigns/campaigns-view";
+import { redirect } from "next/navigation";
 
 export default function CampaignsPage() {
-  return <CampaignsView />;
+  redirect("/automation/campaigns/voice");
 }

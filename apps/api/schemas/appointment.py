@@ -24,6 +24,7 @@ class AppointmentCreate(BaseModel):
     assigned_user_id: UUID | None = None
     notes: str | None = None
     tags: list[str] | None = None
+    callback_at: datetime | None = None
 
 
 class AppointmentOut(BaseModel):
@@ -40,6 +41,7 @@ class AppointmentOut(BaseModel):
     notes: str | None
     tags: list[str] | None
     created_at: datetime
+    callback_at: datetime | None
     # Not columns on `appointments` itself — resolved by the router from
     # whichever of lead_id/contact_id is set (Lead takes priority when a
     # booking has both), so the dashboard list can show who an appointment
@@ -57,3 +59,4 @@ class AppointmentUpdateIn(BaseModel):
     assigned_user_id: UUID | None = None
     notes: str | None = None
     tags: list[str] | None = None
+    callback_at: datetime | None = None

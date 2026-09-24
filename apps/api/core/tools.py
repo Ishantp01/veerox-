@@ -125,6 +125,56 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "request_callback",
+            "description": (
+                "Record a time to call the caller back — use this when they say "
+                "they're busy right now and give a different time to reach them "
+                "('call me tomorrow', 'call me after 5pm', 'try again Monday "
+                "morning'), instead of booking a real appointment. Do NOT use "
+                "this for booking an actual appointment/meeting — use "
+                "book_appointment for that."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "The caller's full name, if known from earlier in this "
+                            "conversation (e.g. a prior capture_lead call or "
+                            "returning-user context). Optional — don't stop to ask "
+                            "for it just to log a callback time."
+                        ),
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Date to call back (ISO 8601, e.g. 2025-06-01).",
+                    },
+                    "time": {
+                        "type": "string",
+                        "description": "Time to call back (HH:MM, 24-hour). Default to a sensible time of day if the caller only gave a date.",
+                    },
+                    "timezone": {
+                        "type": "string",
+                        "description": (
+                            "IANA timezone name (e.g. 'America/New_York', "
+                            "'Europe/London') that date/time above are in. "
+                            "Defaults to IST (Asia/Kolkata) — only set this if "
+                            "the caller explicitly asks for a different timezone."
+                        ),
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Optional short note on why/what to call back about.",
+                    },
+                },
+                "required": ["date", "time"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "transfer_to_human",
             "description": (
                 "Transfer the conversation to a human agent: call this whenever the AI "
@@ -813,6 +863,86 @@ async def book_appointment(
     # undo the booking that already committed above.
     await send_appointment_confirmation(
         db, org_id, appointment.id, booking_user.phone, resolved_name, date, time
+    )
+
+    return {
+        "status": "ok",
+        "lead_id": str(lead.id),
+        "appointment_id": str(appointment.id),
+        "date": date,
+        "time": time,
+        "timezone": tz_name,
+    }
+
+
+async def request_callback(
+    db: AsyncSession,
+    date: str,
+    time: str,
+    name: str | None = None,
+    timezone: str | None = None,
+    notes: str | None = None,
+    user_id: UUID | None = None,
+    org_id: UUID | None = None,
+    channel: str | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Log a requested callback time as an ``Appointment`` row (so it shows
+    up on the Appointments page's Call Back column) without treating it as a
+    real booked appointment — no slot-conflict check, no reminders, no
+    confirmation message, unlike ``book_appointment`` above. ``scheduled_at``
+    is set to the same time as ``callback_at`` since the column is
+    NOT NULL and there's no real appointment slot to distinguish it from;
+    ``callback_at`` is what the Call Back column reads.
+
+    Doesn't require a name — logging a callback time shouldn't be blocked on
+    the agent stopping to ask for one, unlike a real booking.
+    """
+    if user_id is None:
+        return {"status": "error", "reason": "missing_user_id"}
+
+    org_id = org_id or _default_org_id()
+    callback_user = await db.get(User, user_id)
+    if callback_user is None or not callback_user.phone:
+        return {"status": "error", "reason": "missing_phone"}
+
+    resolved_name = name or callback_user.name
+
+    tz_name = timezone or DEFAULT_BOOKING_TIMEZONE
+    try:
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return {"status": "error", "reason": "invalid_timezone"}
+
+    try:
+        local_dt = datetime.fromisoformat(f"{date}T{time}").replace(tzinfo=tz)
+    except ValueError:
+        return {"status": "error", "reason": "invalid_date_or_time"}
+    callback_at = local_dt.astimezone(UTC)
+
+    lead = await get_or_create_lead_for_user(
+        db, org_id, user_id, name=resolved_name, phone=callback_user.phone
+    )
+    await db.flush()  # populate lead.id for the Appointment FK below
+
+    appointment = Appointment(
+        org_id=org_id,
+        lead_id=lead.id,
+        scheduled_at=callback_at,
+        callback_at=callback_at,
+        notes=notes,
+    )
+    db.add(appointment)
+    await db.commit()
+
+    logger.info(
+        "request_callback_persisted",
+        lead_id=str(lead.id),
+        appointment_id=str(appointment.id),
+        user_id=str(user_id),
+        date=date,
+        time=time,
+        timezone=tz_name,
     )
 
     return {
@@ -1765,6 +1895,7 @@ ToolHandler = Callable[..., Awaitable[dict[str, Any]]]
 DISPATCH_TABLE: dict[str, ToolHandler] = {
     "capture_lead": capture_lead,
     "book_appointment": book_appointment,
+    "request_callback": request_callback,
     "transfer_to_human": transfer_to_human,
     "qualify_lead": qualify_lead,
     "mark_not_interested": mark_not_interested,

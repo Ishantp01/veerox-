@@ -59,8 +59,10 @@ export const ONBORDA_NAV_IDS: Record<string, string> = {
   "/human-support": "onborda-nav-human-support",
   "/reports": "onborda-nav-reports",
   "/analytics/sales": "onborda-nav-sales",
-  "/automation/campaigns": "onborda-nav-campaigns",
-  "/automation/follow-ups": "onborda-nav-followups",
+  "/automation/campaigns/voice": "onborda-nav-campaigns-voice",
+  "/automation/campaigns/whatsapp": "onborda-nav-campaigns-whatsapp",
+  "/automation/follow-ups/voice": "onborda-nav-followups-voice",
+  "/automation/follow-ups/whatsapp": "onborda-nav-followups-whatsapp",
   "/team": "onborda-nav-team",
   "/settings": "onborda-nav-settings",
   "/billing": "onborda-nav-billing",
@@ -239,18 +241,32 @@ export const ALL_STEPS: Step[] = [
 
   // Automation
   navStep(
-    "onborda-nav-campaigns",
+    "onborda-nav-campaigns-voice",
     Megaphone,
-    "Campaigns",
-    "Bulk outreach — call or message a whole contact list with a script sequence.",
-    "Click New campaign, pick or upload a contact list, choose the script(s) and a schedule, then Start. Progress and results update on the campaign's page while it runs.",
+    "Voice Campaigns",
+    "Bulk outreach — call a whole contact list with a script sequence.",
+    "Click New campaign, upload a contact list, choose the script and a schedule, then Start. Progress and results update on the campaign's page while it runs.",
   ),
   navStep(
-    "onborda-nav-followups",
+    "onborda-nav-campaigns-whatsapp",
+    Megaphone,
+    "WhatsApp Campaigns",
+    "Bulk outreach — message a whole contact list with a template or script.",
+    "Click New campaign, upload a contact list, choose the template/script and a schedule, then Start. Progress and results update on the campaign's page while it runs.",
+  ),
+  navStep(
+    "onborda-nav-followups-voice",
     Repeat,
-    "Automated Follow-up",
-    "Automatically re-contacts leads that stop replying.",
-    "Set the wait time, how many attempts, and the message or call script. Each lead is nudged on schedule until they respond or you turn it off.",
+    "Voice Follow-ups",
+    "Automatically re-contacts leads that stop replying, over a call.",
+    "Set the wait time and how many attempts. Each lead is nudged on schedule with an automated call until they respond or you turn it off.",
+  ),
+  navStep(
+    "onborda-nav-followups-whatsapp",
+    Repeat,
+    "WhatsApp Follow-ups",
+    "Automatically re-contacts leads that stop replying, over WhatsApp.",
+    "Set the wait time, how many attempts, and the message. Each lead is nudged on schedule until they respond or you turn it off.",
   ),
 
   // Settings

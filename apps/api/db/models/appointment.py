@@ -29,6 +29,12 @@ class Appointment(Base):
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="30")
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="scheduled")
+    # Set when the lead asked to be called back at a specific time (e.g. "I'm
+    # busy, call me tomorrow at 5") instead of booking a real appointment —
+    # extracted by the request_callback tool (core/tools.py) during a live
+    # call/WhatsApp chat. Independent of scheduled_at, which stays the actual
+    # appointment slot when one exists.
+    callback_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     assigned_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
