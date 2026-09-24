@@ -517,6 +517,40 @@ async def test_create_campaign_reports_missing_phone_rows(
     assert body["errors"][0]["reason"] == "missing phone"
 
 
+async def test_sample_campaign_csv_omits_channel_columns_when_locked(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The Voice/WhatsApp Campaigns pages always pass `channel` and are
+    locked to that one channel, so the sample template shouldn't include the
+    call/whatsapp columns those pages' uploads never use — see
+    apps.api.routers.admin's `_sample_columns`."""
+    voice_resp = await client.get(
+        "/admin/campaigns/sample.csv", params={"channel": "voice"}, headers=ADMIN_HEADERS
+    )
+    assert voice_resp.status_code == 200
+    assert voice_resp.text.lstrip("﻿").splitlines()[0].strip() == "name,phone"
+
+    whatsapp_resp = await client.get(
+        "/admin/campaigns/sample.csv", params={"channel": "whatsapp"}, headers=ADMIN_HEADERS
+    )
+    assert whatsapp_resp.status_code == 200
+    assert whatsapp_resp.text.lstrip("﻿").splitlines()[0].strip() == "name,phone"
+
+    unified_resp = await client.get("/admin/campaigns/sample.csv", headers=ADMIN_HEADERS)
+    assert unified_resp.status_code == 200
+    assert unified_resp.text.lstrip("﻿").splitlines()[0].strip() == "name,phone,call,whatsapp"
+
+
+async def test_sample_leads_csv_always_includes_channel_columns(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Unlike campaigns, the leads sample template keeps call/whatsapp
+    columns regardless of channel — leads import always reads them."""
+    resp = await client.get("/admin/leads/sample.csv", headers=ADMIN_HEADERS)
+    assert resp.status_code == 200
+    assert resp.text.lstrip("﻿").splitlines()[0].strip() == "name,phone,call,whatsapp,status"
+
+
 async def test_list_and_get_campaign(client: AsyncClient, db_session: AsyncSession) -> None:
     await _seed_org(db_session)
     create_resp = await client.post(
