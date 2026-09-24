@@ -941,6 +941,21 @@ _SAMPLE_IMPORT_ROWS = [
 ]
 
 
+def _sample_columns(channel: str | None, extra: list[str] | None = None) -> list[str]:
+    """Header row for a sample import file. When `channel` is locked
+    (voice-only or whatsapp-only), the per-row call/whatsapp columns are
+    dropped since the backend ignores them for locked-channel uploads —
+    including them would just be dead, confusing input. Only the unified
+    (channel=None) upload actually reads those columns to route each row."""
+    base = ["name", "phone"] if channel else ["name", "phone", "call", "whatsapp"]
+    return base + (extra or [])
+
+
+def _sample_row_values(row: dict[str, str], channel: str | None, extra: list[str] | None = None) -> list[str]:
+    base = [row["name"], row["phone"]] if channel else [row["name"], row["phone"], row["call"], row["whatsapp"]]
+    return base + [row[key] for key in (extra or [])]
+
+
 def _csv_streaming_response(csv_text: str, filename: str) -> StreamingResponse:
     """Wrap CSV text as a downloadable response with a UTF-8 BOM prefix.
 
@@ -2336,32 +2351,42 @@ _SAMPLE_CAMPAIGN_ROWS = _SAMPLE_IMPORT_ROWS
 
 
 @router.get("/campaigns/sample.csv")
-async def sample_campaign_csv(x_admin_token: str | None = Header(None)) -> StreamingResponse:
-    """Blank-data template for POST /campaigns' contact-list upload — each
-    row picks its own channel(s) via the call/whatsapp columns, so one list
-    can mix call-only, WhatsApp-only, and both-channel contacts. Registered
-    ahead of GET /campaigns/{campaign_id} so its literal path isn't
-    swallowed by that route's UUID path param.
+async def sample_campaign_csv(
+    x_admin_token: str | None = Header(None),
+    channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
+) -> StreamingResponse:
+    """Blank-data template for POST /campaigns' contact-list upload. When
+    `channel` is passed (the Voice/WhatsApp Campaigns pages always pass it —
+    there's no unified campaign-creation page today), every uploaded row
+    goes out on that one locked channel regardless of any call/whatsapp
+    columns, so they're omitted here. Without `channel`, each row would pick
+    its own channel(s) via those columns, letting one list mix call-only,
+    WhatsApp-only, and both-channel contacts. Registered ahead of GET
+    /campaigns/{campaign_id} so its literal path isn't swallowed by that
+    route's UUID path param.
     """
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["name", "phone", "call", "whatsapp"])
+    writer.writerow(_sample_columns(channel))
     for row in _SAMPLE_CAMPAIGN_ROWS:
-        writer.writerow([row["name"], row["phone"], row["call"], row["whatsapp"]])
+        writer.writerow(_sample_row_values(row, channel))
     buf.seek(0)
 
     return _csv_streaming_response(buf.getvalue(), "campaign-contacts-sample.csv")
 
 
 @router.get("/campaigns/sample.xlsx")
-async def sample_campaign_xlsx(x_admin_token: str | None = Header(None)) -> StreamingResponse:
+async def sample_campaign_xlsx(
+    x_admin_token: str | None = Header(None),
+    channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
+) -> StreamingResponse:
     """Same template as GET /campaigns/sample.csv, as an .xlsx workbook."""
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Contacts"
-    sheet.append(["name", "phone", "call", "whatsapp"])
+    sheet.append(_sample_columns(channel))
     for row in _SAMPLE_CAMPAIGN_ROWS:
-        sheet.append([row["name"], row["phone"], row["call"], row["whatsapp"]])
+        sheet.append(_sample_row_values(row, channel))
     for cell in sheet["B"][1:]:
         cell.number_format = "@"
 

@@ -72,8 +72,11 @@ import {
 } from "@/lib/hooks";
 import { CampaignStatusBadge } from "./campaign-status-badge";
 
-async function downloadSampleContactFile(format: "csv" | "xlsx"): Promise<void> {
-  await downloadCsv(`/admin/campaigns/sample.${format}`, `campaign-contacts-sample.${format}`);
+async function downloadSampleContactFile(format: "csv" | "xlsx", channel: "voice" | "whatsapp"): Promise<void> {
+  await downloadCsv(
+    `/admin/campaigns/sample.${format}?channel=${channel}`,
+    `campaign-contacts-sample.${format}`
+  );
 }
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
@@ -154,10 +157,10 @@ function ReviewRow({ label, value }: { label: string; value: string }) {
  * Bulk-upload a lead list, criteria included, and let the background worker
  * — the voice dialer (apps/api/workers/campaign_dialer.py) or the WhatsApp
  * dispatcher (apps/api/workers/whatsapp_dispatcher.py) — reach each one.
- * Each row's own "call"/"whatsapp" columns decide its channel(s), so one
- * upload can mix call-only, WhatsApp-only, and both-channel contacts — see
- * apps/api/routers/admin.py's _create_campaigns_from_rows. The AI's
- * qualify_lead tool call is what decides whether a contact reaches the CRM.
+ * This page is always locked to one channel (see `channel` below), so every
+ * uploaded row goes out on that channel — the sample template omits the
+ * call/whatsapp columns accordingly. The AI's qualify_lead tool call is what
+ * decides whether a contact reaches the CRM.
  */
 export interface CampaignsViewProps {
   /** Locks this page to one channel — the Voice/WhatsApp Campaigns pages
@@ -596,7 +599,7 @@ export function CampaignsView({ channel }: CampaignsViewProps) {
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => downloadSampleContactFile("csv")}
+                    onClick={() => downloadSampleContactFile("csv", channel)}
                     title="Download a sample CSV showing the expected columns"
                   >
                     <FileSpreadsheet size={13} aria-hidden />
@@ -606,7 +609,7 @@ export function CampaignsView({ channel }: CampaignsViewProps) {
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => downloadSampleContactFile("xlsx")}
+                    onClick={() => downloadSampleContactFile("xlsx", channel)}
                     title="Download a sample Excel file showing the expected columns"
                   >
                     <FileSpreadsheet size={13} aria-hidden />
