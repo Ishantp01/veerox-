@@ -277,6 +277,13 @@ async def update_appointment(
             .values(status="cancelled")
         )
 
+    # A changed callback_at must be redialed — without resetting the dispatch
+    # marker, the follow_up_dispatcher poll loop would see
+    # callback_dispatched_at already set and silently never call back at the
+    # new time (see workers/follow_up_dispatcher.py::_dispatch_due_callbacks).
+    if "callback_at" in updates and updates["callback_at"] != appointment.callback_at:
+        appointment.callback_dispatched_at = None
+
     for field, value in updates.items():
         setattr(appointment, field, value)
     await db.commit()

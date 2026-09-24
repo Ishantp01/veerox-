@@ -16,6 +16,10 @@ Each tick does three things:
    WhatsApp regardless of the lead's channel (see ``_execute_task``). Any
    other channel has no automated send path and resolves to ``skipped``
    instead of silently never running.
+4. Place the actual outbound call for every due ``Appointment.callback_at``
+   (set by core/tools.py's ``request_callback`` when a caller asks to be
+   called back at a specific time) that hasn't been dispatched yet — see
+   ``_dispatch_due_callbacks``.
 """
 
 from __future__ import annotations
@@ -41,7 +45,7 @@ from apps.api.core.org_credentials import (
     resolve_plivo_credentials,
     resolve_twilio_credentials,
 )
-from apps.api.db.models import FollowUpRule, FollowUpTask, Lead
+from apps.api.db.models import Appointment, Contact, FollowUpRule, FollowUpTask, Lead
 from apps.api.db.models.org import Org
 from apps.api.db.models.template import WhatsAppTemplate
 from apps.api.db.session import AsyncSessionLocal
@@ -321,6 +325,118 @@ async def _place_follow_up_call(db: AsyncSession, task_id: UUID, lead: Lead, org
     await _resolve_task(task_id, "sent")
 
 
+async def _claim_due_callbacks() -> list[UUID]:
+    """Atomically claim up to ``_BATCH_SIZE`` due appointment callbacks by
+    stamping ``callback_dispatched_at`` in the same transaction that selects
+    them — mirrors ``_claim_due_tasks`` above so a second dispatcher tick (or
+    another process/replica polling the same table) can never dial the same
+    callback twice.
+    """
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(Appointment.id)
+            .where(
+                Appointment.callback_at.is_not(None),
+                Appointment.callback_at <= datetime.now(UTC),
+                Appointment.callback_dispatched_at.is_(None),
+                Appointment.status.notin_(("cancelled", "no_show")),
+            )
+            .order_by(Appointment.callback_at)
+            .limit(_BATCH_SIZE)
+            .with_for_update(skip_locked=True)
+        )
+        ids = list((await db.execute(stmt)).scalars().all())
+        if not ids:
+            return []
+        await db.execute(
+            update(Appointment)
+            .where(Appointment.id.in_(ids))
+            .values(callback_dispatched_at=datetime.now(UTC))
+        )
+        await db.commit()
+        return ids
+
+
+async def _place_callback_call(
+    db: AsyncSession, appointment_id: UUID, phone: str, org_id: UUID, org_record: Org | None
+) -> None:
+    """Places the requested callback call — same provider-selection/
+    answer-URL pattern as ``_place_follow_up_call`` above, just keyed on the
+    ``Appointment`` row directly (no ``FollowUpTask`` involved, since a
+    callback isn't a follow-up rule or a lead trigger — just a redial time
+    the caller asked for mid-conversation, see core/tools.py's
+    ``request_callback``).
+    """
+    plivo_creds = resolve_plivo_credentials(org_record)
+    twilio_creds = resolve_twilio_credentials(org_record)
+    if not voice_failover.is_configured(plivo_creds, twilio_creds):
+        logger.warning(
+            "follow_up_dispatcher_callback_voice_not_configured", appointment_id=str(appointment_id)
+        )
+        return
+
+    plivo_from, twilio_from = (
+        await get_rotating_numbers(db, get_redis_pool(), org_record.id)
+        if org_record
+        else (None, None)
+    )
+    answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer?org_id={org_id}"
+
+    try:
+        _, provider = await voice_failover.initiate_call(
+            plivo_creds,
+            twilio_creds,
+            phone,
+            answer_url,
+            plivo_from_number=plivo_from,
+            twilio_from_number=twilio_from,
+            preferred_provider=org_record.preferred_voice_provider if org_record else None,
+        )
+        if provider == "twilio" and not twilio_from:
+            logger.warning(
+                "follow_up_dispatcher_callback_fell_back_to_twilio", appointment_id=str(appointment_id)
+            )
+    except (httpx.HTTPError, RuntimeError):
+        logger.warning("follow_up_dispatcher_callback_call_failed", appointment_id=str(appointment_id))
+        return
+
+    logger.info("follow_up_dispatcher_callback_placed", appointment_id=str(appointment_id))
+
+
+async def _dispatch_due_callbacks() -> None:
+    """Places the actual outbound call for every due, not-yet-dispatched
+    appointment callback (see ``_claim_due_callbacks``) — the piece that
+    turns a logged callback time (Appointments page's Call Back column) into
+    the caller actually being rung back, rather than just a note on file.
+    """
+    for appointment_id in await _claim_due_callbacks():
+        async with AsyncSessionLocal() as db:
+            appointment = await db.get(Appointment, appointment_id)
+            if appointment is None:
+                continue
+
+            phone: str | None = None
+            if appointment.lead_id is not None:
+                lead = await db.get(Lead, appointment.lead_id)
+                if lead is not None:
+                    phone = lead.phone
+            if phone is None and appointment.contact_id is not None:
+                contact = await db.get(Contact, appointment.contact_id)
+                if contact is not None:
+                    phone = contact.phone
+            if not phone:
+                logger.warning(
+                    "follow_up_dispatcher_callback_no_phone", appointment_id=str(appointment_id)
+                )
+                continue
+
+            if not await _voice_call_permitted(appointment.org_id):
+                continue
+
+            org_record = await db.get(Org, appointment.org_id)
+            await _place_callback_call(db, appointment_id, phone, appointment.org_id, org_record)
+
+
 async def _execute_task(task_id: UUID) -> None:
     async with AsyncSessionLocal() as db:
         task = await db.get(FollowUpTask, task_id)
@@ -447,6 +563,7 @@ async def _tick() -> None:
     await _materialize_rule_tasks()
     for task_id in await _claim_due_tasks():
         await _execute_task(task_id)
+    await _dispatch_due_callbacks()
 
 
 async def run_follow_up_dispatcher() -> None:

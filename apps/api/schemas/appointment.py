@@ -42,6 +42,9 @@ class AppointmentOut(BaseModel):
     tags: list[str] | None
     created_at: datetime
     callback_at: datetime | None
+    # Set once workers/follow_up_dispatcher.py has actually placed the
+    # callback call — read-only, not settable via Create/Update.
+    callback_dispatched_at: datetime | None
     # Not columns on `appointments` itself — resolved by the router from
     # whichever of lead_id/contact_id is set (Lead takes priority when a
     # booking has both), so the dashboard list can show who an appointment

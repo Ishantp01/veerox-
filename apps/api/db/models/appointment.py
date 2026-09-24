@@ -35,6 +35,14 @@ class Appointment(Base):
     # call/WhatsApp chat. Independent of scheduled_at, which stays the actual
     # appointment slot when one exists.
     callback_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set by workers/follow_up_dispatcher.py once it has actually placed the
+    # outbound callback call for this row — distinct from callback_at (the
+    # requested time) so a due callback is claimed exactly once instead of
+    # being re-dialed on every dispatcher poll tick. Null means "not called
+    # back yet" regardless of whether callback_at is in the past.
+    callback_dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     assigned_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

@@ -17,7 +17,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from apps.api.db.models import FollowUpRule, FollowUpTask, Lead, Org, User
+from apps.api.db.models import Appointment, FollowUpRule, FollowUpTask, Lead, Org, User
 from apps.api.workers import follow_up_dispatcher
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -198,3 +198,119 @@ async def test_execute_task_skips_voice_lead_with_inactive_license(
     await db_session.refresh(task)
     assert task.status == "skipped"
     assert called is False
+
+
+async def _seed_appointment_with_callback(
+    db: AsyncSession, *, phone: str, callback_at: datetime, lead_channel: str = "voice"
+) -> tuple[Appointment, Lead]:
+    lead = await _seed_lead(db, channel=lead_channel, phone=phone)
+    appointment = Appointment(
+        org_id=ORG_ID,
+        lead_id=lead.id,
+        scheduled_at=callback_at,
+        callback_at=callback_at,
+    )
+    db.add(appointment)
+    await db.commit()
+    await db.refresh(appointment)
+    return appointment, lead
+
+
+async def test_dispatch_due_callbacks_places_call_and_marks_dispatched(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The actual fix for 'the callback time gets noted but the call never
+    comes': a due, not-yet-dispatched callback must place an outbound call
+    and stamp callback_dispatched_at so it's claimed exactly once."""
+    await _seed_org(db_session)
+    appointment, lead = await _seed_appointment_with_callback(
+        db_session, phone="+910000000010", callback_at=datetime.now(UTC) - timedelta(minutes=1)
+    )
+
+    calls: list[tuple[str, str]] = []
+
+    async def fake_initiate_call(plivo_creds, twilio_creds, to_e164, answer_url, **kwargs):
+        calls.append((to_e164, answer_url))
+        return {"request_uuid": "abc"}, "plivo"
+
+    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "is_configured", lambda *a, **k: True)
+    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "initiate_call", fake_initiate_call)
+
+    await follow_up_dispatcher._dispatch_due_callbacks()
+
+    await db_session.refresh(appointment)
+    assert appointment.callback_dispatched_at is not None
+    assert len(calls) == 1
+    to_e164, answer_url = calls[0]
+    assert to_e164 == "+910000000010"
+    assert f"org_id={ORG_ID}" in answer_url
+
+
+async def test_dispatch_due_callbacks_ignores_future_callbacks(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _seed_org(db_session)
+    appointment, _ = await _seed_appointment_with_callback(
+        db_session, phone="+910000000011", callback_at=datetime.now(UTC) + timedelta(hours=1)
+    )
+
+    called = False
+
+    async def fake_initiate_call(*args, **kwargs):
+        nonlocal called
+        called = True
+        return {}, "plivo"
+
+    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "is_configured", lambda *a, **k: True)
+    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "initiate_call", fake_initiate_call)
+
+    await follow_up_dispatcher._dispatch_due_callbacks()
+
+    await db_session.refresh(appointment)
+    assert appointment.callback_dispatched_at is None
+    assert called is False
+
+
+async def test_dispatch_due_callbacks_does_not_redial_already_dispatched(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _seed_org(db_session)
+    appointment, _ = await _seed_appointment_with_callback(
+        db_session, phone="+910000000012", callback_at=datetime.now(UTC) - timedelta(minutes=1)
+    )
+    appointment.callback_dispatched_at = datetime.now(UTC) - timedelta(seconds=30)
+    await db_session.commit()
+
+    called = False
+
+    async def fake_initiate_call(*args, **kwargs):
+        nonlocal called
+        called = True
+        return {}, "plivo"
+
+    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "is_configured", lambda *a, **k: True)
+    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "initiate_call", fake_initiate_call)
+
+    await follow_up_dispatcher._dispatch_due_callbacks()
+
+    assert called is False
+
+
+async def test_dispatch_due_callbacks_skips_when_voice_not_configured(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _seed_org(db_session)
+    appointment, _ = await _seed_appointment_with_callback(
+        db_session, phone="+910000000013", callback_at=datetime.now(UTC) - timedelta(minutes=1)
+    )
+
+    monkeypatch.setattr(follow_up_dispatcher.voice_failover, "is_configured", lambda *a, **k: False)
+
+    await follow_up_dispatcher._dispatch_due_callbacks()
+
+    await db_session.refresh(appointment)
+    # Still marked dispatched (claimed) even though the call itself couldn't
+    # go out — matches _claim_due_tasks/_execute_task's claim-then-attempt
+    # semantics elsewhere in this dispatcher, so a misconfigured org doesn't
+    # get retried forever on every 5s poll tick.
+    assert appointment.callback_dispatched_at is not None
