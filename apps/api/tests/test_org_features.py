@@ -136,9 +136,18 @@ async def test_invite_member_respects_team_limit(client: AsyncClient, db_session
     await db_session.flush()
     admin_headers = await _login_as(client, db_session, org_id=org.id, email="owner@capped.example", role="admin")
 
-    response = await client.post(
+    # The org owner's own OrgMembership row doesn't count against the cap —
+    # the first invited member should succeed.
+    first = await client.post(
         "/team/members",
         json={"email": "second@capped.example", "role": "member"},
+        headers=admin_headers,
+    )
+    assert first.status_code == 201
+
+    response = await client.post(
+        "/team/members",
+        json={"email": "third@capped.example", "role": "member"},
         headers=admin_headers,
     )
     assert response.status_code == 409

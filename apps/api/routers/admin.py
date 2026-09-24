@@ -2638,6 +2638,12 @@ def _whatsapp_settings_out(
         agent_connect_template_name=(
             org_record.agent_connect_template_name if org_record else None
         ),
+        appointment_confirmation_template_name=(
+            org_record.appointment_confirmation_template_name if org_record else None
+        ),
+        appointment_reminder_template_name=(
+            org_record.appointment_reminder_template_name if org_record else None
+        ),
     )
 
 
@@ -2659,14 +2665,24 @@ async def update_whatsapp_settings(
     org: RequestOrgDep,
     x_admin_token: str | None = Header(None),
 ) -> WhatsAppSettingsOut:
-    """Set (or, with null, clear back to the built-in default) which approved
-    template the human-handoff notification sends — see
-    core/tools.py::transfer_to_human."""
+    """Set (or, with null, clear back to the built-in default) whichever of
+    the template fields are present in the request body — see
+    core/tools.py::transfer_to_human, send_appointment_confirmation,
+    schedule_appointment_reminders. Fields omitted from the body are left
+    untouched (``exclude_unset``), so each picker on the WhatsApp settings
+    page can PUT just its own field without clobbering the other two."""
     record = await db.get(Org, org)
     if record is None:
         raise HTTPException(status_code=404, detail="Org not found")
-    name = (body.agent_connect_template_name or "").strip()
-    record.agent_connect_template_name = name or None
+    updates = body.model_dump(exclude_unset=True)
+    for field in (
+        "agent_connect_template_name",
+        "appointment_confirmation_template_name",
+        "appointment_reminder_template_name",
+    ):
+        if field in updates:
+            name = (updates[field] or "").strip()
+            setattr(record, field, name or None)
     await db.commit()
     phone_number_id = await get_default_whatsapp_number_id(db, org)
     return _whatsapp_settings_out(record, phone_number_id)

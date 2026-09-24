@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Bot, ChevronRight, Globe, KeyRound, Phone, Users } from "lucide-react";
+import { Bot, Calendar, ChevronRight, Globe, KeyRound, Phone, Users } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -268,6 +268,90 @@ function HandoffTemplatePreference() {
                   {
                     onSuccess: () =>
                       toast({ title: "Handoff template saved", variant: "success" }),
+                    onError: (err) =>
+                      toast({
+                        title: "Could not save template",
+                        description: err.message,
+                        variant: "error",
+                      }),
+                  }
+                );
+              }}
+            >
+              <option value="">Default (built-in template)</option>
+              {options.map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name}
+                  {t.language ? ` (${t.language})` : ""}
+                </option>
+              ))}
+            </Select>
+            {!templates.isLoading && activeTemplates.length === 0 && (
+              <p className="mt-1 text-xs text-slate-400">
+                No active templates yet — sync or add one on the Templates page.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </QueryBoundary>
+  );
+}
+
+/**
+ * Picks which approved WhatsApp template the appointment-booking
+ * confirmation or the pre-appointment reminders send (apps/api/core/tools.py::
+ * send_appointment_confirmation / schedule_appointment_reminders). Any active
+ * template can be chosen — its variables are filled server-side (name, date,
+ * time, repeating the time for any variable beyond the third). Empty = built-in
+ * default. Shares the same PUT /admin/settings/whatsapp endpoint as
+ * HandoffTemplatePreference above; each picker only sends its own field, so
+ * saving one never clobbers the other's saved choice (see the backend's
+ * exclude_unset handling).
+ */
+function AppointmentTemplatePreference({
+  field,
+  label,
+  description,
+}: {
+  field: "appointment_confirmation_template_name" | "appointment_reminder_template_name";
+  label: string;
+  description: string;
+}) {
+  const whatsapp = useWhatsAppSettings();
+  const templates = useTemplates({ active: true });
+  const updateSettings = useUpdateWhatsAppSettings();
+  const { toast } = useToast();
+
+  const current = whatsapp.data?.[field] ?? "";
+  const activeTemplates = templates.data ?? [];
+  const options =
+    current && !activeTemplates.some((t) => t.name === current)
+      ? [...activeTemplates, { name: current, language: "" }]
+      : activeTemplates;
+
+  return (
+    <QueryBoundary
+      isLoading={whatsapp.isLoading}
+      isError={whatsapp.isError}
+      error={whatsapp.error}
+      onRetry={() => whatsapp.refetch()}
+      loadingFallback={<Skeleton className="h-20 w-full rounded-xl" />}
+    >
+      {whatsapp.data && (
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-slate-500 dark:text-slate-400">{description}</p>
+          <div className="max-w-md">
+            <Label htmlFor={`${field}-select`}>{label}</Label>
+            <Select
+              id={`${field}-select`}
+              value={current}
+              disabled={updateSettings.isPending || templates.isLoading}
+              onChange={(value) => {
+                updateSettings.mutate(
+                  { [field]: value || null },
+                  {
+                    onSuccess: () => toast({ title: "Template saved", variant: "success" }),
                     onError: (err) =>
                       toast({
                         title: "Could not save template",
@@ -708,6 +792,26 @@ export function SettingsView({ title, description, channel }: SettingsViewProps)
             icon={<Users size={15} aria-hidden className="text-slate-400" />}
           >
             <HandoffTemplatePreference />
+          </CollapsibleSection>
+        )}
+
+        {channel === "whatsapp" && (
+          <CollapsibleSection
+            title="Appointment Templates"
+            icon={<Calendar size={15} aria-hidden className="text-slate-400" />}
+          >
+            <div className="flex flex-col gap-6">
+              <AppointmentTemplatePreference
+                field="appointment_confirmation_template_name"
+                label="Booking confirmation template"
+                description="Sent immediately after a booking (call or WhatsApp) so the contact gets a confirmation even outside an open 24h session. Its variables are filled automatically: name, date, and time."
+              />
+              <AppointmentTemplatePreference
+                field="appointment_reminder_template_name"
+                label="Appointment reminder template"
+                description="Sent 1 hour, 30 minutes, and 5 minutes before a booked appointment. Its variables are filled automatically: name, date, and time."
+              />
+            </div>
           </CollapsibleSection>
         )}
 

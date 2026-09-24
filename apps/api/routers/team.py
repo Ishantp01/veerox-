@@ -153,7 +153,12 @@ async def invite_member(
     max_team_members = await db.scalar(select(Org.max_team_members).where(Org.id == org.org_id))
     if max_team_members is not None:
         seat_count = await db.scalar(
-            select(func.count()).select_from(OrgMembership).where(OrgMembership.org_id == org.org_id)
+            select(func.count())
+            .select_from(OrgMembership)
+            .where(
+                OrgMembership.org_id == org.org_id,
+                OrgMembership.invited_by_id.is_not(None),
+            )
         )
         if seat_count >= max_team_members:
             raise HTTPException(

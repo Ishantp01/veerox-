@@ -9,7 +9,6 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.core.tools import (
-    _APPOINTMENT_REMINDER_TEMPLATE_NAME,
     _get_or_create_user_by_phone,
     _normalize_phone,
     DEFAULT_BOOKING_TIMEZONE,
@@ -203,7 +202,7 @@ async def create_appointment(
     date_str = local_dt.date().isoformat()
     time_str = local_dt.strftime("%H:%M")
     if lead_id is not None:
-        schedule_appointment_reminders(
+        await schedule_appointment_reminders(
             db, org_id, lead_id, notify_name, date_str, time_str, payload.scheduled_at
         )
 
@@ -263,7 +262,11 @@ async def update_appointment(
     # A rescheduled or cancelled appointment must not let a stale
     # pre-scheduled reminder (see book_appointment in core/tools.py) fire for
     # the old time. Rescheduling doesn't re-create reminders for the new
-    # time — only bookings made through book_appointment get them.
+    # time — only bookings made through book_appointment get them. Matched by
+    # shape (rule_id IS NULL + template_name IS NOT NULL is exactly the
+    # appointment-reminder tasks — see follow_up.py's FollowUpTask docstring
+    # and migration e7b3a5c9f2d4) rather than a specific template name, since
+    # an org can now pick its own reminder template (schedule_appointment_reminders).
     if appointment.lead_id is not None and (
         "scheduled_at" in updates or updates.get("status") in {"cancelled", "no_show"}
     ):
@@ -271,7 +274,8 @@ async def update_appointment(
             update(FollowUpTask)
             .where(
                 FollowUpTask.lead_id == appointment.lead_id,
-                FollowUpTask.template_name == _APPOINTMENT_REMINDER_TEMPLATE_NAME,
+                FollowUpTask.rule_id.is_(None),
+                FollowUpTask.template_name.is_not(None),
                 FollowUpTask.status == "pending",
             )
             .values(status="cancelled")
@@ -306,13 +310,15 @@ async def delete_appointment(
         raise HTTPException(status_code=404, detail="Appointment not found")
 
     # Deleting an appointment must not let its pre-scheduled reminder (see
-    # book_appointment in core/tools.py) fire afterwards.
+    # book_appointment in core/tools.py) fire afterwards. Matched by shape —
+    # see the matching comment in update_appointment above.
     if appointment.lead_id is not None:
         await db.execute(
             update(FollowUpTask)
             .where(
                 FollowUpTask.lead_id == appointment.lead_id,
-                FollowUpTask.template_name == _APPOINTMENT_REMINDER_TEMPLATE_NAME,
+                FollowUpTask.rule_id.is_(None),
+                FollowUpTask.template_name.is_not(None),
                 FollowUpTask.status == "pending",
             )
             .values(status="cancelled")

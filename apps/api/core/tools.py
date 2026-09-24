@@ -840,7 +840,7 @@ async def book_appointment(
     # sent hours after booking usually is. Offsets that have already passed
     # by booking time (e.g. booking 10 minutes out) are skipped rather than
     # firing immediately.
-    schedule_appointment_reminders(db, org_id, lead.id, resolved_name, date, time, scheduled_at)
+    await schedule_appointment_reminders(db, org_id, lead.id, resolved_name, date, time, scheduled_at)
 
     await db.commit()
 
@@ -1393,7 +1393,28 @@ _APPOINTMENT_REMINDER_TEMPLATE_NAME = "appointment_reminder"
 _APPOINTMENT_REMINDER_OFFSETS_MINUTES = (60, 30, 5)
 
 
-def schedule_appointment_reminders(
+async def _appointment_body_params(
+    db: AsyncSession, template_name: str, *, name: str | None, date: str, time: str
+) -> list[str]:
+    """Body params for whichever appointment template the org picked (or the
+    built-in default), sized to that template's own ``{{n}}`` count — same
+    padding convention as ``_handoff_body_params``.
+
+    A booking only ever carries three facts — who, date, and time — so a
+    template with fewer than 3 variables gets that leading subset; one with
+    more has the extra slots padded with the formatted time. Defaults to 3
+    params if the chosen template has no local row (shouldn't happen — the
+    dropdown only lists synced templates).
+    """
+    row = (
+        await db.execute(select(WhatsAppTemplate).where(WhatsAppTemplate.name == template_name))
+    ).scalars().first()
+    count = len(row.param_labels) if row and row.param_labels is not None else 3
+    formatted_time = _format_display_time(time)
+    return ([name or "there", date, formatted_time] + [formatted_time] * count)[:count]
+
+
+async def schedule_appointment_reminders(
     db: AsyncSession,
     org_id: UUID,
     lead_id: UUID,
@@ -1410,7 +1431,11 @@ def schedule_appointment_reminders(
     identical reminder behavior. Only queues ``db.add`` calls — the caller is
     responsible for committing.
     """
-    reminder_params = [name or "there", date, _format_display_time(time)]
+    org = await db.get(Org, org_id)
+    template_name = (
+        org.appointment_reminder_template_name if org else None
+    ) or _APPOINTMENT_REMINDER_TEMPLATE_NAME
+    reminder_params = await _appointment_body_params(db, template_name, name=name, date=date, time=time)
     now = datetime.now(UTC)
     for offset_minutes in _APPOINTMENT_REMINDER_OFFSETS_MINUTES:
         reminder_at = scheduled_at - timedelta(minutes=offset_minutes)
@@ -1423,7 +1448,7 @@ def schedule_appointment_reminders(
                 rule_id=None,
                 run_at=reminder_at,
                 status="pending",
-                template_name=_APPOINTMENT_REMINDER_TEMPLATE_NAME,
+                template_name=template_name,
                 template_params=reminder_params,
             )
         )
@@ -1439,9 +1464,10 @@ async def send_appointment_confirmation(
     time: str,
 ) -> None:
     """Best-effort immediate WhatsApp confirmation for a just-booked
-    appointment, via the pre-approved ``appointment_confirmation`` template
-    (works even with no open 24h session). A failed send must not undo the
-    booking that already committed — callers invoke this after ``db.commit``.
+    appointment, via the org's chosen template (WhatsApp settings page) or
+    the pre-approved ``appointment_confirmation`` default (works even with
+    no open 24h session). A failed send must not undo the booking that
+    already committed — callers invoke this after ``db.commit``.
     """
     if not phone:
         logger.warning(
@@ -1461,13 +1487,17 @@ async def send_appointment_confirmation(
         )
         return
 
+    template_name = (
+        org.appointment_confirmation_template_name if org else None
+    ) or _APPOINTMENT_TEMPLATE_NAME
+    body_params = await _appointment_body_params(db, template_name, name=name, date=date, time=time)
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
     try:
         await wa_client.send_template(
             meta_creds.access_token,
             _normalize_phone(phone),
-            _APPOINTMENT_TEMPLATE_NAME,
-            body_params=[name or "there", date, _format_display_time(time)],
+            template_name,
+            body_params=body_params,
             phone_number_id=phone_number_id,
         )
     except httpx.HTTPError:

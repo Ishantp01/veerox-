@@ -91,9 +91,10 @@ class Org(Base):
     # platform's own operating org is always exempt regardless of this value
     # (see deps.py's _org_is_platform_admin_owned).
     enabled_features: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    # Platform-admin-set cap on how many OrgMembership rows this org may
-    # have — enforced in routers/team.py's invite_member. NULL = unlimited
-    # (unchanged default behavior for every org today).
+    # Platform-admin-set cap on how many invited team members (excluding the
+    # org owner's own OrgMembership row) this org may have — enforced in
+    # routers/team.py's invite_member. NULL = unlimited (unchanged default
+    # behavior for every org today).
     max_team_members: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -153,6 +154,16 @@ class Org(Base):
     # (the hardcoded `agent_connect_request` once Meta-approved, otherwise
     # the `appointment_confirmation` fallback). Set via PUT /admin/settings/whatsapp.
     agent_connect_template_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Which approved WhatsApp template the immediate booking confirmation
+    # sends (core/tools.py::send_appointment_confirmation), chosen on the
+    # /whatsapp/settings page. NULL = built-in default (`appointment_confirmation`).
+    # Body params are sized to the chosen template's own {{n}} count (see
+    # _appointment_body_params), so any approved template works, not just
+    # one with exactly 3 variables. Set via PUT /admin/settings/whatsapp.
+    appointment_confirmation_template_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Same as above but for the pre-appointment reminders (core/tools.py::
+    # schedule_appointment_reminders). NULL = built-in default (`appointment_reminder`).
+    appointment_reminder_template_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # This org's own OpenAI API key (Fernet-encrypted, see core/crypto.py),
     # letting it bring/pay for its own usage instead of the platform's
     # shared settings.openai_api_key. NULL = not configured, fall back to

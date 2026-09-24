@@ -154,6 +154,12 @@ class WhatsAppSettingsOut(BaseModel):
     # (core/tools.py::transfer_to_human). None = built-in default. Editable
     # via PUT /admin/settings/whatsapp.
     agent_connect_template_name: str | None = None
+    # Org's chosen templates for the appointment-booking confirmation and
+    # pre-appointment reminders (core/tools.py::send_appointment_confirmation,
+    # schedule_appointment_reminders). None = built-in default. Editable via
+    # PUT /admin/settings/whatsapp.
+    appointment_confirmation_template_name: str | None = None
+    appointment_reminder_template_name: str | None = None
 
 
 class WhatsAppSettingsIn(BaseModel):
@@ -164,6 +170,24 @@ class WhatsAppSettingsIn(BaseModel):
             "notification. Must have exactly two body variables: {{1}} the "
             "caller's number, {{2}} the Human Support reason. Omit/null to use "
             "the built-in default."
+        ),
+    )
+    appointment_confirmation_template_name: str | None = Field(
+        None,
+        description=(
+            "Approved WhatsApp template name to use for the immediate "
+            "booking-confirmation message. Body params (name, date, time) are "
+            "sized to the template's own variable count. Omit/null to use the "
+            "built-in default."
+        ),
+    )
+    appointment_reminder_template_name: str | None = Field(
+        None,
+        description=(
+            "Approved WhatsApp template name to use for pre-appointment "
+            "reminders. Body params (name, date, time) are sized to the "
+            "template's own variable count. Omit/null to use the built-in "
+            "default."
         ),
     )
 
