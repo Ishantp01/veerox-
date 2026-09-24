@@ -87,10 +87,15 @@ const GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: "Automation",
+    label: "Campaigns",
     items: [
       { href: "/automation/campaigns/voice", label: "Voice Campaigns", Icon: Megaphone, iconClassName: "text-purple-500" },
       { href: "/automation/campaigns/whatsapp", label: "WhatsApp Campaigns", Icon: Megaphone, iconClassName: "text-green-500" },
+    ],
+  },
+  {
+    label: "Automated Follow-up",
+    items: [
       { href: "/automation/follow-ups/voice", label: "Voice Follow-ups", Icon: Repeat, iconClassName: "text-purple-500" },
       { href: "/automation/follow-ups/whatsapp", label: "WhatsApp Follow-ups", Icon: Repeat, iconClassName: "text-green-500" },
     ],

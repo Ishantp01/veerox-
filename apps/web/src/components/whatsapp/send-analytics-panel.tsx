@@ -69,7 +69,7 @@ export function WhatsAppSendAnalyticsPanel() {
             <EmptyState
               icon={Megaphone}
               title="No WhatsApp campaigns yet"
-              description="Bulk-message a lead list from Automation → Campaigns."
+              description="Bulk-message a lead list from Campaigns → WhatsApp Campaigns."
               className="border-0 bg-transparent"
             />
           ) : (

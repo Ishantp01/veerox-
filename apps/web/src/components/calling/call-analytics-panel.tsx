@@ -67,7 +67,7 @@ export function CallAnalyticsPanel() {
             <EmptyState
               icon={Megaphone}
               title="No call campaigns yet"
-              description="Bulk-dial a lead list from Automation → Campaigns."
+              description="Bulk-dial a lead list from Campaigns → Voice Campaigns."
               className="border-0 bg-transparent"
             />
           ) : (

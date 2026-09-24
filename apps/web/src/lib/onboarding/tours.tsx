@@ -239,7 +239,7 @@ export const ALL_STEPS: Step[] = [
     "See leads grouped by stage and owner, and spot deals that have gone quiet so someone can chase them.",
   ),
 
-  // Automation
+  // Campaigns / Automated Follow-up
   navStep(
     "onborda-nav-campaigns-voice",
     Megaphone,
