@@ -911,7 +911,7 @@ async def list_leads(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[LeadOut]:
-    stmt = select(Lead).order_by(Lead.created_at.desc()).limit(limit).offset(offset)
+    stmt = select(Lead).order_by(Lead.last_activity_at.desc()).limit(limit).offset(offset)
     if scope_org_id is not None:
         stmt = stmt.where(Lead.org_id == scope_org_id)
     member_scope = _member_lead_scope(scope_org_id, org, payload)
@@ -1252,7 +1252,7 @@ def _leads_export_stmt(
     limit: int,
     offset: int,
 ):
-    stmt = select(Lead).order_by(Lead.created_at.desc()).limit(limit).offset(offset)
+    stmt = select(Lead).order_by(Lead.last_activity_at.desc()).limit(limit).offset(offset)
     if scope_org_id is not None:
         stmt = stmt.where(Lead.org_id == scope_org_id)
     if member_scope is not None:

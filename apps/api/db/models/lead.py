@@ -79,8 +79,18 @@ class Lead(Base):
     # never get one set, and that's fine, they just don't count toward
     # pipeline/revenue totals.
     deal_value: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
-    # Indexed: admin.py's list_leads sorts on this for every page load.
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+    # Bumped every time get_or_create_lead_for_user touches this lead (a new
+    # call/message from a returning customer), not just at creation — so a
+    # lead that re-engages after weeks sorts back to the top of the Leads
+    # page instead of sitting buried under its original created_at.
+    # Indexed: admin.py's list_leads sorts on this for every page load.
+    last_activity_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,

@@ -80,6 +80,7 @@ export interface Lead {
   qualification_notes: string | null;
   qualified_at: string | null;
   created_at: string;
+  last_activity_at: string;
   claimed_by_account_user_id: string | null;
   claimed_at: string | null;
   claimed_by_name: string | null;

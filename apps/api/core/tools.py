@@ -609,6 +609,10 @@ async def get_or_create_lead_for_user(
             existing.channel = channel
         if intent and not existing.intent:
             existing.intent = intent
+        # A returning customer re-engaging is what should bubble this lead
+        # back to the top of the Leads page — created_at alone would leave it
+        # buried under leads created since their last contact.
+        existing.last_activity_at = datetime.now(UTC)
         return existing
 
     lead = Lead(
