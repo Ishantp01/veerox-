@@ -828,28 +828,29 @@ async def _claim_customer_lead_for_member(
     db: AsyncSession,
     org_id: UUID,
     user: User,
-    member_scope: UUID | None,
+    claimant_account_user_id: UUID,
     *,
     channel: str,
 ) -> None:
-    """When a ``role=="member"`` places an outbound call/WhatsApp to ``user``,
-    ensure they own a Lead for that customer — otherwise the conversation the
-    channel pipeline creates afterwards wouldn't show in their scoped
-    Conversations list (see ``_guard_conversation_access`` /
-    ``owned_lead_user_ids``).
+    """When someone places an outbound call/WhatsApp to ``user``, ensure they
+    own a Lead for that customer — both so the conversation the channel
+    pipeline creates afterwards shows up in a ``role=="member"`` caller's
+    scoped Conversations list (see ``_guard_conversation_access`` /
+    ``owned_lead_user_ids``), and so the Conversations table's Staff column
+    attributes the touch to whoever actually made it, admin included.
 
-    No-op for admins / platform superusers / ``X-Admin-Token`` (``member_scope``
-    is None). Claims the customer's most recent lead if it's unclaimed;
-    creates a minimal lead if they have none. A lead already claimed by
-    someone else is left alone — that customer is another rep's.
+    ``claimant_account_user_id`` should come from ``RequestAccountUserDep``,
+    which already resolves to the caller's own id for a dashboard session (or
+    ``DEFAULT_OWNER_ID`` for the shared ``X-Admin-Token`` with no session).
+    Claims the customer's most recent lead if it's unclaimed; creates a
+    minimal lead if they have none. A lead already claimed by someone else is
+    left alone — that customer is another rep's.
     """
-    if member_scope is None:
-        return
     lead = await get_or_create_lead_for_user(
         db, org_id, user.id, phone=user.phone, channel=channel, intent="outreach"
     )
     if lead.claimed_by_account_user_id is None:
-        lead.claimed_by_account_user_id = member_scope
+        lead.claimed_by_account_user_id = claimant_account_user_id
         lead.claimed_at = func.now()
 
 
@@ -3835,7 +3836,7 @@ async def outbound_whatsapp(
     payload: OutboundWhatsappIn,
     db: DbDep,
     org: RequestOrgDep,
-    member_scope: MemberScopeDep,
+    claimant_account_user_id: RequestAccountUserDep,
     x_admin_token: str | None = Header(None),
 ) -> OutboundWhatsappOut:
     """Send an outbound WhatsApp message and persist the assistant turn.
@@ -3856,9 +3857,12 @@ async def outbound_whatsapp(
         db.add(user)
         await db.flush()
 
-    # A member messaging this customer takes ownership of their lead so the
-    # conversation shows up in their scoped Conversations list.
-    await _claim_customer_lead_for_member(db, org_id, user, member_scope, channel="whatsapp")
+    # Whoever's messaging this customer takes ownership of their lead — shows
+    # up in a member's scoped Conversations list, and attributes the touch to
+    # them (admin included) in the Conversations table's Staff column.
+    await _claim_customer_lead_for_member(
+        db, org_id, user, claimant_account_user_id, channel="whatsapp"
+    )
 
     # Find an open WhatsApp conversation for this user, otherwise open a new one.
     conv_stmt = (
@@ -4028,7 +4032,7 @@ async def outbound_call(
     db: DbDep,
     org: RequestOrgDep,
     redis: RedisDep,
-    member_scope: MemberScopeDep,
+    claimant_account_user_id: RequestAccountUserDep,
     x_admin_token: str | None = Header(None),
 ) -> OutboundCallOut:
     """Place an outbound voice call via Plivo.
@@ -4045,13 +4049,16 @@ async def outbound_call(
     org_id = org
     payload.to_phone = normalize_phone(payload.to_phone, await _org_country_code(db, org_id))
 
-    # A member calling this customer takes ownership of their lead so the
-    # voice conversation (created later by the realtime bridge, keyed on the
-    # same org_id + phone) shows up in their scoped Conversations list.
-    if member_scope is not None:
-        customer = await _get_or_create_user_by_phone(db, org_id, payload.to_phone)
-        await _claim_customer_lead_for_member(db, org_id, customer, member_scope, channel="voice")
-        await db.commit()
+    # Whoever's calling this customer takes ownership of their lead — shows up
+    # in a member's scoped Conversations list, and attributes the call to them
+    # (admin included) in the Conversations table's Staff column. The voice
+    # conversation itself is created later by the realtime bridge, keyed on
+    # the same org_id + phone.
+    customer = await _get_or_create_user_by_phone(db, org_id, payload.to_phone)
+    await _claim_customer_lead_for_member(
+        db, org_id, customer, claimant_account_user_id, channel="voice"
+    )
+    await db.commit()
 
     org_record = await db.get(Org, org_id)
     plivo_creds = resolve_plivo_credentials(org_record)
