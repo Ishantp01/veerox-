@@ -81,6 +81,7 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
             <TableHeader title="Where this lead sits in your sales pipeline: New → Contacted → Qualified → Converted/Lost.">
               Status
             </TableHeader>
+            <TableHeader>Staff</TableHeader>
             {showConversation && <TableHeader>Conversation</TableHeader>}
             {showHumanSupport && <TableHeader>Human Support</TableHeader>}
             <TableHeader>Created</TableHeader>
@@ -154,6 +155,9 @@ export function LeadTable({ leads, detailBasePath }: LeadTableProps) {
                 </TableCell>
                 <TableCell>
                   <StatusBadge status={lead.status} />
+                </TableCell>
+                <TableCell className="text-xs text-slate-500">
+                  {lead.claimed_by_name ?? "—"}
                 </TableCell>
                 {showConversation && (
                   <TableCell>

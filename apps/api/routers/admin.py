@@ -939,7 +939,8 @@ async def list_leads(
         stmt = stmt.where(_lead_search_clause(search))
 
     leads = (await db.execute(stmt)).scalars().all()
-    return [LeadOut.model_validate(lead) for lead in leads]
+    claimant_names = await _claimant_names(db, leads)
+    return [_lead_out_with_claimant(lead, claimant_names) for lead in leads]
 
 
 _SAMPLE_IMPORT_ROWS = [
