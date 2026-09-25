@@ -1,6 +1,6 @@
 """add last_activity_at to leads
 
-Revision ID: b8c9d0e1f2a3
+Revision ID: 72ab1cd1e18b
 Revises: a5b6c7d8e9f0
 Create Date: 2026-09-25 00:00:00.000000
 
@@ -13,7 +13,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = 'b8c9d0e1f2a3'
+revision: str = '72ab1cd1e18b'
 down_revision: Union[str, None] = 'a5b6c7d8e9f0'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
