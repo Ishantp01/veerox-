@@ -744,7 +744,8 @@ def _lead_tag_clause(tag: str):
 
 def _lead_search_clause(search: str):
     """Unified search box (UI) — matches leads whose name, phone, intent,
-    status, qualification status, or tags contain the search text.
+    status, qualification status, tags, or claiming staff member's name/email
+    contain the search text.
     """
     like = f"%{search}%"
     return or_(
@@ -754,6 +755,11 @@ def _lead_search_clause(search: str):
         Lead.status.ilike(like),
         Lead.qualification_status.ilike(like),
         cast(Lead.tags, String).ilike(like),
+        Lead.claimed_by_account_user_id.in_(
+            select(AccountUser.id).where(
+                or_(AccountUser.full_name.ilike(like), AccountUser.email.ilike(like))
+            )
+        ),
     )
 
 
@@ -1292,10 +1298,11 @@ _LEADS_EXPORT_HEADER = [
     "qualification_status",
     "qualification_score",
     "created_at",
+    "staff",
 ]
 
 
-def _lead_export_row(lead: Lead) -> list[str]:
+def _lead_export_row(lead: Lead, claimant_names: dict[UUID, str]) -> list[str]:
     return [
         str(lead.id),
         lead.name or "",
@@ -1307,6 +1314,7 @@ def _lead_export_row(lead: Lead) -> list[str]:
         lead.qualification_status or "",
         str(lead.qualification_score) if lead.qualification_score is not None else "",
         lead.created_at.isoformat() if lead.created_at else "",
+        claimant_names.get(lead.claimed_by_account_user_id, "") if lead.claimed_by_account_user_id else "",
     ]
 
 
@@ -1348,12 +1356,13 @@ async def export_leads_csv(
         offset,
     )
     leads = (await db.execute(stmt)).scalars().all()
+    claimant_names = await _claimant_names(db, leads)
 
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(_LEADS_EXPORT_HEADER)
     for lead in leads:
-        writer.writerow(_lead_export_row(lead))
+        writer.writerow(_lead_export_row(lead, claimant_names))
     buf.seek(0)
 
     return _csv_streaming_response(buf.getvalue(), "leads.csv")
@@ -1397,13 +1406,14 @@ async def export_leads_xlsx(
         offset,
     )
     leads = (await db.execute(stmt)).scalars().all()
+    claimant_names = await _claimant_names(db, leads)
 
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Leads"
     sheet.append(_LEADS_EXPORT_HEADER)
     for lead in leads:
-        sheet.append(_lead_export_row(lead))
+        sheet.append(_lead_export_row(lead, claimant_names))
     for cell in sheet["C"][1:]:  # phone column — keep leading "+"/zeros as text
         cell.number_format = "@"
 

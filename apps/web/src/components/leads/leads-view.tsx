@@ -218,8 +218,8 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
                 type="search"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="Search name, phone, intent, tag…"
-                aria-label="Search leads by name, phone, intent, or tag"
+                placeholder="Search name, phone, intent, tag, staff…"
+                aria-label="Search leads by name, phone, intent, tag, or staff member"
                 className="w-48 pl-8 sm:w-56"
               />
             </div>
