@@ -63,8 +63,8 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
 
   const rows = conversations.data ?? [];
   const columns = channel
-    ? (["Live", "Client", "Tags", "Started", "Ended", "# Messages"] as const)
-    : (["Live", "Client", "Channel", "Tags", "Started", "Ended", "# Messages"] as const);
+    ? (["Live", "Client", "Staff", "Tags", "Started", "Ended", "# Messages"] as const)
+    : (["Live", "Client", "Channel", "Staff", "Tags", "Started", "Ended", "# Messages"] as const);
 
   return (
     <div>
@@ -136,6 +136,9 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
                       <ChannelBadge channel={c.channel} />
                     </TableCell>
                   )}
+                  <TableCell className="text-xs text-slate-500">
+                    {c.staff_name ?? "—"}
+                  </TableCell>
                   <TableCell>
                     {c.tags && c.tags.length > 0 ? (
                       <div className="flex flex-wrap gap-1">

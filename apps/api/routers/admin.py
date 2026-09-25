@@ -588,8 +588,14 @@ async def list_conversations(
         .scalar_subquery()
     )
 
-    stmt = select(Conversation, message_count, User.phone, User.name).join(
-        User, User.id == Conversation.user_id
+    stmt = (
+        select(Conversation, message_count, User.phone, User.name, AccountUser.full_name)
+        .join(User, User.id == Conversation.user_id)
+        .outerjoin(
+            Lead,
+            (Lead.user_id == Conversation.user_id) & (Lead.org_id == Conversation.org_id),
+        )
+        .outerjoin(AccountUser, AccountUser.id == Lead.claimed_by_account_user_id)
     )
     if scope_org_id is not None:
         stmt = stmt.where(Conversation.org_id == scope_org_id)
@@ -621,8 +627,9 @@ async def list_conversations(
             "message_count": int(count),
             "user_phone": phone,
             "user_name": name,
+            "staff_name": staff_name,
         }
-        for conv, count, phone, name in rows
+        for conv, count, phone, name, staff_name in rows
     ]
 
 

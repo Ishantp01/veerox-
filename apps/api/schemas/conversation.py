@@ -25,6 +25,10 @@ class ConversationOut(BaseModel):
     # for callers, like summarize, that don't bother with the join).
     user_phone: str | None = None
     user_name: str | None = None
+    # The AccountUser.full_name of whichever staff member has claimed this
+    # contact's Lead (Lead.claimed_by_account_user_id) — None if unclaimed or
+    # if the caller didn't bother joining Lead/AccountUser.
+    staff_name: str | None = None
 
 
 class ConversationSummaryOut(ConversationOut):

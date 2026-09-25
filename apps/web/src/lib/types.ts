@@ -13,6 +13,9 @@ export interface Conversation {
   // never resolved to a User row.
   user_phone?: string | null;
   user_name?: string | null;
+  // Staff member who has claimed this contact's lead (AccountUser.full_name),
+  // null if unclaimed.
+  staff_name?: string | null;
   // Plivo hosts the audio file itself — this is just the URL + duration it
   // reported when the recording finished processing. Voice calls only.
   recording_url?: string | null;
