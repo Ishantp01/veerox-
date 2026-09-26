@@ -197,9 +197,22 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
           mobileOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full"
         }`}
       >
-        {/* Logo */}
+        {/* Logo — same slot/size as the old <img>, just a looping video.
+            Cropped to a rounded square (object-cover zooms into the center)
+            so it reads as a compact logo mark instead of a wide letterboxed
+            clip with its dark background showing as a bar. */}
         <div className="mb-6 px-3 flex items-center justify-between gap-2.5">
-          <img src="/logo.png" alt="Work Assign Ai" className="h-auto w-full max-w-[240px] object-contain" />
+          <div className="w-full max-w-[240px] overflow-hidden rounded-2xl">
+            <video
+              src="/logo.mp4"
+              autoPlay
+              loop
+              muted
+              playsInline
+              aria-label="Work Assign Ai"
+              className="aspect-video w-full object-cover"
+            />
+          </div>
           <button
             type="button"
             onClick={onCloseMobile}
