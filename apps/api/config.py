@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+DEPLOYMENT_MODES = ("owner", "client")
 
 
 class Settings(BaseSettings):
@@ -142,6 +145,67 @@ class Settings(BaseSettings):
 
     # Observability
     sentry_dsn: str | None = None
+
+    # --- Multi-tenant licensing / client deployments ---------------------
+    # One shared codebase, one config schema (this class), one .env.example
+    # at the repo root — every deployment (the owner's own, and every
+    # client's own separate server/database) sets the SAME variable names,
+    # differing only in their values. `deployment_mode` is what tells a
+    # given process which half of the schema below actually applies to it;
+    # see `_validate_deployment_mode_requirements` at the bottom of this
+    # class for the specific fields each mode requires.
+    #
+    # "owner": this is the central Veerox platform deployment — runs the
+    # owner panel/API (routers/platform.py, billing.py's license endpoints)
+    # and holds the source-of-truth org/license/feature data. "client": this
+    # is a separate per-client deployment with its own database — it never
+    # registers owner administration routes at all (see main.py's
+    # create_app, not just a hidden frontend link) and instead validates its
+    # licence directly against the owner over authenticated HTTPS on every
+    # cache refresh (see core/license_cache.py) — there is no local
+    # signature to verify, no signing keys anywhere in this schema.
+    deployment_mode: str = "owner"
+    # Client-mode only: where the owner API lives, and this deployment's own
+    # bearer credential for it — issued once by
+    # POST /platform/organizations/{id}/deployments (shown exactly once at
+    # generation; the owner only ever stores its hash, see
+    # db/models/client_deployment.py). Sent as `Authorization: Bearer
+    # <token>` on every call to GET /platform/license and
+    # GET|POST /platform/sync/* — never exposed to the frontend, browser
+    # storage, URLs, or logs.
+    license_api_url: str | None = None
+    license_api_token: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_deployment_mode_requirements(self) -> "Settings":
+        """Fails startup fast rather than letting a misconfigured deployment
+        come up half-working: a client deployment with no way to reach or
+        authenticate to the owner would either crash on first use or, worse,
+        run with no licence enforcement at all. The owner deployment itself
+        needs nothing extra here — it validates itself via the existing
+        platform-owner exemption (`deps.py::_org_is_platform_admin_owned`),
+        not a client token."""
+        if self.deployment_mode not in DEPLOYMENT_MODES:
+            raise ValueError(
+                f"DEPLOYMENT_MODE must be one of {DEPLOYMENT_MODES!r}, got {self.deployment_mode!r}"
+            )
+
+        if self.deployment_mode == "client":
+            missing = [
+                name
+                for name, value in (
+                    ("LICENSE_API_URL", self.license_api_url),
+                    ("LICENSE_API_TOKEN", self.license_api_token),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(
+                    "DEPLOYMENT_MODE=client requires "
+                    f"{', '.join(missing)} to be set — see .env.example."
+                )
+
+        return self
 
 
 settings = Settings()

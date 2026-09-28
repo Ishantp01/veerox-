@@ -652,7 +652,7 @@ export const PAGE_GUIDES: Record<string, GuideStep[]> = {
       anchor: "table",
       title: "The columns",
       content:
-        "Organization, Admin and Email identify the account; Plan and Status show what they're on and whether it's active; Team members is their seat count; Created is signup date. The Actions column opens the org to change its plan, add credits, or review its activity and errors.",
+        "Organization, Admin and Email identify the account; License and Expires show whether it's active and for how long; Team members is their seat count; Connection shows whether an organization hosted on its own separate server has checked in and confirmed its setup ('—' means it's on this shared platform instead, not separately hosted). The Actions column renews the license, edits the org, manages its hosting setup, or deletes it.",
     },
   ],
 };

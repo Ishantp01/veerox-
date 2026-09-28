@@ -21,22 +21,47 @@ import { useUpdateOrgAdmin, type AdminOrg } from "@/lib/hooks/useAdminOrgs";
 import { CountryCodeField } from "@/components/common/country-code-field";
 import { E164_REGEX, E164_MESSAGE } from "@/lib/phone";
 
-const editOrgSchema = z.object({
-  orgName: z.string().trim().min(1, "Organization name is required"),
-  adminEmail: z.string().trim().email(),
-  adminName: z
-    .string()
-    .trim()
-    .regex(/^[A-Za-z\s'.-]*$/, "Name should only contain letters")
-    .optional(),
-  adminMobile: z
-    .string()
-    .trim()
-    .optional()
-    .refine((v) => !v || E164_REGEX.test(v), E164_MESSAGE),
-});
+/**
+ * Admin fields are only required — and only shown at all, see EditOrgDialog
+ * below — for an org that actually has a login-capable admin account
+ * (`hasAdmin`). An org set up on its own separate server (spec: multi-
+ * tenant licensing) has no AccountUser/OrgMembership at all: its real users
+ * log into that separate server's own database, which this dashboard has
+ * no access to, so there is no login here to edit or regenerate a token
+ * for. For those orgs, `contactName`/`contactEmail`/`contactMobile` (plain
+ * Org fields, not a login — see Org.contact_name's docstring) are shown
+ * instead, purely so the platform admin has somewhere to record who to
+ * reach about that org. Neither is required, since it's just a record.
+ */
+function buildEditOrgSchema(hasAdmin: boolean) {
+  return z.object({
+    orgName: z.string().trim().min(1, "Organization name is required"),
+    adminEmail: hasAdmin ? z.string().trim().email() : z.string().trim().optional(),
+    adminName: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z\s'.-]*$/, "Name should only contain letters")
+      .optional(),
+    adminMobile: z
+      .string()
+      .trim()
+      .optional()
+      .refine((v) => !v || E164_REGEX.test(v), E164_MESSAGE),
+    contactName: z.string().trim().optional(),
+    contactEmail: z
+      .string()
+      .trim()
+      .optional()
+      .refine((v) => !v || z.string().email().safeParse(v).success, "Enter a valid email"),
+    contactMobile: z
+      .string()
+      .trim()
+      .optional()
+      .refine((v) => !v || E164_REGEX.test(v), E164_MESSAGE),
+  });
+}
 
-type EditOrgForm = z.infer<typeof editOrgSchema>;
+type EditOrgForm = z.infer<ReturnType<typeof buildEditOrgSchema>>;
 type OrgFieldErrors = Partial<Record<keyof EditOrgForm, string>>;
 
 const EMPTY_CREDENTIALS = {
@@ -57,6 +82,9 @@ function formFromOrg(org: AdminOrg): EditOrgForm {
     adminEmail: org.admin_email ?? "",
     adminName: org.admin_name ?? "",
     adminMobile: org.admin_mobile ?? "",
+    contactName: org.contact_name ?? "",
+    contactEmail: org.contact_email ?? "",
+    contactMobile: org.contact_mobile ?? "",
   };
 }
 
@@ -107,6 +135,11 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
   const updateOrg = useUpdateOrgAdmin();
   const { toast } = useToast();
 
+  // No AccountUser/OrgMembership exists at all for an org set up on its own
+  // separate server — see buildEditOrgSchema's docstring.
+  const hasAdmin = !!org.admin_email;
+  const editOrgSchema = buildEditOrgSchema(hasAdmin);
+
   function validateField(key: keyof EditOrgForm, nextForm: EditOrgForm) {
     const result = editOrgSchema.safeParse(nextForm);
     if (result.success) {
@@ -141,9 +174,22 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
         orgId: org.id,
         name: parsed.data.orgName.trim(),
         default_country_code: countryCode,
-        admin_email: parsed.data.adminEmail.trim(),
-        admin_name: parsed.data.adminName?.trim() ?? "",
-        admin_mobile: parsed.data.adminMobile?.trim() ?? "",
+        // admin_* omitted entirely (not sent as empty strings) when this
+        // org has no admin account — the backend's PATCH is exclude_unset,
+        // so leaving these out of the object (undefined values are dropped
+        // by JSON.stringify) means it never tries to look one up. Those
+        // orgs send contact_* instead — plain fields, no lookup involved.
+        ...(hasAdmin
+          ? {
+              admin_email: parsed.data.adminEmail!.trim(),
+              admin_name: parsed.data.adminName?.trim() ?? "",
+              admin_mobile: parsed.data.adminMobile?.trim() ?? "",
+            }
+          : {
+              contact_name: parsed.data.contactName?.trim() ?? "",
+              contact_email: parsed.data.contactEmail?.trim() ?? "",
+              contact_mobile: parsed.data.contactMobile?.trim() ?? "",
+            }),
         phone_numbers: [
           ...plivoNumbers.map((n) => ({ provider: "plivo" as const, ...n })),
           ...twilioNumbers.map((n) => ({ provider: "twilio" as const, ...n })),
@@ -192,7 +238,7 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogTrigger>
-        <Button variant="ghost" size="sm" aria-label={`Edit ${org.name}`}>
+        <Button variant="ghost" size="sm" aria-label={`Edit ${org.name}`} title="Edit organization">
           <Pencil size={14} />
         </Button>
       </DialogTrigger>
@@ -223,6 +269,8 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
                   (calling, WhatsApp, contacts, campaigns).
                 </p>
               </div>
+              {hasAdmin ? (
+              <>
               <div>
               <Label htmlFor="edit-org-admin-email">Admin email *</Label>
               <Input
@@ -275,6 +323,67 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
                 </p>
               )}
             </div>
+              </>
+              ) : (
+              <>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                This organization has no shared-dashboard login — it&apos;s set up on its own
+                separate server. These are just contact details for your own reference, not a login.
+              </p>
+              <div>
+                <Label htmlFor="edit-org-contact-name">Contact name</Label>
+                <Input
+                  id="edit-org-contact-name"
+                  value={form.contactName}
+                  onChange={(e) => updateField("contactName", e.target.value)}
+                  placeholder="Optional"
+                  aria-invalid={fieldErrors.contactName ? true : undefined}
+                  aria-describedby={fieldErrors.contactName ? "edit-org-contact-name-error" : undefined}
+                />
+                {fieldErrors.contactName && (
+                  <p id="edit-org-contact-name-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.contactName}
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label htmlFor="edit-org-contact-email">Contact email</Label>
+                <Input
+                  id="edit-org-contact-email"
+                  type="email"
+                  value={form.contactEmail}
+                  onChange={(e) => updateField("contactEmail", e.target.value)}
+                  placeholder="Optional"
+                  aria-invalid={fieldErrors.contactEmail ? true : undefined}
+                  aria-describedby={fieldErrors.contactEmail ? "edit-org-contact-email-error" : undefined}
+                />
+                {fieldErrors.contactEmail && (
+                  <p id="edit-org-contact-email-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.contactEmail}
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label htmlFor="edit-org-contact-mobile">Contact mobile number</Label>
+                <Input
+                  id="edit-org-contact-mobile"
+                  type="tel"
+                  inputMode="tel"
+                  maxLength={16}
+                  value={form.contactMobile}
+                  onChange={(e) => updateField("contactMobile", e.target.value.replace(/[^\d+]/g, ""))}
+                  placeholder="+919876543210"
+                  aria-invalid={fieldErrors.contactMobile ? true : undefined}
+                  aria-describedby={fieldErrors.contactMobile ? "edit-org-contact-mobile-error" : undefined}
+                />
+                {fieldErrors.contactMobile && (
+                  <p id="edit-org-contact-mobile-error" className="mt-1.5 text-xs text-red-600">
+                    {fieldErrors.contactMobile}
+                  </p>
+                )}
+              </div>
+              </>
+              )}
             <OrgFeatureChecklist
               idPrefix="edit-org"
               enabledFeatures={enabledFeatures}

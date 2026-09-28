@@ -42,8 +42,9 @@ const inviteSchema = z.object({
 type InviteFieldErrors = Partial<Record<"email" | "fullName" | "mobile" | "role", string>>;
 
 /**
- * Admin self-service invite — the org's own equivalent of
- * NewOrgDialog, scoped to the caller's org instead of the whole platform
+ * Admin self-service invite — the org's own equivalent of the
+ * shared-platform path in CreateOrganizationDialog, scoped to the caller's
+ * org instead of the whole platform
  * (see apps/api/routers/team.py). A brand new login token is only shown
  * when the invite creates a fresh account; an email that already has one
  * elsewhere just gets added to this org on its existing login.

@@ -31,15 +31,19 @@ from apps.api.core.crypto import encrypt_secret
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import invalidate_user_sessions
 from apps.api.db.models.account_user import AccountUser
+from apps.api.db.models.client_deployment import ClientDeployment
+from apps.api.db.models.license_audit_event import LicenseAuditEvent
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.models.platform_settings import PlatformSettings
+from apps.api.db.models.sync_event import SyncEvent
 from apps.api.deps import (
     CurrentOrgDep,
     DbDep,
     RedisDep,
     _org_is_platform_admin_owned,
+    resolve_request_account_user_id,
     verify_platform_admin,
 )
 from apps.api.schemas.billing import (
@@ -52,10 +56,13 @@ from apps.api.schemas.billing import (
     ReactivateLicenseIn,
     RegenerateAdminTokenOut,
     RenewLicenseIn,
+    RevokeLicenseIn,
     SocialLinksOut,
     SuspendLicenseIn,
 )
 from apps.api.schemas.org_numbers import OrgPhoneNumberOut
+
+ActorAccountUserDep = Annotated[UUID, Depends(resolve_request_account_user_id)]
 
 # Platform-wide org directory + license administration — gated by
 # X-Admin-Token or `AccountUser.is_superuser` specifically
@@ -124,6 +131,9 @@ def _org_admin_out(
         admin_email=admin_email,
         admin_name=admin_name,
         admin_mobile=admin_mobile,
+        contact_name=org.contact_name,
+        contact_email=org.contact_email,
+        contact_mobile=org.contact_mobile,
         created_at=org.created_at.isoformat(),
         phone_numbers=[
             OrgPhoneNumberOut.model_validate(n, from_attributes=True) for n in org.phone_numbers
@@ -529,6 +539,63 @@ async def _get_licensable_org(db: DbDep, org_id: UUID) -> Org:
     return org_row
 
 
+async def _record_license_action(
+    db: DbDep,
+    org_row: Org,
+    *,
+    action: str,
+    actor_account_user_id: UUID,
+    previous_status: str,
+    previous_expires_at: datetime | None,
+    notes: str | None = None,
+) -> None:
+    """Audit trail (spec §3) + centralized-sync trigger (spec §4) shared by
+    every license lifecycle endpoint below. Writes a LicenseAuditEvent row
+    (append-only — Org's own license_status/license_expires_at columns only
+    ever hold the CURRENT values, so this is the only place the history
+    lives), bumps Org.config_version so a client deployment's next
+    `GET /platform/license` validation or `GET /platform/sync/pending` pull
+    picks up the change, and — if this org already has a registered
+    ClientDeployment — records a durable `license_update` SyncEvent, all in
+    the same transaction as the license change itself (spec §4's
+    "transactional local updates").
+    """
+    db.add(
+        LicenseAuditEvent(
+            org_id=org_row.id,
+            action=action,
+            actor_account_user_id=actor_account_user_id,
+            previous_status=previous_status,
+            new_status=org_row.license_status,
+            previous_expires_at=previous_expires_at,
+            new_expires_at=org_row.license_expires_at,
+            notes=notes,
+        )
+    )
+    org_row.config_version += 1
+    if org_row.client_deployment_id is not None:
+        deployment = await db.get(ClientDeployment, org_row.client_deployment_id)
+        if deployment is not None and deployment.status != "revoked":
+            db.add(
+                SyncEvent(
+                    org_id=org_row.id,
+                    deployment_id=deployment.id,
+                    event_type="license_update",
+                    payload={
+                        "central_org_ref": str(org_row.central_org_ref),
+                        "name": org_row.name,
+                        "enabled_features": org_row.enabled_features,
+                        "license_status": org_row.license_status,
+                        "license_expires_at": (
+                            org_row.license_expires_at.isoformat() if org_row.license_expires_at else None
+                        ),
+                        "config_version": org_row.config_version,
+                    },
+                    config_version=org_row.config_version,
+                )
+            )
+
+
 async def _license_out(db: DbDep, org_row: Org) -> OrgAdminOut:
     # org_row.phone_numbers is lazy-loaded — force it with a fresh eager-load
     # query rather than accessing the relationship directly, same as
@@ -554,7 +621,7 @@ async def _license_out(db: DbDep, org_row: Org) -> OrgAdminOut:
 
 @router.post("/orgs/{org_id}/license/issue", response_model=OrgAdminOut)
 async def issue_license(
-    org_id: UUID, payload: IssueLicenseIn, db: DbDep, _admin: PlatformAdminDep
+    org_id: UUID, payload: IssueLicenseIn, db: DbDep, actor: ActorAccountUserDep, _admin: PlatformAdminDep
 ) -> OrgAdminOut:
     """First-time (or from-scratch) license grant — sets the org active with
     a fresh expiry `days` from now. Also the right call to make for an org
@@ -562,12 +629,17 @@ async def issue_license(
     if payload.days <= 0:
         raise HTTPException(status_code=400, detail="days must be positive")
     org_row = await _get_licensable_org(db, org_id)
+    previous_status, previous_expires_at = org_row.license_status, org_row.license_expires_at
     org_row.license_status = "active"
     org_row.license_expires_at = datetime.now(UTC) + timedelta(days=payload.days)
     org_row.license_issued_at = datetime.now(UTC)
     org_row.license_duration_days = payload.days
     if payload.notes is not None:
         org_row.license_notes = payload.notes.strip() or None
+    await _record_license_action(
+        db, org_row, action="issued", actor_account_user_id=actor,
+        previous_status=previous_status, previous_expires_at=previous_expires_at, notes=payload.notes,
+    )
     await db.commit()
     await db.refresh(org_row)
     return await _license_out(db, org_row)
@@ -575,7 +647,7 @@ async def issue_license(
 
 @router.post("/orgs/{org_id}/license/renew", response_model=OrgAdminOut)
 async def renew_license(
-    org_id: UUID, payload: RenewLicenseIn, db: DbDep, _admin: PlatformAdminDep
+    org_id: UUID, payload: RenewLicenseIn, db: DbDep, actor: ActorAccountUserDep, _admin: PlatformAdminDep
 ) -> OrgAdminOut:
     """Set a new expiry `days` from now and bring the license back to
     active — the normal action once a client has paid for another period
@@ -583,10 +655,15 @@ async def renew_license(
     in the frontend) reuses whatever duration this org was last issued/
     renewed for."""
     org_row = await _get_licensable_org(db, org_id)
+    previous_status, previous_expires_at = org_row.license_status, org_row.license_expires_at
     duration_days = _resolve_duration_days(org_row, payload.days)
     org_row.license_status = "active"
     org_row.license_expires_at = datetime.now(UTC) + timedelta(days=duration_days)
     org_row.license_duration_days = duration_days
+    await _record_license_action(
+        db, org_row, action="renewed", actor_account_user_id=actor,
+        previous_status=previous_status, previous_expires_at=previous_expires_at,
+    )
     await db.commit()
     await db.refresh(org_row)
     return await _license_out(db, org_row)
@@ -594,7 +671,7 @@ async def renew_license(
 
 @router.post("/orgs/{org_id}/license/extend", response_model=OrgAdminOut)
 async def extend_license(
-    org_id: UUID, payload: ExtendLicenseIn, db: DbDep, _admin: PlatformAdminDep
+    org_id: UUID, payload: ExtendLicenseIn, db: DbDep, actor: ActorAccountUserDep, _admin: PlatformAdminDep
 ) -> OrgAdminOut:
     """Add `days` on top of the org's current expiry (or from now, if it has
     none or has already passed) — for a short top-up without having to
@@ -602,11 +679,16 @@ async def extend_license(
     if payload.days <= 0:
         raise HTTPException(status_code=400, detail="days must be positive")
     org_row = await _get_licensable_org(db, org_id)
+    previous_status, previous_expires_at = org_row.license_status, org_row.license_expires_at
     now = datetime.now(UTC)
     current_expiry = _as_aware_utc(org_row.license_expires_at) if org_row.license_expires_at else None
     base = current_expiry if current_expiry and current_expiry > now else now
     org_row.license_expires_at = base + timedelta(days=payload.days)
     org_row.license_status = "active"
+    await _record_license_action(
+        db, org_row, action="extended", actor_account_user_id=actor,
+        previous_status=previous_status, previous_expires_at=previous_expires_at,
+    )
     await db.commit()
     await db.refresh(org_row)
     return await _license_out(db, org_row)
@@ -614,15 +696,45 @@ async def extend_license(
 
 @router.post("/orgs/{org_id}/license/suspend", response_model=OrgAdminOut)
 async def suspend_license(
-    org_id: UUID, payload: SuspendLicenseIn, db: DbDep, _admin: PlatformAdminDep
+    org_id: UUID, payload: SuspendLicenseIn, db: DbDep, actor: ActorAccountUserDep, _admin: PlatformAdminDep
 ) -> OrgAdminOut:
     """Immediately lock the org out regardless of its expiry date — e.g. a
     payment dispute. Distinct from letting it expire naturally so the admin
     can tell the two apart later."""
     org_row = await _get_licensable_org(db, org_id)
+    previous_status, previous_expires_at = org_row.license_status, org_row.license_expires_at
     org_row.license_status = "suspended"
     if payload.notes is not None:
         org_row.license_notes = payload.notes.strip() or None
+    await _record_license_action(
+        db, org_row, action="suspended", actor_account_user_id=actor,
+        previous_status=previous_status, previous_expires_at=previous_expires_at, notes=payload.notes,
+    )
+    await db.commit()
+    await db.refresh(org_row)
+    return await _license_out(db, org_row)
+
+
+@router.post("/orgs/{org_id}/license/revoke", response_model=OrgAdminOut)
+async def revoke_license(
+    org_id: UUID, payload: RevokeLicenseIn, db: DbDep, actor: ActorAccountUserDep, _admin: PlatformAdminDep
+) -> OrgAdminOut:
+    """Permanent platform-admin withdrawal of an org's licence — distinct
+    from suspend (spec §3): a suspension is the routine "pause pending
+    payment" action a one-click reactivate is meant to lift, while a
+    revocation is a deliberate decision (e.g. the client relationship has
+    ended) recorded as its own audit action. Still reversible via
+    reactivate if that decision is later undone — this does not delete the
+    org or its data."""
+    org_row = await _get_licensable_org(db, org_id)
+    previous_status, previous_expires_at = org_row.license_status, org_row.license_expires_at
+    org_row.license_status = "revoked"
+    if payload.notes is not None:
+        org_row.license_notes = payload.notes.strip() or None
+    await _record_license_action(
+        db, org_row, action="revoked", actor_account_user_id=actor,
+        previous_status=previous_status, previous_expires_at=previous_expires_at, notes=payload.notes,
+    )
     await db.commit()
     await db.refresh(org_row)
     return await _license_out(db, org_row)
@@ -630,14 +742,16 @@ async def suspend_license(
 
 @router.post("/orgs/{org_id}/license/reactivate", response_model=OrgAdminOut)
 async def reactivate_license(
-    org_id: UUID, payload: ReactivateLicenseIn, db: DbDep, _admin: PlatformAdminDep
+    org_id: UUID, payload: ReactivateLicenseIn, db: DbDep, actor: ActorAccountUserDep, _admin: PlatformAdminDep
 ) -> OrgAdminOut:
-    """Lift a manual suspension. If the current expiry has already passed,
-    a fresh `days`-from-now expiry is set — reusing the org's last
-    issued/renewed duration (or DEFAULT_LICENSE_DURATION_DAYS) when `days`
-    is omitted, same fallback as renew_license — otherwise the background
-    worker would just flip it straight back to "expired" on its next pass."""
+    """Lift a manual suspension or revocation. If the current expiry has
+    already passed, a fresh `days`-from-now expiry is set — reusing the
+    org's last issued/renewed duration (or DEFAULT_LICENSE_DURATION_DAYS)
+    when `days` is omitted, same fallback as renew_license — otherwise the
+    background worker would just flip it straight back to "expired" on its
+    next pass."""
     org_row = await _get_licensable_org(db, org_id)
+    previous_status, previous_expires_at = org_row.license_status, org_row.license_expires_at
     now = datetime.now(UTC)
     expiry_has_passed = (
         org_row.license_expires_at is not None and _as_aware_utc(org_row.license_expires_at) <= now
@@ -647,6 +761,10 @@ async def reactivate_license(
         org_row.license_expires_at = now + timedelta(days=duration_days)
         org_row.license_duration_days = duration_days
     org_row.license_status = "active"
+    await _record_license_action(
+        db, org_row, action="reactivated", actor_account_user_id=actor,
+        previous_status=previous_status, previous_expires_at=previous_expires_at,
+    )
     await db.commit()
     await db.refresh(org_row)
     return await _license_out(db, org_row)

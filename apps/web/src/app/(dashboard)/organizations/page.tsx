@@ -20,13 +20,16 @@ import {
 } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
 import { useAdminOrgs } from "@/lib/hooks/useAdminOrgs";
+import { usePlatformOrgs, type PlatformOrg } from "@/lib/hooks/usePlatformOrgs";
 import { downloadCsv } from "@/lib/download-csv";
-import { NewOrgDialog } from "@/components/organizations/new-org-dialog";
+import { CreateOrganizationDialog } from "@/components/organizations/create-organization-dialog";
 import { EditOrgDialog } from "@/components/organizations/edit-org-dialog";
 import { RegenerateTokenDialog } from "@/components/organizations/regenerate-token-dialog";
 import { ManageLicenseDialog } from "@/components/organizations/manage-license-dialog";
 import { QuickRenewButton } from "@/components/organizations/quick-renew-button";
 import { DeleteOrgDialog } from "@/components/organizations/delete-org-dialog";
+import { DeploymentSetupDialog } from "@/components/organizations/deployment-setup-dialog";
+import { ConnectionStatusBadge } from "@/components/organizations/connection-status-badge";
 import type { AdminOrg } from "@/lib/hooks/useAdminOrgs";
 import { EXPIRING_SOON_DAYS, isExpiringSoon } from "@/lib/license-expiry";
 
@@ -34,6 +37,7 @@ const STATUS_BADGE: Record<AdminOrg["license_status"], "success" | "danger" | "n
   active: "success",
   suspended: "danger",
   expired: "danger",
+  revoked: "danger",
 };
 
 /**
@@ -48,6 +52,7 @@ export default function OrganizationsPage() {
   const router = useRouter();
   const { data, isLoading, isError, error, refetch } = useAdminOrgs();
   const allOrgs = useMemo(() => data ?? [], [data]);
+  const platformOrgs = usePlatformOrgs();
   const { toast } = useToast();
   const [exporting, setExporting] = useState(false);
   const [query, setQuery] = useState("");
@@ -63,16 +68,37 @@ export default function OrganizationsPage() {
     [allOrgs]
   );
 
+  // One row per organization — license/admin details come from
+  // GET /billing/orgs, hosting/connection status comes from
+  // GET /platform/organizations (a separate call because they're gated by
+  // different backend concerns), merged here by org id so the page reads
+  // as one organization directory instead of two overlapping lists.
+  const platformById = useMemo(() => {
+    const map = new Map<string, PlatformOrg>();
+    for (const p of platformOrgs.data ?? []) map.set(p.id, p);
+    return map;
+  }, [platformOrgs.data]);
+
+  const mergedOrgs = useMemo(
+    () =>
+      allOrgs.map((org) => ({
+        ...org,
+        connection_status: platformById.get(org.id)?.connection_status ?? "awaiting_client_setup",
+        client_deployment_id: platformById.get(org.id)?.client_deployment_id ?? null,
+      })),
+    [allOrgs, platformById]
+  );
+
   const orgs = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return allOrgs;
-    return allOrgs.filter(
+    if (!q) return mergedOrgs;
+    return mergedOrgs.filter(
       (org) =>
         org.name.toLowerCase().includes(q) ||
-        (org.admin_name ?? "").toLowerCase().includes(q) ||
-        (org.admin_email ?? "").toLowerCase().includes(q)
+        (org.admin_name ?? org.contact_name ?? "").toLowerCase().includes(q) ||
+        (org.admin_email ?? org.contact_email ?? "").toLowerCase().includes(q)
     );
-  }, [allOrgs, query]);
+  }, [mergedOrgs, query]);
 
   if (!user?.is_superuser) return null;
 
@@ -115,7 +141,7 @@ export default function OrganizationsPage() {
               {!exporting && <Download size={14} aria-hidden />}
               Export
             </Button>
-            <NewOrgDialog />
+            <CreateOrganizationDialog />
           </div>
         }
       />
@@ -147,7 +173,7 @@ export default function OrganizationsPage() {
           <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
             <Table>
               <tbody>
-                <SkeletonRows rows={5} cols={8} />
+                <SkeletonRows rows={5} cols={9} />
               </tbody>
             </Table>
           </div>
@@ -177,6 +203,7 @@ export default function OrganizationsPage() {
                 <TableHeader>License</TableHeader>
                 <TableHeader>Expires</TableHeader>
                 <TableHeader>Team members</TableHeader>
+                <TableHeader>Connection</TableHeader>
                 <TableHeader>Created</TableHeader>
                 <TableHeader className="text-right">Actions</TableHeader>
               </TableRow>
@@ -187,8 +214,11 @@ export default function OrganizationsPage() {
                   <TableCell className="font-medium text-slate-900 dark:text-slate-100">
                     {org.name}
                   </TableCell>
-                  <TableCell>{org.admin_name ?? "—"}</TableCell>
-                  <TableCell>{org.admin_email ?? "—"}</TableCell>
+                  {/* Falls back to the plain contact_* fields for an org
+                      with no real admin login — see Org.contact_name's
+                      docstring. */}
+                  <TableCell>{org.admin_name ?? org.contact_name ?? "—"}</TableCell>
+                  <TableCell>{org.admin_email ?? org.contact_email ?? "—"}</TableCell>
                   <TableCell>
                     <Badge variant={STATUS_BADGE[org.license_status]}>{org.license_status}</Badge>
                   </TableCell>
@@ -196,13 +226,26 @@ export default function OrganizationsPage() {
                     {org.license_expires_at ? new Date(org.license_expires_at).toLocaleDateString() : "—"}
                   </TableCell>
                   <TableCell>{org.seat_count}</TableCell>
+                  <TableCell>
+                    {/* Only meaningful for an org set up on its own separate
+                        server — a shared-platform org (admin_email set, no
+                        deployment) has nothing to "connect", so its status
+                        is muted rather than shown as a lingering "Awaiting
+                        setup". */}
+                    {org.client_deployment_id ? (
+                      <ConnectionStatusBadge status={org.connection_status} />
+                    ) : (
+                      <span className="text-xs text-slate-400 dark:text-slate-500">—</span>
+                    )}
+                  </TableCell>
                   <TableCell>{new Date(org.created_at).toLocaleDateString()}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
                       <QuickRenewButton org={org} />
                       <ManageLicenseDialog org={org} />
                       <EditOrgDialog org={org} />
-                      <RegenerateTokenDialog orgId={org.id} orgName={org.name} />
+                      <RegenerateTokenDialog org={org} />
+                      <DeploymentSetupDialog org={org} />
                       <DeleteOrgDialog orgId={org.id} orgName={org.name} />
                     </div>
                   </TableCell>

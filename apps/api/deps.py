@@ -151,17 +151,45 @@ async def is_org_license_active(db: AsyncSession, org_id: UUID) -> bool:
     own operating org is always exempt (see `_org_is_platform_admin_owned`),
     same as it always was for plan-limit enforcement. Non-raising so
     background workers can check without an HTTPException to catch;
-    `enforce_org_license` below is the HTTP-route wrapper around this."""
-    from apps.api.db.models.org import Org
+    `enforce_org_license` below is the HTTP-route wrapper around this.
 
+    On a client deployment (`settings.deployment_mode == "client"`), the
+    result of the last direct HTTPS validation against the owner API,
+    cached locally (see core/license_cache.py), is the source of truth
+    rather than this row's own `license_status` — that local column still
+    exists (it's what core/provisioning_apply.py writes on every successful
+    sync so the org keeps working from local data between refreshes) but a
+    client deployment must never trust it alone once the cache has an
+    opinion: a confirmed suspension or revocation must invalidate cached
+    access.
+    """
     if await _org_is_platform_admin_owned(db, org_id):
         return True
+
+    if settings.deployment_mode == "client":
+        return _client_license_validation_active()
+
+    from apps.api.db.models.org import Org
 
     result = await db.execute(select(Org.license_status).where(Org.id == org_id))
     license_status = result.scalar_one_or_none()
     if license_status is None:
         return True
     return license_status == "active"
+
+
+def _client_license_validation_active() -> bool:
+    """Client-mode-only license check against the cached direct-HTTPS
+    validation result. No valid (unexpired) cached result at all == blocked
+    — "after cache expiry, block protected operations until validation
+    succeeds", with no offline grace and no silent fallback to local DB
+    state."""
+    from apps.api.core.license_cache import get_license_cache
+
+    result = get_license_cache().get_cached_result()
+    if result is None:
+        return False
+    return result.license_status == "active"
 
 
 async def enforce_org_license(db: AsyncSession, org_id: UUID) -> None:
@@ -189,11 +217,25 @@ async def is_org_feature_enabled(db: AsyncSession, org_id: UUID, feature: str) -
     `is_org_license_active`). `Org.enabled_features` is NULL for every org by
     default, meaning "unrestricted"; only an explicit list (which may be
     empty) narrows access. Non-raising so it can be reused outside HTTP
-    routes; `require_feature` below is the route-dependency wrapper."""
+    routes; `require_feature` below is the route-dependency wrapper.
+
+    On a client deployment, allocated features come from the same cached
+    validation result `is_org_license_active` checks, not this row's own
+    `Org.enabled_features` — see that function's docstring."""
     from apps.api.db.models.org import Org
 
     if await _org_is_platform_admin_owned(db, org_id):
         return True
+
+    if settings.deployment_mode == "client":
+        from apps.api.core.license_cache import get_license_cache
+
+        result_ = get_license_cache().get_cached_result()
+        if result_ is None:
+            return False
+        if result_.enabled_features is None:
+            return True
+        return feature in result_.enabled_features
 
     result = await db.execute(select(Org.enabled_features).where(Org.id == org_id))
     enabled_features = result.scalar_one_or_none()

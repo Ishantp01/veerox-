@@ -1,0 +1,15 @@
+# Append one block like this per client to the shared Caddyfile (the one
+# docker-compose.yml already mounts into the `caddy` service). Requires the
+# client's compose project's `api`/`web` services to be reachable from the
+# same Docker network Caddy runs on (docker compose's default project
+# network already crosses projects on the same host via published container
+# DNS names -- verify with `docker network ls` if this doesn't resolve, and
+# attach the client project's network to Caddy's if needed).
+
+{{CLIENT_API_DOMAIN}} {
+	reverse_proxy {{CLIENT_SLUG}}-api-1:8002
+}
+
+{{CLIENT_WEB_DOMAIN}} {
+	reverse_proxy {{CLIENT_SLUG}}-web-1:3001
+}

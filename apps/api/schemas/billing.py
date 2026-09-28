@@ -28,6 +28,13 @@ class OrgAdminOut(BaseModel):
     admin_email: str | None
     admin_name: str | None = None
     admin_mobile: str | None = None
+    # Plain contact-person fields (Org.contact_name/contact_email/
+    # contact_mobile) — always present/editable regardless of hosting type,
+    # unlike admin_email/admin_name/admin_mobile above which only exist for
+    # an org with a real shared-platform login. See Org's own docstring.
+    contact_name: str | None = None
+    contact_email: str | None = None
+    contact_mobile: str | None = None
     created_at: str
     # Includes plivo/twilio/whatsapp entries alike — see
     # db/models/org_phone_number.py.
@@ -69,6 +76,11 @@ class OrgUpdateIn(BaseModel):
     admin_email: EmailStr | None = None
     admin_name: str | None = None
     admin_mobile: str | None = None
+    # Plain contact-person fields — always settable, independent of whether
+    # this org has a real admin login. See OrgAdminOut's docstring note.
+    contact_name: str | None = None
+    contact_email: str | None = None
+    contact_mobile: str | None = None
     phone_numbers: list[OrgPhoneNumberIn] | None = None
     plivo_auth_id: str | None = None
     plivo_auth_token: str | None = None
@@ -112,6 +124,14 @@ class ExtendLicenseIn(BaseModel):
 
 
 class SuspendLicenseIn(BaseModel):
+    notes: str | None = None
+
+
+class RevokeLicenseIn(BaseModel):
+    # Distinct from suspend: a permanent platform-admin decision (e.g. the
+    # client relationship ended), not something a plain reactivate is meant
+    # to casually lift. Still reversible via reactivate if genuinely needed
+    # — there is no separate "delete the org" implied here.
     notes: str | None = None
 
 
