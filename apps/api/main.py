@@ -31,8 +31,6 @@ from apps.api.routers import (
     lead_follow_ups,
     leads,
     media,
-    platform,
-    provisioning,
     sales,
     team,
     templates,
@@ -40,7 +38,6 @@ from apps.api.routers import (
 )
 from apps.api.sentry import init_sentry
 from apps.api.workers.campaign_dialer import run_campaign_dialer
-from apps.api.workers.central_sync_worker import run_central_sync_worker
 from apps.api.workers.follow_up_dispatcher import run_follow_up_dispatcher
 from apps.api.workers.license_expiry_worker import run_license_expiry_worker
 from apps.api.workers.whatsapp_dispatcher import run_whatsapp_dispatcher
@@ -64,23 +61,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     dialer_task = asyncio.create_task(run_campaign_dialer())
     whatsapp_dispatcher_task = asyncio.create_task(run_whatsapp_dispatcher())
     follow_up_task = asyncio.create_task(run_follow_up_dispatcher())
-    background_tasks = [
+    license_expiry_task = asyncio.create_task(run_license_expiry_worker())
+    background_tasks = (
         plivo_registration_task,
         dialer_task,
         whatsapp_dispatcher_task,
         follow_up_task,
-    ]
-    # license_expiry_worker maintains Org.license_status/license_expires_at,
-    # which is only the source of truth on the owner deployment — a client
-    # deployment's licence state instead comes from direct HTTPS validation
-    # against the owner, cached and kept warm by central_sync_worker (see
-    # core/license_cache.py), which also pulls/applies pending organization
-    # and feature configuration changes.
-    if settings.deployment_mode == "owner":
-        background_tasks.append(asyncio.create_task(run_license_expiry_worker()))
-    else:
-        background_tasks.append(asyncio.create_task(run_central_sync_worker()))
-    background_tasks = tuple(background_tasks)
+        license_expiry_task,
+    )
     try:
         yield
     finally:
@@ -118,6 +106,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(auth.router)
+    app.include_router(billing.router)
     app.include_router(conversations.router)
     app.include_router(leads.router)
     app.include_router(crm.router)
@@ -128,24 +117,13 @@ def create_app() -> FastAPI:
     app.include_router(sales.router)
     app.include_router(team.router)
     app.include_router(tickets.router)
+    app.include_router(tickets.admin_router)
     app.include_router(admin.router)
     app.include_router(media.router)
     app.include_router(diag.router)
     app.include_router(whatsapp_router)
     app.include_router(voice_router)
     app.include_router(voice_stream_router)
-
-    # Platform-owner administration (org directory, licence issuance,
-    # deployment registration, sync status) — never mounted on a client
-    # deployment (spec §1: "Client deployments must not expose
-    # platform-owner administration endpoints"). tickets.admin_router is the
-    # cross-org support queue, which is likewise an owner-only view.
-    if settings.deployment_mode == "owner":
-        app.include_router(billing.router)
-        app.include_router(platform.router)
-        app.include_router(tickets.admin_router)
-    else:
-        app.include_router(provisioning.router)
 
     return app
 

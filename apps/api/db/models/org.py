@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from apps.api.db.base import Base
@@ -13,21 +13,8 @@ from apps.api.db.models.script import Script
 # active = normal access. suspended = manually locked out by the platform
 # admin regardless of expiry. expired = license_expires_at has passed —
 # set by workers/license_expiry_worker.py, not chosen directly by an admin
-# action (see routers/billing.py's license endpoints). revoked = a
-# platform-admin decision the org's licence is permanently withdrawn (unlike
-# suspend, not meant to be lifted by a plain reactivate — see
-# routers/billing.py's revoke_license).
-ORG_LICENSE_STATUSES = ("active", "suspended", "expired", "revoked")
-
-# Where a client org's own infrastructure stands, independent of its
-# licence. "pending_deployment": created centrally (org + licence + feature
-# allocation exist) but no ClientDeployment has registered for it yet — see
-# routers/platform.py's create_organization. "provisioned": at least one
-# successful org_provision SyncEvent has been acknowledged by its
-# ClientDeployment. This is purely a database record either way — it never
-# implies AWS infrastructure has been created; see infra/client-template for
-# that separate, manual-approval step.
-ORG_DEPLOYMENT_STATUSES = ("pending_deployment", "provisioned")
+# action (see routers/billing.py's license endpoints).
+ORG_LICENSE_STATUSES = ("active", "suspended", "expired")
 
 # Fixed set of togglable product modules — a platform admin can restrict an
 # org to a subset of these via Org.enabled_features (see deps.py's
@@ -214,58 +201,3 @@ class Org(Base):
     # match against any org's token, not one global one.
     meta_verify_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     meta_access_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # Plain contact info for this org's admin/contact person — always
-    # editable by the platform admin regardless of hosting type. Distinct
-    # from the real login identity a shared-platform org's admin has
-    # (AccountUser + OrgMembership, surfaced as OrgAdminOut.admin_email/
-    # admin_name/admin_mobile in routers/billing.py): a org set up on its
-    # own separate server has no such account in the owner's database at
-    # all (its real users log into that separate server's own database),
-    # so there's nothing there to edit or regenerate a login token for.
-    # These columns give the platform admin somewhere to record who to
-    # actually contact about that org either way. When a real admin account
-    # exists, the API prefers showing/editing that instead (see
-    # billing.py's _org_admin_out) — these are the fallback, not a
-    # second source of truth for orgs that already have a real one.
-    contact_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    contact_mobile: Mapped[str | None] = mapped_column(String(32), nullable=True)
-
-    # --- Multi-tenant licensing / client deployments ----------------------
-    # Stable identity this org is referred to by across the owner/client
-    # boundary — distinct from `id` on purpose, even though today they're
-    # always equal at creation: `id` is this row's own primary key in
-    # *whichever* database it lives in (the owner DB here, but a
-    # provisioned client DB gets its own local `orgs` row with its own
-    # `id`), while `central_org_ref` is the one value both sides agree
-    # names "this org" for idempotent provisioning
-    # (core/provisioning_apply.py's apply_provisioning_locally matches on
-    # this, never on a client-submitted primary key).
-    central_org_ref: Mapped[UUID] = mapped_column(unique=True, nullable=False, default=uuid4)
-    deployment_status: Mapped[str] = mapped_column(
-        String(30), nullable=False, server_default="pending_deployment"
-    )
-    # Bumped by routers/platform.py and billing.py's license endpoints on
-    # every change that must reach the client (features, licence state) —
-    # carried in each SyncEvent and in GET /platform/license's response so a
-    # client can reject a stale/out-of-order update. Not the same counter as
-    # ClientDeployment.config_version, which tracks what that *specific*
-    # deployment has actually applied; this one tracks the org's own latest
-    # intended configuration.
-    config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
-    # The one client deployment this org is provisioned onto. NULL while
-    # `deployment_status == "pending_deployment"`. An org has at most one
-    # deployment in this model — a client's infrastructure is
-    # single-tenant by design (see docs/multi-tenant-licensing.md).
-    client_deployment_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("client_deployments.id", ondelete="SET NULL"), nullable=True
-    )
-    # Optional caller-supplied idempotency key for
-    # POST /platform/organizations — a double-submit of the owner's "Create
-    # organization" form (double-click, retried request after a dropped
-    # response) with the SAME key returns the already-created org instead of
-    # creating a second one + a second deployment/token. NULL for any org
-    # created without one (every pre-existing org, and any created without
-    # opting in) — never enforced as a requirement, only used when present.
-    setup_idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)

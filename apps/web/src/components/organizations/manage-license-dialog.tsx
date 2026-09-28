@@ -21,7 +21,6 @@ import {
   useIssueLicense,
   useReactivateLicense,
   useRenewLicense,
-  useRevokeLicense,
   useSuspendLicense,
   type AdminOrg,
 } from "@/lib/hooks/useAdminOrgs";
@@ -30,20 +29,14 @@ const STATUS_BADGE: Record<AdminOrg["license_status"], "success" | "danger" | "n
   active: "success",
   suspended: "danger",
   expired: "danger",
-  revoked: "danger",
 };
 
-type Action = "issue" | "renew" | "extend" | "suspend" | "revoke" | "reactivate";
+type Action = "issue" | "renew" | "extend" | "suspend" | "reactivate";
 
 const ACTIONS_BY_STATUS: Record<AdminOrg["license_status"], Action[]> = {
-  active: ["renew", "extend", "suspend", "revoke"],
-  suspended: ["reactivate", "revoke"],
-  expired: ["renew", "reactivate", "revoke"],
-  // A revoked licence isn't rotated back on automatically the way a mere
-  // suspension is — see apps/api/routers/billing.py's revoke_license
-  // docstring — but the platform admin can still reactivate it manually if
-  // that decision is reversed later.
-  revoked: ["reactivate"],
+  active: ["renew", "extend", "suspend"],
+  suspended: ["reactivate"],
+  expired: ["renew", "reactivate"],
 };
 
 const ACTION_LABEL: Record<Action, string> = {
@@ -51,7 +44,6 @@ const ACTION_LABEL: Record<Action, string> = {
   renew: "Renew",
   extend: "Extend",
   suspend: "Suspend",
-  revoke: "Revoke",
   reactivate: "Reactivate",
 };
 
@@ -80,7 +72,6 @@ export function ManageLicenseDialog({ org }: { org: AdminOrg }) {
   const renewLicense = useRenewLicense();
   const extendLicense = useExtendLicense();
   const suspendLicense = useSuspendLicense();
-  const revokeLicense = useRevokeLicense();
   const reactivateLicense = useReactivateLicense();
 
   const hasNoLicenseYet = org.license_status === "active" && org.license_expires_at === null;
@@ -90,7 +81,6 @@ export function ManageLicenseDialog({ org }: { org: AdminOrg }) {
     renewLicense.isPending ||
     extendLicense.isPending ||
     suspendLicense.isPending ||
-    revokeLicense.isPending ||
     reactivateLicense.isPending;
 
   function handleClose(next: boolean) {
@@ -103,7 +93,6 @@ export function ManageLicenseDialog({ org }: { org: AdminOrg }) {
       renewLicense.reset();
       extendLicense.reset();
       suspendLicense.reset();
-      revokeLicense.reset();
       reactivateLicense.reset();
     } else {
       setAction(hasNoLicenseYet ? "issue" : availableActions[0]);
@@ -151,12 +140,6 @@ export function ManageLicenseDialog({ org }: { org: AdminOrg }) {
           { onSuccess: () => onSuccess("Organization suspended"), onError }
         );
         return;
-      case "revoke":
-        revokeLicense.mutate(
-          { orgId: org.id, notes: notes.trim() || undefined },
-          { onSuccess: () => onSuccess("License revoked"), onError }
-        );
-        return;
       case "reactivate":
         reactivateLicense.mutate(
           // The backend keeps the existing expiry (or falls back to the
@@ -184,7 +167,7 @@ export function ManageLicenseDialog({ org }: { org: AdminOrg }) {
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogTrigger>
-        <Button variant="ghost" size="sm" aria-label={`Manage license for ${org.name}`} title="Manage license">
+        <Button variant="ghost" size="sm" aria-label={`Manage license for ${org.name}`}>
           <KeyRound size={14} />
         </Button>
       </DialogTrigger>
@@ -245,22 +228,14 @@ export function ManageLicenseDialog({ org }: { org: AdminOrg }) {
               </div>
             )}
 
-            {action === "revoke" && (
-              <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-500/10 dark:text-red-400">
-                Revoking withdraws this organization&apos;s license entirely — use it when the
-                relationship has ended, not for a routine pause (use Suspend for that). Its data is
-                kept, and you can still reactivate it later.
-              </p>
-            )}
-
-            {(action === "issue" || action === "suspend" || action === "revoke") && (
+            {(action === "issue" || action === "suspend") && (
               <div>
                 <Label htmlFor="license-notes">Notes</Label>
                 <Textarea
                   id="license-notes"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Optional — e.g. how this was paid, or why it was suspended or revoked"
+                  placeholder="Optional — e.g. how this was paid, or why it was suspended"
                   rows={2}
                 />
               </div>
@@ -272,7 +247,7 @@ export function ManageLicenseDialog({ org }: { org: AdminOrg }) {
             </Button>
             <Button
               type="submit"
-              variant={action === "suspend" || action === "revoke" ? "danger" : "primary"}
+              variant={action === "suspend" ? "danger" : "primary"}
               loading={pending}
               disabled={needsDays && !validDays}
             >

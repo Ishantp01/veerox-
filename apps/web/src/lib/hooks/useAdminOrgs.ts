@@ -6,7 +6,7 @@ export interface AdminOrg {
   id: string;
   name: string;
   default_country_code: string;
-  license_status: "active" | "suspended" | "expired" | "revoked";
+  license_status: "active" | "suspended" | "expired";
   license_expires_at: string | null;
   license_issued_at: string | null;
   license_duration_days: number | null;
@@ -15,13 +15,6 @@ export interface AdminOrg {
   admin_email: string | null;
   admin_name: string | null;
   admin_mobile: string | null;
-  // Plain contact-person fields — always present/editable regardless of
-  // hosting type, unlike admin_email/admin_name/admin_mobile above which
-  // only exist for an org with a real shared-platform login (see
-  // apps/api/db/models/org.py's Org.contact_name docstring).
-  contact_name: string | null;
-  contact_email: string | null;
-  contact_mobile: string | null;
   created_at: string;
   // Plivo/Twilio/WhatsApp entries alike — see apps/api/db/models/org_phone_number.py.
   phone_numbers: OrgPhoneNumber[];
@@ -136,11 +129,6 @@ export interface UpdateOrgInput {
   admin_email?: string;
   admin_name?: string;
   admin_mobile?: string;
-  // Plain contact-person fields — settable regardless of whether this org
-  // has a real admin login (see AdminOrg's docstring note above).
-  contact_name?: string;
-  contact_email?: string;
-  contact_mobile?: string;
   // Omitted = the org's numbers (Plivo, Twilio, and WhatsApp alike) are
   // left untouched; present (including []) = its full number set is
   // replaced with this one.
@@ -235,13 +223,6 @@ export function useExtendLicense() {
 /** Immediately lock the org out regardless of its expiry date. */
 export function useSuspendLicense() {
   return useLicenseAction<{ orgId: string; notes?: string }>("suspend");
-}
-
-/** Permanently withdraw the org's license (distinct from a routine
- * suspension — see apps/api/routers/billing.py's revoke_license). Still
- * reversible via reactivate. */
-export function useRevokeLicense() {
-  return useLicenseAction<{ orgId: string; notes?: string }>("revoke");
 }
 
 /** Lift a manual suspension. `days` omitted = reuse the org's last issued/

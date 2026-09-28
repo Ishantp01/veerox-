@@ -58,7 +58,6 @@ export function DeleteOrgDialog({ orgId, orgName }: { orgId: string; orgName: st
           variant="ghost"
           size="sm"
           aria-label={`Delete ${orgName}`}
-          title="Delete organization"
           className="text-red-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10"
         >
           <Trash2 size={14} />
