@@ -28,6 +28,7 @@ dependencies = [
     "email-validator",
     "tzdata",
     "cryptography",
+    "boto3",
 ]
 
 [dependency-groups]
@@ -68,9 +69,10 @@ module = "openpyxl.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-# boto3 is an optional dependency (see workers/aws_cost_importer.py's
-# module docstring) — not installed until AWS_COST_IMPORT_ENABLED is
-# actually turned on, so no stub package is required here either.
+# boto3 is a real dependency (see workers/aws_cost_importer.py), but its
+# calls are gated behind settings.aws_cost_import_enabled at runtime — no
+# official type stubs are published (boto3-stubs is a separate opt-in
+# package this project doesn't pull in), so this stays lenient.
 module = "boto3.*"
 ignore_missing_imports = true
 
