@@ -210,6 +210,45 @@ async def test_platform_org_is_exempt_from_license_enforcement(client: AsyncClie
     assert response.status_code == 200
 
 
+async def test_suspended_org_member_blocked_from_usage_endpoint(
+    client: AsyncClient, member_session: tuple[Org, str]
+) -> None:
+    """The new usage/billing router (routers/usage.py) reuses
+    RequestOrgDep, which already calls enforce_org_license — proving no
+    separate bypass was introduced for these endpoints (req §11)."""
+    org, token = member_session
+    login = await client.post("/auth/login", json={"token": token})
+    session_token = login.json()["token"]
+
+    ok_response = await client.get(
+        "/org/usage?period=current", headers={"X-Session-Token": session_token}
+    )
+    assert ok_response.status_code == 200
+
+    suspend_resp = await client.post(
+        f"/billing/orgs/{org.id}/license/suspend", json={}, headers=ADMIN_HEADERS
+    )
+    assert suspend_resp.status_code == 200
+
+    blocked_response = await client.get(
+        "/org/usage?period=current", headers={"X-Session-Token": session_token}
+    )
+    assert blocked_response.status_code == 403
+    assert blocked_response.json()["detail"]["error"] == "license_inactive"
+
+
+async def test_platform_org_usage_endpoint_is_exempt_from_license_enforcement(
+    client: AsyncClient,
+) -> None:
+    login = await client.post("/auth/login", json={"token": settings.admin_token})
+    session_token = login.json()["token"]
+
+    response = await client.get(
+        "/org/usage?period=current", headers={"X-Session-Token": session_token}
+    )
+    assert response.status_code == 200
+
+
 async def test_license_expiry_worker_expires_due_orgs(
     db_session: AsyncSession, test_engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:

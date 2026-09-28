@@ -33,6 +33,7 @@ from apps.api.core.prompts import (
 )
 from apps.api.core.org_social_links import social_links_prompt_block
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
+from apps.api.core.usage import deterministic_event_id, record_usage
 from apps.api.core.whatsapp_assets import asset_catalog_prompt_block
 from apps.api.core.whatsapp_template_catalog import (
     template_catalog_prompt_block as wa_template_catalog_prompt_block,
@@ -504,7 +505,7 @@ class AgentCore:
                 channel=channel,
             )
 
-        await persist_turn(
+        assistant_message_id = await persist_turn(
             db,
             conversation_id=conversation.id,
             user_id=user_id,
@@ -515,6 +516,62 @@ class AgentCore:
             tokens_in=total_tokens_in,
             tokens_out=total_tokens_out,
         )
+
+        # Usage metering (req §6): one AI usage event per turn, keyed to the
+        # just-persisted assistant Message so a retried delivery of the same
+        # inbound turn (which would re-run handle_turn and produce a new
+        # Message either way) never double-records this specific event.
+        try:
+            if total_tokens_in:
+                await record_usage(
+                    db,
+                    organization_id=org_id,
+                    event_id=deterministic_event_id("ai_input_tokens", str(assistant_message_id)),
+                    service="ai",
+                    usage_type="ai_input_tokens",
+                    quantity=total_tokens_in,
+                    unit="tokens",
+                    provider="openai",
+                    source="agent_core",
+                    request_id=str(conversation.id),
+                )
+            if total_tokens_out:
+                await record_usage(
+                    db,
+                    organization_id=org_id,
+                    event_id=deterministic_event_id("ai_output_tokens", str(assistant_message_id)),
+                    service="ai",
+                    usage_type="ai_output_tokens",
+                    quantity=total_tokens_out,
+                    unit="tokens",
+                    provider="openai",
+                    source="agent_core",
+                    request_id=str(conversation.id),
+                )
+            await record_usage(
+                db,
+                organization_id=org_id,
+                event_id=deterministic_event_id("ai_request_count", str(assistant_message_id)),
+                service="ai",
+                usage_type="ai_request_count",
+                quantity=1,
+                unit="requests",
+                provider="openai",
+                source="agent_core",
+                request_id=str(conversation.id),
+                metadata={"channel": channel},
+            )
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            # Usage metering must never break the actual conversation turn —
+            # the turn itself already persisted successfully above. `db` is
+            # the caller's shared session (still used after handle_turn
+            # returns, e.g. whatsapp/adapter.py sending the reply within
+            # the same request), so a failed commit must be rolled back
+            # rather than left pending — matches every other try/commit/
+            # except pattern in this codebase (e.g. routers/crm.py).
+            await db.rollback()
+            logger.exception("usage_metering_failed", conversation_id=str(conversation.id))
 
         return assistant_text
 

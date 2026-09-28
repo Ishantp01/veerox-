@@ -143,5 +143,20 @@ class Settings(BaseSettings):
     # Observability
     sentry_dsn: str | None = None
 
+    # Usage metering / AWS cost allocation (see core/usage.py, workers/
+    # aws_cost_importer.py, workers/cost_allocation_worker.py). Off by
+    # default — the importer no-ops entirely until this is explicitly
+    # enabled AND AWS credentials with Cost Explorer read access
+    # (ce:GetCostAndUsage) are present in the environment (standard
+    # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_DEFAULT_REGION, or an
+    # attached IAM role — boto3's normal credential chain, never a bespoke
+    # one here). Never logged or exposed via any endpoint.
+    aws_cost_import_enabled: bool = False
+    aws_account_id: str | None = None
+    # Flat per-org monthly platform fee added on top of allocated
+    # infrastructure + third-party usage cost (req §16/§12) — a simple
+    # documented default until/unless a per-plan fee schedule is needed.
+    platform_fee_usd: str = "0"
+
 
 settings = Settings()

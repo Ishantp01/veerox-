@@ -23,6 +23,8 @@ import {
   Building2,
   UsersRound,
   LifeBuoy,
+  Gauge,
+  Cloud,
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -84,6 +86,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: "/reports", label: "Reports", Icon: BarChart3 },
       { href: "/analytics/sales", label: "Sales Dashboard", Icon: TrendingUp },
+      { href: "/usage", label: "Usage & Billing", Icon: Gauge },
     ],
   },
   {
@@ -116,11 +119,13 @@ const GROUPS: NavGroup[] = [
 // to org membership (any Veerox staff account, not just the superuser) via
 // `user.is_platform_org`.
 const ORGANIZATIONS_ITEM: NavItem = { href: "/organizations", label: "Organizations", Icon: Building2 };
+const ORG_USAGE_ITEM: NavItem = { href: "/organizations/usage", label: "AWS Reconciliation", Icon: Cloud };
 const SUPPORT_TICKETS_ITEM: NavItem = { href: "/support-tickets", label: "Support Tickets", Icon: LifeBuoy };
 
-const ALL_HREFS = [...GROUPS, { label: "Platform", items: [ORGANIZATIONS_ITEM, SUPPORT_TICKETS_ITEM] }].flatMap(
-  (group) => group.items.map((item) => item.href)
-);
+const ALL_HREFS = [
+  ...GROUPS,
+  { label: "Platform", items: [ORGANIZATIONS_ITEM, ORG_USAGE_ITEM, SUPPORT_TICKETS_ITEM] },
+].flatMap((group) => group.items.map((item) => item.href));
 
 // Exact match on a group root ("/", "/calling", "/whatsapp", ...) — otherwise
 // every sub-route would also match its section's own root by prefix. A root
@@ -152,7 +157,7 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
   const isRestrictedMember = user?.role === "member" && !user?.is_superuser;
   const isPlatformTeam = user?.is_superuser || user?.is_platform_org;
   const platformItems: NavItem[] = [];
-  if (user?.is_superuser) platformItems.push(ORGANIZATIONS_ITEM);
+  if (user?.is_superuser) platformItems.push(ORGANIZATIONS_ITEM, ORG_USAGE_ITEM);
   if (isPlatformTeam) platformItems.push(SUPPORT_TICKETS_ITEM);
   const platformGroup: NavGroup | null =
     platformItems.length > 0 ? { label: "Platform", items: platformItems } : null;

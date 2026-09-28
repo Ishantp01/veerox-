@@ -688,7 +688,11 @@ async def test_leads_csv_includes_channel_column(
     # Leading UTF-8 BOM is intentional — see _csv_streaming_response in
     # routers/admin.py, needed for Excel to detect non-ASCII text correctly.
     lines = response.text.lstrip("﻿").strip().splitlines()
-    assert lines[0] == "id,name,phone,intent,tags,channel,status,qualification_status,qualification_score,created_at"
+    expected_header = (
+        "id,name,phone,intent,tags,channel,status,qualification_status,"
+        "qualification_score,created_at,staff"
+    )
+    assert lines[0] == expected_header
     assert lines[1].split(",")[3:7] == ["quote", "", "voice", "new"]
 
 

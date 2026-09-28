@@ -12,6 +12,8 @@ rather than by a durable job broker.
 from __future__ import annotations
 
 import asyncio
+import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -30,6 +32,7 @@ from apps.api.core.org_credentials import (
     resolve_plivo_credentials,
     resolve_twilio_credentials,
 )
+from apps.api.core.usage import record_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
@@ -450,10 +453,40 @@ async def _dial_one(
         await _mark_target(target_id, "pending" if attempt_count < max_attempts else "failed")
 
 
+async def _record_worker_job_seconds(org_ids: set[UUID], elapsed_seconds: float) -> None:
+    """Usage metering (req §6, AWS-workload bullet): attribute this tick's
+    wall-clock cost evenly across every org whose targets it actually
+    dialed. Best-effort — a metering failure must never affect dialing
+    itself, which has already completed by the time this runs. Not
+    deterministic (a worker tick isn't a retryable operation the way a
+    call/webhook is — each tick is a genuinely new occurrence), so a plain
+    uuid4 event id is fine here."""
+    if not org_ids:
+        return
+    share = elapsed_seconds / len(org_ids)
+    try:
+        async with AsyncSessionLocal() as db:
+            for org_id in org_ids:
+                await record_usage(
+                    db,
+                    organization_id=org_id,
+                    event_id=str(uuid.uuid4()),
+                    service="compute",
+                    usage_type="worker_job_seconds",
+                    quantity=share,
+                    unit="seconds",
+                    source="campaign_dialer",
+                )
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("usage_metering_failed", worker="campaign_dialer")
+
+
 async def _dial_batch() -> None:
     claimed = await _claim_targets()
     if not claimed:
         return
+    started = time.monotonic()
     await asyncio.gather(
         *(
             _dial_one(
@@ -482,6 +515,8 @@ async def _dial_batch() -> None:
             ) in claimed
         )
     )
+    org_ids = {org_id for (_, _, _, _, _, _, org_id, _, _, _) in claimed}
+    await _record_worker_job_seconds(org_ids, time.monotonic() - started)
 
 
 async def run_campaign_dialer() -> None:

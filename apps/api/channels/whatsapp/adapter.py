@@ -26,6 +26,7 @@ from apps.api.core.org_credentials import resolve_meta_credentials
 from apps.api.core.org_openai_key import resolve_openai_api_key
 from apps.api.core.tools import get_or_create_lead_for_user, mark_not_interested
 from apps.api.core.transcribe import transcribe
+from apps.api.core.usage import deterministic_event_id, record_usage
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
@@ -71,6 +72,20 @@ _STOP_BUTTON_TRIGGERS = {"stop", "not interested", "unsubscribe"}
 def _is_stop_button_tap(msg: "InboundMessage") -> bool:
     candidates = {(msg.button_payload or "").strip().lower(), (msg.button_text or "").strip().lower()}
     return bool(candidates & _STOP_BUTTON_TRIGGERS)
+
+
+def _outbound_message_id(send_response: dict[str, Any]) -> str | None:
+    """Pull the WhatsApp message id out of a Graph API send response — local
+    copy of client.py's private `_extract_outbound_id` (the channel layer
+    doesn't reach into client.py's internals for anything else either)."""
+    messages = send_response.get("messages")
+    if isinstance(messages, list) and messages:
+        first = messages[0]
+        if isinstance(first, dict):
+            wa_id = first.get("id")
+            if isinstance(wa_id, str):
+                return wa_id
+    return None
 
 
 def _normalize_phone(phone: str) -> str:
@@ -286,9 +301,21 @@ async def _get_or_create_user(db: AsyncSession, org_id: UUID, phone: str) -> Use
 
 
 async def _resolve_text(
-    msg: InboundMessage, *, api_key: str | None = None, meta_access_token: str | None = None
+    msg: InboundMessage,
+    *,
+    api_key: str | None = None,
+    meta_access_token: str | None = None,
+    org_id: UUID | None = None,
+    db: AsyncSession | None = None,
 ) -> str:
-    """Convert an inbound message to plain text the agent can reason over."""
+    """Convert an inbound message to plain text the agent can reason over.
+
+    ``org_id``/``db`` are optional purely so this stays callable without
+    them (e.g. from a future non-DB-backed context) — every real caller in
+    this codebase passes both, which is what lets a voice-note transcription
+    record its own usage event (req §6's STT bullet) without `transcribe()`
+    itself needing to know about orgs.
+    """
     if msg.type == "text":
         return (msg.text or "").strip() or _UNSUPPORTED_PLACEHOLDER
 
@@ -296,6 +323,31 @@ async def _resolve_text(
         audio_bytes = await wa_client.download_media(meta_access_token, msg.media_id)
         mime = msg.media_mime or "audio/ogg"
         transcript = await transcribe(audio_bytes, mime=mime, api_key=api_key)
+
+        if org_id is not None and db is not None:
+            try:
+                await record_usage(
+                    db,
+                    organization_id=org_id,
+                    event_id=deterministic_event_id("whatsapp_stt", msg.id),
+                    service="ai",
+                    usage_type="ai_request_count",
+                    quantity=1,
+                    unit="requests",
+                    provider="openai",
+                    source="whatsapp_adapter",
+                    metadata={"operation": "stt", "mime": mime, "bytes": len(audio_bytes)},
+                )
+                await db.commit()
+            except Exception:  # noqa: BLE001
+                # `db` is the shared session process_inbound passed in
+                # (still used for handle_turn right after) — must be left
+                # usable, so roll back a failed commit rather than leaving
+                # it pending (matches every other try/commit/except pattern
+                # in this codebase, e.g. routers/crm.py).
+                await db.rollback()
+                logger.exception("usage_metering_failed", wa_message_id=msg.id, operation="stt")
+
         # Whisper occasionally returns an empty string for very short
         # blobs; let the agent see the placeholder so it can recover.
         return transcript or _UNSUPPORTED_PLACEHOLDER
@@ -376,10 +428,36 @@ async def process_inbound(payload: dict[str, Any]) -> None:
             await db.commit()
             db_done = time.monotonic()
 
+            # Usage metering (req §6): one inbound-message event, keyed to
+            # Meta's own message id — a Meta webhook retry is already
+            # short-circuited above by `_claim_message_id`, but this stays
+            # correct even if that Redis claim is ever bypassed/expired.
+            try:
+                await record_usage(
+                    db,
+                    organization_id=org_id,
+                    event_id=deterministic_event_id("whatsapp_inbound", msg.id),
+                    service="whatsapp",
+                    usage_type="whatsapp_messages",
+                    quantity=1,
+                    unit="messages",
+                    provider="meta",
+                    source="whatsapp_webhook",
+                    metadata={"direction": "inbound", "message_type": msg.type},
+                )
+                await db.commit()
+            except Exception:  # noqa: BLE001
+                # Same reasoning as _resolve_text's STT block above — `db`
+                # is still used for handle_turn right after this.
+                await db.rollback()
+                logger.exception("usage_metering_failed", wa_message_id=msg.id)
+
             text = await _resolve_text(
                 msg,
                 api_key=resolve_openai_api_key(org_record),
                 meta_access_token=meta_creds.access_token if meta_creds else None,
+                org_id=org_id,
+                db=db,
             )
             resolve_done = time.monotonic()
 
@@ -411,9 +489,28 @@ async def process_inbound(payload: dict[str, Any]) -> None:
                     wa_message_id=msg.id,
                 )
             else:
-                await wa_client.send_text(
+                sent = await wa_client.send_text(
                     meta_creds.access_token, msg.from_phone, reply, phone_number_id=phone_number_id
                 )
+                outbound_id = _outbound_message_id(sent) or f"{msg.id}:reply"
+                try:
+                    async with AsyncSessionLocal() as usage_db:
+                        await record_usage(
+                            usage_db,
+                            organization_id=org_id,
+                            event_id=deterministic_event_id("whatsapp_outbound", outbound_id),
+                            service="whatsapp",
+                            usage_type="whatsapp_messages",
+                            quantity=1,
+                            unit="messages",
+                            provider="meta",
+                            source="whatsapp_webhook",
+                            request_id=msg.id,
+                            metadata={"direction": "outbound"},
+                        )
+                        await usage_db.commit()
+                except Exception:  # noqa: BLE001
+                    logger.exception("usage_metering_failed", wa_message_id=msg.id)
         send_done = time.monotonic()
 
         timings = {

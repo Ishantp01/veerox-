@@ -36,6 +36,7 @@ from apps.api.core.org_credentials import (
     resolve_plivo_credentials,
     resolve_twilio_credentials,
 )
+from apps.api.core.usage import deterministic_event_id, record_usage
 from apps.api.core.whatsapp_assets import asset_public_url, load_org_assets, resolve_asset
 from apps.api.core.whatsapp_template_catalog import resolve_template
 from apps.api.db.models.account_user import AccountUser
@@ -1665,7 +1666,7 @@ async def send_whatsapp_file(
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
     try:
-        await wa_client.send_media(
+        sent = await wa_client.send_media(
             meta_creds.access_token,
             normalized,
             resolved.media_type,
@@ -1699,6 +1700,51 @@ async def send_whatsapp_file(
         file=resolved.name,
         media_type=resolved.media_type,
     )
+
+    # Usage metering (req §6's media-processing bullet): the outbound send
+    # itself (whatsapp_messages) plus the bytes transferred (bandwidth_gb),
+    # keyed to Meta's own outbound message id when present so a retried
+    # tool call never double-counts.
+    outbound_messages = sent.get("messages") if isinstance(sent, dict) else None
+    outbound_id = None
+    if isinstance(outbound_messages, list) and outbound_messages:
+        first = outbound_messages[0]
+        if isinstance(first, dict) and isinstance(first.get("id"), str):
+            outbound_id = first["id"]
+    event_key = outbound_id or f"{resolved.id}:{normalized}"
+    try:
+        await record_usage(
+            db,
+            organization_id=org_id,
+            event_id=deterministic_event_id("whatsapp_media_outbound", event_key),
+            service="whatsapp",
+            usage_type="whatsapp_messages",
+            quantity=1,
+            unit="messages",
+            provider="meta",
+            source="send_whatsapp_file_tool",
+            metadata={"direction": "outbound", "media_type": resolved.media_type},
+        )
+        await record_usage(
+            db,
+            organization_id=org_id,
+            event_id=deterministic_event_id("whatsapp_media_bandwidth", event_key),
+            service="network",
+            usage_type="bandwidth_gb",
+            quantity=resolved.size_bytes / (1024**3),
+            unit="gb",
+            source="send_whatsapp_file_tool",
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        # `db` is the agent turn's shared session — a failed commit must be
+        # rolled back rather than left pending, or the next tool call /
+        # persist_turn in this same turn would inherit a broken
+        # transaction. Matches every other try/commit/except pattern in
+        # this codebase (e.g. routers/crm.py).
+        await db.rollback()
+        logger.exception("usage_metering_failed", file=resolved.name)
+
     return {"status": "ok", "phone": normalized, "file": resolved.name}
 
 

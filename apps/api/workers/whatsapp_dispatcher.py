@@ -19,6 +19,8 @@ same ``DISPATCH_TABLE`` machinery the voice realtime bridge already uses.
 from __future__ import annotations
 
 import asyncio
+import time
+import uuid
 from datetime import UTC, datetime
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -31,6 +33,7 @@ from apps.api.channels.voice.org_numbers import get_default_whatsapp_number_id
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.core.agent import _is_kill_switch_active
 from apps.api.core.org_credentials import resolve_meta_credentials
+from apps.api.core.usage import record_usage
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
@@ -372,11 +375,39 @@ async def _send_one(
     await _mark_target(target_id, "completed")
 
 
+async def _record_worker_job_seconds(org_ids: set[UUID], elapsed_seconds: float) -> None:
+    """Usage metering (req §6) — see campaign_dialer.py's twin helper for
+    the full rationale (evenly-split tick attribution, non-deterministic
+    event id since a tick isn't a retryable operation)."""
+    if not org_ids:
+        return
+    share = elapsed_seconds / len(org_ids)
+    try:
+        async with AsyncSessionLocal() as db:
+            for org_id in org_ids:
+                await record_usage(
+                    db,
+                    organization_id=org_id,
+                    event_id=str(uuid.uuid4()),
+                    service="compute",
+                    usage_type="worker_job_seconds",
+                    quantity=share,
+                    unit="seconds",
+                    source="whatsapp_dispatcher",
+                )
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("usage_metering_failed", worker="whatsapp_dispatcher")
+
+
 async def _dispatch_batch() -> None:
     claimed = await _claim_targets()
     if not claimed:
         return
+    started = time.monotonic()
     await asyncio.gather(*(_send_one(*claim) for claim in claimed))
+    org_ids = {claim[6] for claim in claimed}
+    await _record_worker_job_seconds(org_ids, time.monotonic() - started)
 
 
 async def run_whatsapp_dispatcher() -> None:

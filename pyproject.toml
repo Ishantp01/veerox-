@@ -68,6 +68,13 @@ module = "openpyxl.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+# boto3 is an optional dependency (see workers/aws_cost_importer.py's
+# module docstring) — not installed until AWS_COST_IMPORT_ENABLED is
+# actually turned on, so no stub package is required here either.
+module = "boto3.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 # Channel adapters talk to third-party SDKs whose stubs are absent; keep lenient.
 module = "apps.api.channels.*"
 ignore_errors = true

@@ -123,6 +123,34 @@ async def test_upload_infers_media_type_and_hides_bytes(
     assert pdf["size_bytes"] == len(b"%PDF-1.4 fake")
 
 
+async def test_upload_records_storage_usage_event(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Usage metering (req §6's storage bullet) — see
+    routers/admin.py::create_whatsapp_asset."""
+    from sqlalchemy import select
+
+    from apps.api.db.models.usage_event import UsageEvent
+
+    await _seed_org(db_session)
+    content = b"%PDF-1.4 fake"
+
+    await _upload(client, filename="p.pdf", content=content, content_type="application/pdf")
+
+    rows = (
+        await db_session.execute(
+            select(UsageEvent).where(
+                UsageEvent.org_id == ORG_ID,
+                UsageEvent.service == "storage",
+                UsageEvent.source == "whatsapp_asset_upload",
+            )
+        )
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].usage_type == "storage_gb_month"
+    assert float(rows[0].quantity) == pytest.approx(len(content) / (1024**3))
+
+
 async def test_upload_rejects_oversized_file(
     client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -275,6 +303,39 @@ async def test_send_whatsapp_file_happy_path(
     assert call["caption"] == "Here you go"
     assert call["filename"] == "prices.pdf"
     assert "/media/wa-asset/" in call["link"] and "k=testkey" in call["link"]
+
+
+async def test_send_whatsapp_file_records_usage_events(
+    db_session: AsyncSession, capture_send_media: list[dict]
+) -> None:
+    """Usage metering (req §6's media-processing bullet) — see
+    core/tools.py::send_whatsapp_file."""
+    from sqlalchemy import select
+
+    from apps.api.db.models.usage_event import UsageEvent
+
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+919000000009")
+    db_session.add(user)
+    await db_session.commit()
+    await _seed_asset(db_session, size_bytes=2048)
+
+    await send_whatsapp_file(db_session, name="price list", user_id=user.id, org_id=ORG_ID)
+
+    rows = (
+        await db_session.execute(
+            select(UsageEvent).where(UsageEvent.org_id == ORG_ID).order_by(UsageEvent.service)
+        )
+    ).scalars().all()
+    by_service = {r.service: r for r in rows}
+    assert set(by_service) == {"whatsapp", "network"}
+    assert by_service["whatsapp"].usage_type == "whatsapp_messages"
+    assert by_service["network"].usage_type == "bandwidth_gb"
+    assert float(by_service["network"].quantity) == pytest.approx(2048 / (1024**3))
+    # Keyed to Meta's own outbound message id ("wamid.TEST", from
+    # capture_send_media's fake) — a retried tool call with the same send
+    # result would dedupe rather than double count.
+    assert by_service["whatsapp"].event_id != by_service["network"].event_id
 
 
 async def test_send_whatsapp_file_no_match_returns_available(

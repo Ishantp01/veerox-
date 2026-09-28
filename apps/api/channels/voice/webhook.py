@@ -35,6 +35,7 @@ from apps.api.channels.voice import twilio_client as voice_twilio
 from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.config import settings
 from apps.api.core.org_credentials import resolve_plivo_credentials, resolve_twilio_credentials
+from apps.api.core.usage import deterministic_event_id, record_usage
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
@@ -233,6 +234,28 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
             org_id = await _resolve_org_by_last_contact(caller)
 
     provider = "twilio" if is_twilio else "plivo"
+
+    # Usage metering (req §6): call started, keyed to the provider's own
+    # call id so a redelivered answer webhook never double-counts.
+    if call_uuid and org_id:
+        try:
+            async with AsyncSessionLocal() as usage_db:
+                await record_usage(
+                    usage_db,
+                    organization_id=UUID(org_id),
+                    event_id=deterministic_event_id("voice_call_started", call_uuid),
+                    service="voice",
+                    usage_type="ai_request_count",
+                    quantity=1,
+                    unit="calls",
+                    provider=provider,
+                    source="voice_webhook",
+                    request_id=call_uuid,
+                    metadata={"direction": "outbound" if is_outbound else "inbound"},
+                )
+                await usage_db.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception("usage_metering_failed", call_uuid=call_uuid)
 
     # Start connecting to OpenAI right now, well before Plivo/Twilio even
     # opens the media stream — see realtime_bridge.py's

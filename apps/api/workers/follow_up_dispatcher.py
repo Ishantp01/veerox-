@@ -25,6 +25,8 @@ Each tick does three things:
 from __future__ import annotations
 
 import asyncio
+import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -45,6 +47,7 @@ from apps.api.core.org_credentials import (
     resolve_plivo_credentials,
     resolve_twilio_credentials,
 )
+from apps.api.core.usage import record_usage
 from apps.api.db.models import Appointment, Contact, FollowUpRule, FollowUpTask, Lead
 from apps.api.db.models.org import Org
 from apps.api.db.models.template import WhatsAppTemplate
@@ -217,30 +220,35 @@ async def _materialize_rule_tasks() -> None:
             logger.info("follow_up_dispatcher_materialized_rule_tasks", count=created)
 
 
-async def _claim_due_tasks() -> list[UUID]:
+async def _claim_due_tasks() -> list[tuple[UUID, UUID]]:
     """Atomically claim up to ``_BATCH_SIZE`` due pending tasks by flipping
     them to ``"sending"`` in the same transaction that selects them —
     mirrors ``campaign_dialer._claim_targets``'s claim-before-dispatch
     pattern so a second dispatcher tick (this process's next loop iteration,
     or another process/replica polling the same table) can never pick up a
     task this call already claimed.
+
+    Returns ``[(task_id, org_id), ...]`` — ``org_id`` rides along so
+    ``_tick`` can attribute this tick's usage-metering
+    (``_record_worker_job_seconds``) without a second query.
     """
     async with AsyncSessionLocal() as db:
         stmt = (
-            select(FollowUpTask.id)
+            select(FollowUpTask.id, FollowUpTask.org_id)
             .where(FollowUpTask.status == "pending", FollowUpTask.run_at <= datetime.now(UTC))
             .order_by(FollowUpTask.run_at)
             .limit(_BATCH_SIZE)
             .with_for_update(skip_locked=True)
         )
-        ids = list((await db.execute(stmt)).scalars().all())
-        if not ids:
+        rows = (await db.execute(stmt)).all()
+        if not rows:
             return []
+        ids = [row.id for row in rows]
         await db.execute(
             update(FollowUpTask).where(FollowUpTask.id.in_(ids)).values(status="sending")
         )
         await db.commit()
-        return ids
+        return [(row.id, row.org_id) for row in rows]
 
 
 async def _resolve_task(task_id: UUID, status: str) -> None:
@@ -558,11 +566,41 @@ async def _requeue_stuck_tasks() -> None:
             logger.info("follow_up_dispatcher_requeued_stuck_tasks", count=result.rowcount)
 
 
+async def _record_worker_job_seconds(org_ids: set[UUID], elapsed_seconds: float) -> None:
+    """Usage metering (req §6) — see workers/campaign_dialer.py's twin
+    helper for the full rationale (evenly-split tick attribution,
+    non-deterministic event id since a tick isn't a retryable operation)."""
+    if not org_ids:
+        return
+    share = elapsed_seconds / len(org_ids)
+    try:
+        async with AsyncSessionLocal() as db:
+            for org_id in org_ids:
+                await record_usage(
+                    db,
+                    organization_id=org_id,
+                    event_id=str(uuid.uuid4()),
+                    service="compute",
+                    usage_type="worker_job_seconds",
+                    quantity=share,
+                    unit="seconds",
+                    source="follow_up_dispatcher",
+                )
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("usage_metering_failed", worker="follow_up_dispatcher")
+
+
 async def _tick() -> None:
     await _materialize_lead_follow_up_at_tasks()
     await _materialize_rule_tasks()
-    for task_id in await _claim_due_tasks():
-        await _execute_task(task_id)
+    claimed = await _claim_due_tasks()
+    if claimed:
+        started = time.monotonic()
+        for task_id, _org_id in claimed:
+            await _execute_task(task_id)
+        org_ids = {org_id for _task_id, org_id in claimed}
+        await _record_worker_job_seconds(org_ids, time.monotonic() - started)
     await _dispatch_due_callbacks()
 
 

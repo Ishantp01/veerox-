@@ -46,6 +46,7 @@ from apps.api.core.prompts import (
 )
 from apps.api.core.org_openai_key import resolve_openai_api_key
 from apps.api.core.org_social_links import social_links_prompt_block
+from apps.api.core.usage import deterministic_event_id, record_usage
 from apps.api.core.whatsapp_assets import asset_catalog_prompt_block
 from apps.api.core.whatsapp_template_catalog import (
     template_catalog_prompt_block as wa_template_catalog_prompt_block,
@@ -785,4 +786,28 @@ async def voice_stream(ws: WebSocket) -> None:
             await voice_adapter.close_voice_conversation(
                 conversation_id, campaign_target_id=campaign_target_id
             )
-        log.info("voice_stream_ended", call_duration_s=round(time.monotonic() - call_started, 1))
+        call_duration_s = round(time.monotonic() - call_started, 1)
+        log.info("voice_stream_ended", call_duration_s=call_duration_s)
+
+        # Usage metering (req §6): connected voice seconds, keyed to this
+        # call's own id so a reconnect/retry of the same call_uuid never
+        # double-counts. Never raises past this point — a metering failure
+        # must not mask (or re-trigger) call teardown.
+        if call_uuid:
+            try:
+                async with AsyncSessionLocal() as usage_db:
+                    await record_usage(
+                        usage_db,
+                        organization_id=resolved_org_id,
+                        event_id=deterministic_event_id("voice_call_ended", call_uuid),
+                        service="voice",
+                        usage_type="voice_seconds",
+                        quantity=call_duration_s,
+                        unit="seconds",
+                        provider=provider,
+                        source="realtime_bridge",
+                        request_id=call_uuid,
+                    )
+                    await usage_db.commit()
+            except Exception:  # noqa: BLE001
+                log.warning("usage_metering_failed", call_uuid=call_uuid)

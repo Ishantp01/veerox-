@@ -1,10 +1,14 @@
 from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.appointment import Appointment
+from apps.api.db.models.aws_cost_pool import AwsCostPool
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.contact import Contact
 from apps.api.db.models.conversation import Conversation
+from apps.api.db.models.cost_allocation import CostAllocation
+from apps.api.db.models.cost_rate import CostRate
 from apps.api.db.models.follow_up import FollowUpRule, FollowUpTask
+from apps.api.db.models.invoice import Invoice
 from apps.api.db.models.lead import Lead
 from apps.api.db.models.lead_status_preset import LeadStatusPreset
 from apps.api.db.models.message import Message
@@ -16,19 +20,27 @@ from apps.api.db.models.qualification_criteria_preset import QualificationCriter
 from apps.api.db.models.script import Script
 from apps.api.db.models.support_ticket import SupportTicket
 from apps.api.db.models.template import WhatsAppTemplate
+from apps.api.db.models.usage_adjustment import UsageAdjustment
 from apps.api.db.models.usage_counter import UsageCounter
+from apps.api.db.models.usage_daily import UsageDaily
+from apps.api.db.models.usage_event import UsageEvent
+from apps.api.db.models.usage_monthly import UsageMonthly
 from apps.api.db.models.user import User
 from apps.api.db.models.whatsapp_asset import WhatsAppAsset
 
 __all__ = [
     "AccountUser",
     "Appointment",
+    "AwsCostPool",
     "CallCampaign",
     "CampaignTarget",
     "Contact",
     "Conversation",
+    "CostAllocation",
+    "CostRate",
     "FollowUpRule",
     "FollowUpTask",
+    "Invoice",
     "Lead",
     "LeadStatusPreset",
     "Message",
@@ -39,7 +51,11 @@ __all__ = [
     "QualificationCriteriaPreset",
     "Script",
     "SupportTicket",
+    "UsageAdjustment",
     "UsageCounter",
+    "UsageDaily",
+    "UsageEvent",
+    "UsageMonthly",
     "User",
     "WhatsAppAsset",
     "WhatsAppTemplate",

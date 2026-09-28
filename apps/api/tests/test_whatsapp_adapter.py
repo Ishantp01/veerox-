@@ -310,3 +310,82 @@ async def test_find_open_campaign_target_none_when_only_voice_target_open(
     resolved_id = await adapter_module._find_open_campaign_target(seeded_db, phone)
 
     assert resolved_id is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_text_records_stt_usage_event(
+    seeded_db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Usage metering (req §6's STT bullet) — see
+    channels/whatsapp/adapter.py::_resolve_text."""
+    from sqlalchemy import select
+
+    from apps.api.db.models.usage_event import UsageEvent
+
+    async def _fake_download_media(access_token: str, media_id: str) -> bytes:
+        return b"fake-ogg-bytes"
+
+    async def _fake_transcribe(audio_bytes: bytes, *, mime: str, api_key: str | None = None) -> str:
+        return "hello there"
+
+    monkeypatch.setattr(adapter_module.wa_client, "download_media", _fake_download_media)
+    monkeypatch.setattr(adapter_module, "transcribe", _fake_transcribe)
+
+    msg = adapter_module.InboundMessage(
+        id="wamid.VOICE1",
+        from_phone="+919000000099",
+        type="audio",
+        media_id="media-123",
+        media_mime="audio/ogg",
+    )
+
+    text = await adapter_module._resolve_text(
+        msg,
+        api_key=None,
+        meta_access_token="test-meta-access-token",
+        org_id=ORG_ID,
+        db=seeded_db,
+    )
+
+    assert text == "hello there"
+    rows = (
+        await seeded_db.execute(
+            select(UsageEvent).where(
+                UsageEvent.org_id == ORG_ID, UsageEvent.source == "whatsapp_adapter"
+            )
+        )
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].service == "ai"
+    assert rows[0].usage_type == "ai_request_count"
+    assert rows[0].metadata_json["operation"] == "stt"
+
+
+@pytest.mark.asyncio
+async def test_resolve_text_skips_metering_without_org_context(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Called without org_id/db (e.g. a hypothetical future non-DB caller)
+    must still transcribe successfully — metering is opportunistic, never a
+    hard dependency of `_resolve_text`."""
+
+    async def _fake_download_media(access_token: str, media_id: str) -> bytes:
+        return b"fake-ogg-bytes"
+
+    async def _fake_transcribe(audio_bytes: bytes, *, mime: str, api_key: str | None = None) -> str:
+        return "no org context"
+
+    monkeypatch.setattr(adapter_module.wa_client, "download_media", _fake_download_media)
+    monkeypatch.setattr(adapter_module, "transcribe", _fake_transcribe)
+
+    msg = adapter_module.InboundMessage(
+        id="wamid.VOICE2",
+        from_phone="+919000000098",
+        type="audio",
+        media_id="media-456",
+        media_mime="audio/ogg",
+    )
+
+    text = await adapter_module._resolve_text(msg, api_key=None, meta_access_token="tok")
+
+    assert text == "no org context"

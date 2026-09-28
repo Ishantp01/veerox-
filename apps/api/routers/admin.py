@@ -59,6 +59,7 @@ from apps.api.core.tools import (
     _normalize_phone,
     get_or_create_lead_for_user,
 )
+from apps.api.core.usage import deterministic_event_id, record_usage
 from apps.api.core.whatsapp_assets import (
     MAX_ASSET_BYTES,
     asset_public_url,
@@ -3519,6 +3520,34 @@ async def create_whatsapp_asset(
     db.add(asset)
     await db.commit()
     await db.refresh(asset)
+
+    # Usage metering (req §6's WhatsApp media-processing / storage bullet):
+    # bytes added to this org's media library, keyed to the asset's own id
+    # (each upload creates a new row, so this is inherently one-shot — no
+    # retry path reuses an existing asset id). Recorded as a proxy for
+    # storage_gb_month rather than a true point-in-time GB-month measure,
+    # since assets live as DB blobs with no separate storage lifecycle to
+    # sample periodically.
+    try:
+        await record_usage(
+            db,
+            organization_id=org,
+            event_id=deterministic_event_id("whatsapp_asset_uploaded", str(asset.id)),
+            service="storage",
+            usage_type="storage_gb_month",
+            quantity=asset.size_bytes / (1024**3),
+            unit="gb",
+            source="whatsapp_asset_upload",
+            metadata={"media_type": asset.media_type},
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        # Matches every other try/commit/except pattern in this file (e.g.
+        # the IntegrityError handlers above) — roll back a failed commit
+        # rather than leave the request-scoped session pending.
+        await db.rollback()
+        logger.exception("usage_metering_failed", asset_id=str(asset.id))
+
     return WhatsAppAssetOut.model_validate(asset)
 
 

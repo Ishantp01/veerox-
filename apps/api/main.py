@@ -35,11 +35,15 @@ from apps.api.routers import (
     team,
     templates,
     tickets,
+    usage,
 )
 from apps.api.sentry import init_sentry
+from apps.api.workers.aws_cost_importer import run_aws_cost_importer
 from apps.api.workers.campaign_dialer import run_campaign_dialer
 from apps.api.workers.follow_up_dispatcher import run_follow_up_dispatcher
 from apps.api.workers.license_expiry_worker import run_license_expiry_worker
+from apps.api.workers.usage_daily_aggregator import run_usage_daily_aggregator
+from apps.api.workers.usage_monthly_aggregator import run_usage_monthly_aggregator
 from apps.api.workers.whatsapp_dispatcher import run_whatsapp_dispatcher
 
 
@@ -62,12 +66,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     whatsapp_dispatcher_task = asyncio.create_task(run_whatsapp_dispatcher())
     follow_up_task = asyncio.create_task(run_follow_up_dispatcher())
     license_expiry_task = asyncio.create_task(run_license_expiry_worker())
+    usage_daily_task = asyncio.create_task(run_usage_daily_aggregator())
+    usage_monthly_task = asyncio.create_task(run_usage_monthly_aggregator())
+    aws_cost_import_task = asyncio.create_task(run_aws_cost_importer())
     background_tasks = (
         plivo_registration_task,
         dialer_task,
         whatsapp_dispatcher_task,
         follow_up_task,
         license_expiry_task,
+        usage_daily_task,
+        usage_monthly_task,
+        aws_cost_import_task,
     )
     try:
         yield
@@ -118,6 +128,9 @@ def create_app() -> FastAPI:
     app.include_router(team.router)
     app.include_router(tickets.router)
     app.include_router(tickets.admin_router)
+    app.include_router(usage.router)
+    app.include_router(usage.admin_router)
+    app.include_router(usage.internal_router)
     app.include_router(admin.router)
     app.include_router(media.router)
     app.include_router(diag.router)

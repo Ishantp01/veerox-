@@ -112,8 +112,10 @@ async def persist_turn(
     tokens_in: int | None = None,
     tokens_out: int | None = None,
     audio_secs: float | None = None,
-) -> None:
+) -> UUID:
     """Write the user + assistant rows for one turn in a single transaction.
+    Returns the assistant `Message.id`, so a caller (core/agent.py) can key
+    a usage-metering event to this specific turn.
 
     Token usage is attributed to the assistant row only (that row represents
     the LLM call that consumed the prompt and emitted the completion).
@@ -151,3 +153,4 @@ async def persist_turn(
         tokens_out=tokens_out,
         audio_secs=audio_secs,
     )
+    return asst_msg.id
