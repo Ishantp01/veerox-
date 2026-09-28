@@ -18,23 +18,54 @@ locked `UsageMonthly` row rather than folding a late event's numbers into
 it (see workers/usage_monthly_aggregator.py::aggregate_monthly).
 
 `create_late_event_adjustment` below is the *building block* for handling
-a `UsageEvent` recorded after its period's lock — it is not yet wired into
-an automatic path. Nothing in this codebase currently detects a late event
-and calls it: `core/usage.py::record_usage` does not check lock status
-before inserting, and no periodic sweep exists. Until that's built, a late
-event is invisibly absent from that period's `Invoice`/`UsageMonthly`
-totals — an operator must call this function manually (e.g. from a shell)
-after noticing the discrepancy. Automating that detection needs a cost-rate
-lookup to turn a raw quantity into `UsageAdjustment.amount` (a dollar
-figure, unlike `UsageEvent.quantity`) — the same lookup
-workers/usage_daily_aggregator.py::_unit_cost already does — and touches
-the hottest function in the whole system, so it's deliberately left as a
-follow-up rather than rushed into `record_usage`'s hot path here.
+a `UsageEvent` recorded after its period's lock. It is wired into an
+automatic path: `run_late_event_adjustment_sweep`, a poll loop (same
+asyncio-in-lifespan pattern as every other worker here, registered in
+main.py) that periodically scans every `Invoice` locked within the last
+`_SWEEP_LOOKBACK_DAYS` days for `UsageEvent` rows whose `created_at` falls
+inside that invoice's `billing_period` calendar month but *after* the
+invoice's own `locked_at`, and creates one `UsageAdjustment` per such event
+it hasn't already adjusted (dedup via
+`(org_id, billing_period, reason="late_event", related_event_id)` — an
+event already adjusted in a prior sweep is skipped, making repeated sweeps
+idempotent).
+
+Scope, stated precisely because it's easy to overclaim here: `UsageEvent.
+created_at` is a server-assigned insert timestamp (`func.now()`), never
+caller-supplied or backdated (the ledger's immutability guarantee), and
+both aggregators already bucket purely by `created_at`
+(usage_daily_aggregator.py's `_aggregate_day`). That means this sweep only
+ever finds something when a period was closed *before* its calendar month
+actually ended — e.g. an admin closes "2026-08" on August 20th (closing is
+admin-triggered per req §16, not restricted to month-end) and further
+August-dated events keep landing afterward. It does **not** catch a
+delayed event whose processing lag pushes its `created_at` past the
+following month's start (e.g. work done Aug 31 but only recorded Sep 2,
+after a normal end-of-month close already ran on Sep 1) — that event's
+`created_at` is in September, so it's simply, correctly counted as
+September usage by the next monthly aggregation; there is no gap to sweep,
+only a (documented, pre-existing) attribution choice inherent in using
+`created_at` as the aggregation key everywhere in this system, not
+something this sweep can or should second-guess by inventing a business
+timestamp none of the call sites currently supply.
+
+`core/usage.py::record_usage` itself still does not check lock status
+before inserting — deliberately: rejecting a late insert there would lose
+the event outright, whereas this sweep preserves it as a dollar-valued
+adjustment on the next available invoice, without ever touching the locked
+row. An event with no matching `CostRate` at sweep time is still recorded
+(amount `0`, noted as unpriced) rather than silently dropped, so an
+operator can see it happened and backfill a rate later; the row is *not*
+auto-repriced once a rate does appear (repricing an already-created
+adjustment would reopen the same "silently changes a locked figure"
+problem this whole mechanism exists to avoid) — a manual `reason="manual"`
+adjustment covers that case if it's ever needed.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -46,14 +77,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.config import settings
 from apps.api.db.models.invoice import Invoice
 from apps.api.db.models.usage_adjustment import UsageAdjustment
+from apps.api.db.models.usage_event import UsageEvent
 from apps.api.db.models.usage_monthly import UsageMonthly
 from apps.api.db.session import AsyncSessionLocal
+from apps.api.redis_client import record_error
 from apps.api.workers.aws_cost_importer import import_aws_costs
 from apps.api.workers.cost_allocation_worker import allocate_costs, get_org_allocated_cost
-from apps.api.workers.usage_daily_aggregator import run_daily_aggregation_once
+from apps.api.workers.usage_daily_aggregator import _unit_cost, run_daily_aggregation_once
 from apps.api.workers.usage_monthly_aggregator import aggregate_monthly
 
 logger = structlog.get_logger(__name__)
+
+# How often the sweep runs, and how far back it looks for locked invoices to
+# re-check. 6 hours is frequent enough that a late event shows up on an
+# org's next statement within the same business day without being a hot
+# poll loop; 90 days bounds the query to recently-closed periods rather than
+# rescanning the platform's entire invoice history every tick (an event
+# arriving months after its period locked is vanishingly unlikely for the
+# "webhook/worker retry landed a bit late" case this exists for — an
+# operator handles that rarer case with a manual `reason="manual"`
+# adjustment instead). Both are plain module constants, matching every
+# other worker's `_POLL_INTERVAL_SECS`/`_LOOKBACK_DAYS` convention in this
+# package — change here if the policy needs tuning.
+_SWEEP_INTERVAL_SECS = 6 * 3600
+_SWEEP_LOOKBACK_DAYS = 90
 
 
 class PeriodAlreadyLockedError(RuntimeError):
@@ -178,3 +225,111 @@ async def create_late_event_adjustment(
     db.add(adjustment)
     await db.flush()
     return adjustment
+
+
+async def _sweep_late_events_for_invoice(db: AsyncSession, invoice: Invoice) -> int:
+    """Find `UsageEvent` rows for `invoice`'s org that landed inside its
+    billing period's calendar month but after the invoice was locked, and
+    create a `UsageAdjustment` for each one not already adjusted. Returns
+    the number of adjustments created."""
+    if invoice.locked_at is None:
+        return 0
+    year, month = (int(part) for part in invoice.billing_period.split("-"))
+    period_start = datetime(year, month, 1, tzinfo=UTC)
+    period_end = (period_start + timedelta(days=32)).replace(day=1)
+
+    already_adjusted = set(
+        (
+            await db.execute(
+                select(UsageAdjustment.related_event_id).where(
+                    UsageAdjustment.org_id == invoice.org_id,
+                    UsageAdjustment.billing_period == invoice.billing_period,
+                    UsageAdjustment.reason == "late_event",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    events = (
+        (
+            await db.execute(
+                select(UsageEvent).where(
+                    UsageEvent.org_id == invoice.org_id,
+                    UsageEvent.created_at >= period_start,
+                    UsageEvent.created_at < period_end,
+                    UsageEvent.created_at > invoice.locked_at,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    created = 0
+    for event in events:
+        if event.event_id in already_adjusted:
+            continue
+        cost = await _unit_cost(
+            db, event.service, event.usage_type, event.provider, event.created_at
+        )
+        if cost is not None:
+            amount = cost * event.quantity
+            notes = "auto-created by late_event_adjustment_sweep"
+        else:
+            amount = Decimal("0")
+            notes = (
+                "auto-created by late_event_adjustment_sweep; no CostRate was "
+                "configured at sweep time, amount recorded as 0"
+            )
+        await create_late_event_adjustment(
+            db,
+            org_id=invoice.org_id,
+            billing_period=invoice.billing_period,
+            event_id=event.event_id,
+            amount=amount,
+            notes=notes,
+        )
+        created += 1
+    return created
+
+
+async def run_late_event_sweep_once() -> int:
+    """Scan every `Invoice` locked within `_SWEEP_LOOKBACK_DAYS` for late
+    `UsageEvent`s and adjust them. Exposed separately from the poll loop so
+    tests and an admin trigger can run it synchronously. Returns the total
+    number of `UsageAdjustment` rows created."""
+    cutoff = datetime.now(UTC) - timedelta(days=_SWEEP_LOOKBACK_DAYS)
+    total = 0
+    async with AsyncSessionLocal() as db:
+        invoices = (
+            (
+                await db.execute(
+                    select(Invoice).where(
+                        Invoice.status == "final",
+                        Invoice.locked_at.is_not(None),
+                        Invoice.locked_at >= cutoff,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for invoice in invoices:
+            total += await _sweep_late_events_for_invoice(db, invoice)
+        await db.commit()
+    return total
+
+
+async def run_late_event_adjustment_sweep() -> None:
+    """The worker's main loop — runs for the lifetime of the app process,
+    mirroring workers/usage_daily_aggregator.py's poll-loop structure."""
+    while True:
+        try:
+            count = await run_late_event_sweep_once()
+            logger.info("late_event_adjustment_sweep_tick", adjustments_created=count)
+        except Exception:  # noqa: BLE001
+            logger.exception("late_event_adjustment_sweep_tick_failed")
+            await record_error()
+        await asyncio.sleep(_SWEEP_INTERVAL_SECS)

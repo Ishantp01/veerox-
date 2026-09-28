@@ -39,6 +39,7 @@ from apps.api.routers import (
 )
 from apps.api.sentry import init_sentry
 from apps.api.workers.aws_cost_importer import run_aws_cost_importer
+from apps.api.workers.billing_worker import run_late_event_adjustment_sweep
 from apps.api.workers.campaign_dialer import run_campaign_dialer
 from apps.api.workers.follow_up_dispatcher import run_follow_up_dispatcher
 from apps.api.workers.license_expiry_worker import run_license_expiry_worker
@@ -69,6 +70,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     usage_daily_task = asyncio.create_task(run_usage_daily_aggregator())
     usage_monthly_task = asyncio.create_task(run_usage_monthly_aggregator())
     aws_cost_import_task = asyncio.create_task(run_aws_cost_importer())
+    late_event_sweep_task = asyncio.create_task(run_late_event_adjustment_sweep())
     background_tasks = (
         plivo_registration_task,
         dialer_task,
@@ -78,6 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         usage_daily_task,
         usage_monthly_task,
         aws_cost_import_task,
+        late_event_sweep_task,
     )
     try:
         yield

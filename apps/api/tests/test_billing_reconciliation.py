@@ -1,10 +1,13 @@
 """Covers workers/billing_worker.py: the period-close sequence, refusing to
-re-close an already-locked period, and a late event after lock producing a
+re-close an already-locked period, a late event after lock producing a
 UsageAdjustment instead of mutating the locked UsageMonthly/Invoice rows
-(req §16)."""
+(req §16), and the automatic late-event sweep that finds such events and
+adjusts them without an operator having to call create_late_event_adjustment
+by hand."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -14,8 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from apps.api.core.usage import deterministic_event_id, record_usage
 from apps.api.db.models import Org
 from apps.api.db.models.cost_allocation import CostAllocation
+from apps.api.db.models.cost_rate import CostRate
 from apps.api.db.models.invoice import Invoice
 from apps.api.db.models.usage_adjustment import UsageAdjustment
+from apps.api.db.models.usage_event import UsageEvent
 from apps.api.db.models.usage_monthly import UsageMonthly
 
 BILLING_PERIOD = "2026-08"
@@ -212,3 +217,188 @@ async def test_late_event_after_lock_creates_adjustment_not_a_mutation(
     assert adjustment.reason == "late_event"
     assert adjustment.amount == Decimal("30")
     assert adjustment.related_event_id == late_event_id
+
+
+async def _make_locked_invoice(
+    db_session: AsyncSession, *, org: Org, billing_period: str, locked_at: datetime
+) -> Invoice:
+    invoice = Invoice(
+        org_id=org.id,
+        billing_period=billing_period,
+        usage_charge=Decimal("0"),
+        platform_fee=Decimal("0"),
+        total_amount=Decimal("0"),
+        status="final",
+        locked_at=locked_at,
+    )
+    db_session.add(invoice)
+    await db_session.flush()
+    return invoice
+
+
+async def test_sweep_adjusts_event_that_landed_after_an_early_period_close(
+    db_session: AsyncSession,
+) -> None:
+    """The sweep's real, honest scope (see billing_worker.py's module
+    docstring): a period closed *before* its calendar month ended (closing
+    is admin-triggered, not restricted to month-end), followed by a
+    legitimately-dated event for the same month arriving afterward."""
+    from apps.api.workers.billing_worker import run_late_event_sweep_once
+
+    org = Org(name="Early Close Co")
+    db_session.add(org)
+    await db_session.flush()
+    await _make_locked_invoice(
+        db_session,
+        org=org,
+        billing_period="2026-08",
+        locked_at=datetime(2026, 8, 20, tzinfo=UTC),
+    )
+    db_session.add(
+        CostRate(
+            service="voice",
+            usage_type="voice_seconds",
+            unit_cost=Decimal("0.01"),
+            effective_from=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    late_event_id = deterministic_event_id("voice_call_ended", "straggler-1")
+    db_session.add(
+        UsageEvent(
+            event_id=late_event_id,
+            org_id=org.id,
+            service="voice",
+            usage_type="voice_seconds",
+            quantity=Decimal("200"),
+            unit="seconds",
+            source="test",
+            created_at=datetime(2026, 8, 25, tzinfo=UTC),  # after locked_at, still in August
+        )
+    )
+    await db_session.commit()
+
+    created = await run_late_event_sweep_once()
+    assert created == 1
+
+    adjustment = (
+        await db_session.execute(
+            select(UsageAdjustment).where(UsageAdjustment.org_id == org.id)
+        )
+    ).scalar_one()
+    assert adjustment.reason == "late_event"
+    assert adjustment.related_event_id == late_event_id
+    assert adjustment.amount == Decimal("2.00")  # 200 seconds * 0.01
+
+
+async def test_sweep_is_idempotent_across_repeated_runs(db_session: AsyncSession) -> None:
+    from apps.api.workers.billing_worker import run_late_event_sweep_once
+
+    org = Org(name="Idempotent Sweep Co")
+    db_session.add(org)
+    await db_session.flush()
+    await _make_locked_invoice(
+        db_session,
+        org=org,
+        billing_period="2026-08",
+        locked_at=datetime(2026, 8, 10, tzinfo=UTC),
+    )
+    db_session.add(
+        UsageEvent(
+            event_id=deterministic_event_id("whatsapp_inbound", "straggler-2"),
+            org_id=org.id,
+            service="whatsapp",
+            usage_type="whatsapp_messages",
+            quantity=Decimal("1"),
+            unit="messages",
+            source="test",
+            created_at=datetime(2026, 8, 15, tzinfo=UTC),
+        )
+    )
+    await db_session.commit()
+
+    first_run = await run_late_event_sweep_once()
+    second_run = await run_late_event_sweep_once()
+    assert first_run == 1
+    assert second_run == 0  # already adjusted — not double-counted
+
+    count = (
+        await db_session.execute(select(UsageAdjustment).where(UsageAdjustment.org_id == org.id))
+    ).scalars().all()
+    assert len(count) == 1
+
+
+async def test_sweep_ignores_events_from_before_the_lock(db_session: AsyncSession) -> None:
+    """An event that was already counted (created_at before locked_at) is
+    not "late" — it must not get a spurious duplicate adjustment."""
+    from apps.api.workers.billing_worker import run_late_event_sweep_once
+
+    org = Org(name="Not Late Co")
+    db_session.add(org)
+    await db_session.flush()
+    await _make_locked_invoice(
+        db_session,
+        org=org,
+        billing_period="2026-08",
+        locked_at=datetime(2026, 8, 20, tzinfo=UTC),
+    )
+    db_session.add(
+        UsageEvent(
+            event_id=deterministic_event_id("whatsapp_inbound", "already-counted"),
+            org_id=org.id,
+            service="whatsapp",
+            usage_type="whatsapp_messages",
+            quantity=Decimal("1"),
+            unit="messages",
+            source="test",
+            created_at=datetime(2026, 8, 5, tzinfo=UTC),  # before locked_at
+        )
+    )
+    await db_session.commit()
+
+    created = await run_late_event_sweep_once()
+    assert created == 0
+
+
+async def test_sweep_records_unpriced_late_event_as_zero_with_a_note(
+    db_session: AsyncSession,
+) -> None:
+    """No CostRate configured yet must not silently drop the event — it's
+    still recorded (amount 0, noted as unpriced) so an operator can see it
+    happened and backfill a rate later."""
+    from apps.api.workers.billing_worker import run_late_event_sweep_once
+
+    org = Org(name="Unpriced Co")
+    db_session.add(org)
+    await db_session.flush()
+    await _make_locked_invoice(
+        db_session,
+        org=org,
+        billing_period="2026-08",
+        locked_at=datetime(2026, 8, 10, tzinfo=UTC),
+    )
+    late_event_id = deterministic_event_id("db_op", "unpriced-1")
+    db_session.add(
+        UsageEvent(
+            event_id=late_event_id,
+            org_id=org.id,
+            service="database",
+            usage_type="database_operations",
+            quantity=Decimal("500"),
+            unit="ops",
+            source="test",
+            created_at=datetime(2026, 8, 15, tzinfo=UTC),
+        )
+    )
+    await db_session.commit()
+
+    created = await run_late_event_sweep_once()
+    assert created == 1
+
+    adjustment = (
+        await db_session.execute(
+            select(UsageAdjustment).where(UsageAdjustment.related_event_id == late_event_id)
+        )
+    ).scalar_one()
+    assert adjustment.amount == Decimal("0")
+    assert adjustment.notes is not None
+    assert "no CostRate" in adjustment.notes
