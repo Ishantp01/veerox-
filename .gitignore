@@ -59,6 +59,7 @@ pgdata/
 # IDE / OS
 .idea/
 .vscode/
+.claude/settings.local.json
 *.swp
 *.swo
 .DS_Store
