@@ -312,7 +312,17 @@ async def sync_templates_from_meta(db: DbDep, org_id: RequestOrgDep) -> Template
     meta_creds = resolve_meta_credentials(org_record)
     if meta_creds is None or not meta_creds.business_account_id:
         raise HTTPException(status_code=400, detail="This org's Meta WhatsApp App isn't configured yet.")
-    meta_templates = await wa_client.list_templates(meta_creds.access_token, meta_creds.business_account_id)
+    try:
+        meta_templates = await wa_client.list_templates(
+            meta_creds.access_token, meta_creds.business_account_id
+        )
+    except httpx.HTTPStatusError as exc:
+        message = wa_client.friendly_error_message(wa_client._meta_error_detail(exc))
+        raise HTTPException(status_code=400, detail=f"Couldn't fetch templates from Meta. {message}") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=400, detail="Couldn't reach Meta to fetch templates. Please try again."
+        ) from exc
 
     existing_rows = (
         (

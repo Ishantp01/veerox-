@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
-import type { OrgNumbers } from "@/lib/types";
+import type { OrgNumbers, OrgPhoneNumberIn } from "@/lib/types";
 
 /**
  * The org's dedicated WhatsApp/calling numbers — inbound messages/calls on
@@ -28,7 +28,7 @@ export function useOrgNumbers() {
 export function useUpdateOrgNumbers() {
   const queryClient = useQueryClient();
 
-  return useMutation<OrgNumbers, Error, Partial<OrgNumbers>>({
+  return useMutation<OrgNumbers, Error, { phone_numbers?: OrgPhoneNumberIn[] }>({
     mutationFn: (fields) =>
       apiFetch<OrgNumbers>("/admin/org-numbers", {
         method: "PUT",

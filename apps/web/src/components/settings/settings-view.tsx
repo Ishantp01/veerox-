@@ -24,11 +24,13 @@ import {
   useDeletePlivoCredentialsSettings,
   useDeleteTwilioCredentialsSettings,
   useMetaCredentialsSettings,
+  useOrgNumbers,
   usePlivoCredentialsSettings,
   useTemplates,
   useTwilioCredentialsSettings,
   useUpdateCallingSettings,
   useUpdateMetaCredentialsSettings,
+  useUpdateOrgNumbers,
   useUpdatePlivoCredentialsSettings,
   useUpdateTwilioCredentialsSettings,
   useUpdateWhatsAppSettings,
@@ -36,6 +38,7 @@ import {
 } from "@/lib/hooks";
 import { useAuth } from "@/lib/auth-context";
 import { CountryCodeField } from "@/components/common/country-code-field";
+import { PhoneNumberListField, type PhoneNumberEntry } from "@/components/organizations/phone-number-list-field";
 import { ScriptLibrary } from "./script-library";
 
 interface CollapsibleSectionProps {
@@ -749,6 +752,99 @@ function MetaCredentialsSection() {
   );
 }
 
+/**
+ * This org's own WhatsApp `phone_number_id` (Meta's dashboard id, not the
+ * displayed number) — separate from the Meta App credentials above, and
+ * load-bearing: every outbound send falls back to it
+ * (channels/voice/org_numbers.py::get_default_whatsapp_number_id). Without
+ * one, sends build a broken Graph API URL and fail outright. Shares
+ * PUT /admin/org-numbers with the calling numbers, which replaces every
+ * provider's numbers together — so saving here resubmits Plivo/Twilio
+ * entries unchanged alongside whatever WhatsApp entries are edited.
+ */
+function WhatsAppNumberSection() {
+  const numbers = useOrgNumbers();
+  const update = useUpdateOrgNumbers();
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<PhoneNumberEntry[] | null>(null);
+
+  const serverEntries = numbers.data?.phone_numbers ?? [];
+  const current =
+    draft ??
+    serverEntries
+      .filter((n) => n.provider === "whatsapp")
+      .map((n) => ({ phone_number: n.phone_number, is_default: n.is_default }));
+
+  return (
+    <QueryBoundary
+      isLoading={numbers.isLoading}
+      isError={numbers.isError}
+      error={numbers.error}
+      onRetry={() => numbers.refetch()}
+      loadingFallback={<Skeleton className="h-20 w-full rounded-xl" />}
+    >
+      {numbers.data && (
+        <div className="flex max-w-md flex-col gap-3">
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Found in Meta App dashboard &gt; WhatsApp &gt; API Setup — &quot;Phone number ID&quot;,
+            not the displayed phone number or the WABA ID above. Required for messages to
+            actually send.
+          </p>
+          <PhoneNumberListField
+            id="whatsapp-settings-number"
+            label="WhatsApp phone_number_id"
+            value={current}
+            onChange={setDraft}
+            placeholder="phone_number_id from the Meta dashboard"
+            validate={(trimmed) => (trimmed ? undefined : "Enter a phone_number_id")}
+            multipleHint=""
+            defaultLabel="Default"
+          />
+          <div>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={update.isPending}
+              disabled={draft === null}
+              onClick={() => {
+                const otherProviders = serverEntries
+                  .filter((n) => n.provider !== "whatsapp")
+                  .map((n) => ({
+                    provider: n.provider,
+                    phone_number: n.phone_number,
+                    is_default: n.is_default,
+                  }));
+                update.mutate(
+                  {
+                    phone_numbers: [
+                      ...otherProviders,
+                      ...current.map((n) => ({ provider: "whatsapp" as const, ...n })),
+                    ],
+                  },
+                  {
+                    onSuccess: () => {
+                      toast({ title: "WhatsApp number saved", variant: "success" });
+                      setDraft(null);
+                    },
+                    onError: (err) =>
+                      toast({
+                        title: "Could not save WhatsApp number",
+                        description: err.message,
+                        variant: "error",
+                      }),
+                  }
+                );
+              }}
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+      )}
+    </QueryBoundary>
+  );
+}
+
 export interface SettingsViewProps {
   title: string;
   description: string;
@@ -831,6 +927,15 @@ export function SettingsView({ title, description, channel }: SettingsViewProps)
             icon={<KeyRound size={15} aria-hidden className="text-slate-400" />}
           >
             <MetaCredentialsSection />
+          </CollapsibleSection>
+        )}
+
+        {channel === "whatsapp" && isOrgAdmin && (
+          <CollapsibleSection
+            title="WhatsApp Number"
+            icon={<Phone size={15} aria-hidden className="text-slate-400" />}
+          >
+            <WhatsAppNumberSection />
           </CollapsibleSection>
         )}
 

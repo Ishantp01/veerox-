@@ -338,6 +338,14 @@ export interface OrgNumbers {
   phone_numbers: OrgPhoneNumber[];
 }
 
+// PUT /admin/org-numbers request shape — no id/created_at, since those are
+// server-assigned and the endpoint replaces the whole set from scratch.
+export interface OrgPhoneNumberIn {
+  provider: "plivo" | "twilio" | "whatsapp";
+  phone_number: string;
+  is_default: boolean;
+}
+
 // GET/PATCH /billing/platform-settings — platform-admin-only view of the
 // social links (superset of GET /billing/social-links).
 export interface PlatformSettings {
