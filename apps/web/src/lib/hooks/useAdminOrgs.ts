@@ -146,6 +146,9 @@ export interface UpdateOrgInput {
   meta_access_token?: string;
   meta_whatsapp_business_account_id?: string;
   meta_verify_token?: string;
+  // Omitted = leave the org's current stored key (or platform-shared
+  // fallback) untouched; present = replace it.
+  openai_api_key?: string;
   // Omitted = leave the org's current restriction/cap untouched; an
   // explicit value (including null, to clear it) replaces it.
   enabled_features?: string[] | null;

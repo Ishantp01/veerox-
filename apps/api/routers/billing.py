@@ -80,6 +80,19 @@ def _update_org_integrity_detail(exc: IntegrityError) -> str:
     return "Could not update organization"
 
 
+async def _team_member_count(db: DbDep, org_id: UUID) -> int:
+    """Non-admin membership count for this org — the "Team members" column
+    on the Organizations page. Excludes the org's own admin row so the
+    count matches what a customer would call their team size, not their
+    total seat usage (which team.py's invite-cap check tracks separately,
+    keyed off `invited_by_id` rather than role)."""
+    return await db.scalar(
+        select(func.count())
+        .select_from(OrgMembership)
+        .where(OrgMembership.org_id == org_id, OrgMembership.role != "admin")
+    )
+
+
 async def _load_org_admin_contact(
     db: DbDep, org_id: UUID
 ) -> tuple[str | None, str | None, str | None]:
@@ -164,10 +177,7 @@ async def list_orgs(db: DbDep, _admin: PlatformAdminDep) -> list[OrgAdminOut]:
 
     out: list[OrgAdminOut] = []
     for org in orgs:
-        seat_count_result = await db.execute(
-            select(func.count()).select_from(OrgMembership).where(OrgMembership.org_id == org.id)
-        )
-        seat_count = seat_count_result.scalar_one()
+        seat_count = await _team_member_count(db, org.id)
         admin_email, admin_name, admin_mobile = await _load_org_admin_contact(db, org.id)
         out.append(
             _org_admin_out(
@@ -211,6 +221,7 @@ async def update_org(
         "meta_access_token",
         "meta_whatsapp_business_account_id",
         "meta_verify_token",
+        "openai_api_key",
     ):
         fields.pop(key, None)
 
@@ -233,6 +244,9 @@ async def update_org(
         if payload.meta_verify_token:
             org_row.meta_verify_token_encrypted = encrypt_secret(payload.meta_verify_token.strip())
         meta_creds_changed = True
+
+    if payload.openai_api_key:
+        org_row.openai_api_key_encrypted = encrypt_secret(payload.openai_api_key.strip())
 
     if fields.get("default_country_code") is None:
         fields.pop("default_country_code", None)  # NOT NULL column — null means "leave as is"
@@ -304,10 +318,7 @@ async def update_org(
     )
     org_row = result.scalar_one()
 
-    seat_count_result = await db.execute(
-        select(func.count()).select_from(OrgMembership).where(OrgMembership.org_id == org_row.id)
-    )
-    seat_count = seat_count_result.scalar_one()
+    seat_count = await _team_member_count(db, org_row.id)
     admin_email, admin_name, admin_mobile = await _load_org_admin_contact(db, org_row.id)
 
     return _org_admin_out(
@@ -538,10 +549,7 @@ async def _license_out(db: DbDep, org_row: Org) -> OrgAdminOut:
         select(Org).options(selectinload(Org.phone_numbers)).where(Org.id == org_row.id)
     )
     org_row = result.scalar_one()
-    seat_count_result = await db.execute(
-        select(func.count()).select_from(OrgMembership).where(OrgMembership.org_id == org_row.id)
-    )
-    seat_count = seat_count_result.scalar_one()
+    seat_count = await _team_member_count(db, org_row.id)
     admin_email, admin_name, admin_mobile = await _load_org_admin_contact(db, org_row.id)
     return _org_admin_out(
         org_row,

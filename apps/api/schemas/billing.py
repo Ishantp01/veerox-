@@ -24,6 +24,7 @@ class OrgAdminOut(BaseModel):
     license_issued_at: str | None = None
     license_duration_days: int | None = None
     license_notes: str | None = None
+    # Non-admin membership count — see billing.py::_team_member_count.
     seat_count: int
     admin_email: str | None
     admin_name: str | None = None
@@ -79,6 +80,11 @@ class OrgUpdateIn(BaseModel):
     meta_access_token: str | None = None
     meta_whatsapp_business_account_id: str | None = None
     meta_verify_token: str | None = None
+    # Omitted = leave the org's current stored key (or the platform-shared
+    # fallback) untouched; present = replace it — same field ProvisionOrgIn
+    # sets at creation and PUT /admin/settings/openai-key lets the org set
+    # for itself (see core/org_openai_key.py::resolve_openai_api_key).
+    openai_api_key: str | None = None
     # Omitted = leave the org's current restriction untouched; an explicit
     # list (including []) replaces it; explicit null clears any restriction
     # back to "unrestricted" — see OrgAdminOut.enabled_features.

@@ -49,6 +49,7 @@ const EMPTY_CREDENTIALS = {
   metaAccessToken: "",
   metaBusinessAccountId: "",
   metaVerifyToken: "",
+  openaiApiKey: "",
 };
 
 function formFromOrg(org: AdminOrg): EditOrgForm {
@@ -158,6 +159,7 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
         meta_access_token: credentials.metaAccessToken.trim() || undefined,
         meta_whatsapp_business_account_id: credentials.metaBusinessAccountId.trim() || undefined,
         meta_verify_token: credentials.metaVerifyToken.trim() || undefined,
+        openai_api_key: credentials.openaiApiKey.trim() || undefined,
         enabled_features: enabledFeatures,
         max_team_members: maxTeamMembers.trim() ? Number(maxTeamMembers) : null,
       },
@@ -432,6 +434,27 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
                           setCredentials((c) => ({ ...c, metaVerifyToken: e.target.value }))
                         }
                       />
+                    </div>
+                  </section>
+
+                  <section className="flex flex-col gap-3 rounded-md border border-slate-200 p-3 dark:border-slate-700">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      OpenAI
+                    </p>
+                    <div>
+                      <Label htmlFor="edit-openai-api-key">API key</Label>
+                      <Input
+                        id="edit-openai-api-key"
+                        type="password"
+                        value={credentials.openaiApiKey}
+                        onChange={(e) =>
+                          setCredentials((c) => ({ ...c, openaiApiKey: e.target.value }))
+                        }
+                        placeholder="Leave blank to keep the current key"
+                      />
+                      <p className="mt-1 text-xs text-slate-400">
+                        Left unset, this org bills against the platform&apos;s shared key.
+                      </p>
                     </div>
                   </section>
                 </div>
