@@ -12,10 +12,9 @@ from sqlalchemy import select
 
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.core.org_credentials import resolve_meta_credentials
-from apps.api.core.tools import _default_org_id
 from apps.api.core.whatsapp_assets import asset_public_url
 from apps.api.db.models import Org, WhatsAppAsset, WhatsAppTemplate
-from apps.api.deps import DbDep, RedisDep, require_feature, verify_admin_or_session
+from apps.api.deps import DbDep, RedisDep, RequestOrgDep, require_feature, verify_admin_or_session
 from apps.api.schemas.template import TemplateCreate, TemplateOut, TemplateSyncResult, TemplateUpdateIn
 
 logger = structlog.get_logger(__name__)
@@ -36,9 +35,9 @@ _META_STATUS_CACHE_TTL_SECS = 60
 async def list_templates(
     db: DbDep,
     redis: RedisDep,
+    org_id: RequestOrgDep,
     active: bool | None = Query(None),
 ) -> list[TemplateOut]:
-    org_id = _default_org_id()
     org_record = await db.get(Org, org_id)
     meta_creds = resolve_meta_credentials(org_record)
     stmt = (
@@ -118,7 +117,7 @@ def _meta_buttons(payload: TemplateCreate) -> list[dict] | None:
 
 
 @router.post("/whatsapp-templates", response_model=TemplateOut, status_code=201)
-async def create_template(payload: TemplateCreate, db: DbDep) -> WhatsAppTemplate:
+async def create_template(payload: TemplateCreate, db: DbDep, org_id: RequestOrgDep) -> WhatsAppTemplate:
     """Create a local template row — and, when ``body_preview`` (the actual
     template body) is given, submit it to Meta for review first.
 
@@ -135,7 +134,6 @@ async def create_template(payload: TemplateCreate, db: DbDep) -> WhatsAppTemplat
     the better way to do that now, but this is kept for a manual/offline
     entry).
     """
-    org_id = _default_org_id()
     org_record = await db.get(Org, org_id)
     meta_creds = resolve_meta_credentials(org_record)
     media_header_types = {"IMAGE", "VIDEO", "DOCUMENT"}
@@ -289,7 +287,7 @@ def _normalize_meta_buttons(raw_buttons: list[dict]) -> list[dict]:
 
 
 @router.post("/whatsapp-templates/sync", response_model=TemplateSyncResult)
-async def sync_templates_from_meta(db: DbDep) -> TemplateSyncResult:
+async def sync_templates_from_meta(db: DbDep, org_id: RequestOrgDep) -> TemplateSyncResult:
     """Pull every template that exists on the WABA in Meta: add a local row
     for any that don't have one yet (matched by name+language), and backfill
     HEADER/FOOTER/BUTTONS structure onto existing rows that are missing it.
@@ -310,7 +308,6 @@ async def sync_templates_from_meta(db: DbDep) -> TemplateSyncResult:
     (e.g. "Name"/"Date"), and Meta only ever gives us an example value, not a
     label, so overwriting those would make them worse.
     """
-    org_id = _default_org_id()
     org_record = await db.get(Org, org_id)
     meta_creds = resolve_meta_credentials(org_record)
     if meta_creds is None or not meta_creds.business_account_id:
@@ -400,9 +397,11 @@ async def sync_templates_from_meta(db: DbDep) -> TemplateSyncResult:
 
 
 @router.patch("/whatsapp-templates/{template_id}", response_model=TemplateOut)
-async def update_template(template_id: UUID, payload: TemplateUpdateIn, db: DbDep) -> WhatsAppTemplate:
+async def update_template(
+    template_id: UUID, payload: TemplateUpdateIn, db: DbDep, org_id: RequestOrgDep
+) -> WhatsAppTemplate:
     template = await db.get(WhatsAppTemplate, template_id)
-    if template is None:
+    if template is None or template.org_id != org_id:
         raise HTTPException(status_code=404, detail="Template not found")
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(template, field, value)
@@ -412,9 +411,9 @@ async def update_template(template_id: UUID, payload: TemplateUpdateIn, db: DbDe
 
 
 @router.delete("/whatsapp-templates/{template_id}")
-async def delete_template(template_id: UUID, db: DbDep) -> dict[str, bool]:
+async def delete_template(template_id: UUID, db: DbDep, org_id: RequestOrgDep) -> dict[str, bool]:
     template = await db.get(WhatsAppTemplate, template_id)
-    if template is None:
+    if template is None or template.org_id != org_id:
         raise HTTPException(status_code=404, detail="Template not found")
     await db.delete(template)
     await db.commit()
