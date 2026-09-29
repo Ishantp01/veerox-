@@ -73,6 +73,24 @@ _ERROR_CODE_HINTS: dict[int, str] = {
     132001: "This template isn't set up in WhatsApp Manager yet — create and approve it there first.",
     131026: "This number can't receive WhatsApp messages.",
     133010: "This WhatsApp number isn't set up yet.",
+    141006: (
+        "Meta has blocked this WhatsApp account from sending messages because of a problem "
+        "with its billing/payment method. In Meta Business Manager, open WhatsApp Manager > "
+        "that account's Billing/Payment methods and add or fix a valid card, then try again."
+    ),
+}
+
+# Same idea as _ERROR_CODE_HINTS, but for errors Meta only disambiguates via
+# error_subcode — code 100 alone covers dozens of unrelated "bad request"
+# cases, so it's only safe to give a specific hint once the subcode narrows
+# it down to this one.
+_ERROR_SUBCODE_HINTS: dict[tuple[int, int], str] = {
+    (100, 33): (
+        "This WhatsApp Business Account ID looks wrong, or this app's access token isn't "
+        "linked to it. In your Meta App dashboard, open WhatsApp > API Setup and copy the "
+        "\"WhatsApp Business Account ID\" shown there (not the App ID or phone number), "
+        "then re-save it in Settings."
+    ),
 }
 
 
@@ -90,6 +108,11 @@ def friendly_error_message(meta_error: dict[str, Any] | None) -> str:
         return "Message couldn't be sent."
 
     code = meta_error.get("code")
+    subcode = meta_error.get("error_subcode")
+    if isinstance(code, int) and isinstance(subcode, int):
+        subcode_hint = _ERROR_SUBCODE_HINTS.get((code, subcode))
+        if subcode_hint:
+            return subcode_hint
     hint = _ERROR_CODE_HINTS.get(code) if isinstance(code, int) else None
     if hint:
         return hint
