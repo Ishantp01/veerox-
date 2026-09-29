@@ -1091,6 +1091,22 @@ async def transfer_to_human(
             phone = user.phone
             name = user.name
 
+    # Resolve (or create) the Lead now, before deciding who gets notified —
+    # its existing claim, if any, wins below over both the campaign-owner
+    # and round-robin routing. A teammate who already owns this lead (e.g.
+    # put it on auto follow-up themselves) must get an interested reply
+    # back on their own dashboard, not have it redistributed to whoever's
+    # turn the round-robin counter lands on next — sales incentives are
+    # tied to individual leads, so reassigning an already-claimed lead here
+    # would silently move a closed-able deal onto someone else's plate.
+    lead: Lead | None = None
+    existing_owner: tuple[UUID, str | None] | None = None
+    if user_id is not None:
+        lead = await get_or_create_lead_for_user(db, org_id, user_id, phone=phone, channel=channel)
+        if lead.claimed_by_account_user_id is not None:
+            owner = await db.get(AccountUser, lead.claimed_by_account_user_id)
+            existing_owner = (lead.claimed_by_account_user_id, owner.mobile if owner else None)
+
     # A Human Support raised from a campaign call/chat goes straight to that
     # campaign's creator — they own its outreach (see
     # CallCampaign.created_by_account_user_id) — instead of the team
@@ -1112,7 +1128,9 @@ async def transfer_to_human(
     notify_targets = await _resolve_team_notify_targets(db, org_id)
     notify_account_user_id: UUID | None = None
     notify_phone: str | None = None
-    if campaign_owner is not None:
+    if existing_owner is not None:
+        notify_account_user_id, notify_phone = existing_owner
+    elif campaign_owner is not None:
         notify_account_user_id, notify_phone = campaign_owner
     elif notify_targets:
         # INCR is atomic across concurrent calls, so two Human Support requests landing
@@ -1192,12 +1210,12 @@ async def transfer_to_human(
     await redis.rpush(_HANDOFF_QUEUE_KEY, json.dumps(payload))  # type: ignore[misc]
 
     lead_id: str | None = None
-    if user_id is not None:
-        lead = await get_or_create_lead_for_user(db, org_id, user_id, phone=phone, channel=channel)
+    if lead is not None:
         # An escalation is a stronger, more current signal than whatever
         # intent the lead had before, so it overrides rather than
-        # filling-if-blank. An existing claim is left alone if this
-        # escalation has nowhere new to route it.
+        # filling-if-blank. `notify_account_user_id` is already this lead's
+        # existing owner when it had one (see `existing_owner` above), so
+        # this reaffirms the same claim rather than reassigning it.
         lead.conversation_id = conversation_id
         lead.intent = "human_support"
         lead.metadata_ = {"reason": reason, "urgency": urgency}
