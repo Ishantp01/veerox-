@@ -1524,18 +1524,10 @@ async def send_appointment_confirmation(
         )
         return
 
-    template_name = (
-        org.appointment_confirmation_template_name if org else None
-    ) or _APPOINTMENT_TEMPLATE_NAME
-    body_params = await _appointment_body_params(db, template_name, name=name, date=date, time=time)
-    phone_number_id = await get_default_whatsapp_number_id(db, org_id)
+    normalized = normalize_phone(phone, org.default_country_code if org else None)
     try:
-        await wa_client.send_template(
-            meta_creds.access_token,
-            _normalize_phone(phone),
-            template_name,
-            body_params=body_params,
-            phone_number_id=phone_number_id,
+        await _send_appointment_confirmation_template(
+            db, org, org_id, meta_creds.access_token, normalized, name, date, time
         )
     except httpx.HTTPError:
         logger.warning(
@@ -1543,6 +1535,45 @@ async def send_appointment_confirmation(
             appointment_id=str(appointment_id),
             exc_info=True,
         )
+
+
+async def _send_appointment_confirmation_template(
+    db: AsyncSession,
+    org: Org | None,
+    org_id: UUID,
+    access_token: str,
+    to_e164: str,
+    name: str | None,
+    date: str,
+    time: str,
+) -> None:
+    """Send the org's appointment-confirmation template to ``to_e164``.
+
+    Uses the org's chosen template (or the built-in default) with the
+    language it was actually approved in — sending under the wrong language
+    code makes Meta answer "template does not exist" even though it's
+    approved. Raises ``httpx.HTTPError`` on failure.
+    """
+    template_name = (
+        org.appointment_confirmation_template_name if org else None
+    ) or _APPOINTMENT_TEMPLATE_NAME
+    row = (
+        await db.execute(
+            select(WhatsAppTemplate).where(
+                WhatsAppTemplate.org_id == org_id, WhatsAppTemplate.name == template_name
+            )
+        )
+    ).scalars().first()
+    body_params = await _appointment_body_params(db, template_name, name=name, date=date, time=time)
+    phone_number_id = await get_default_whatsapp_number_id(db, org_id)
+    await wa_client.send_template(
+        access_token,
+        to_e164,
+        template_name,
+        language_code=(row.language if row and row.language else "en_US"),
+        body_params=body_params,
+        phone_number_id=phone_number_id,
+    )
 
 
 async def send_whatsapp_message(
@@ -1595,33 +1626,29 @@ async def send_whatsapp_message(
     normalized = normalize_phone(target_phone, org.default_country_code if org else None)
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
-    try:
-        await wa_client.send_text(meta_creds.access_token, normalized, message, phone_number_id=phone_number_id)
-    except httpx.HTTPStatusError as exc:
-        if (
-            _meta_error_code(exc) == _REENGAGEMENT_ERROR_CODE
-            and appointment_date
-            and appointment_time
-        ):
-            try:
-                await wa_client.send_template(
-                    meta_creds.access_token,
-                    normalized,
-                    _APPOINTMENT_TEMPLATE_NAME,
-                    body_params=[
-                        caller.name if caller and caller.name else "there",
-                        appointment_date,
-                        _format_display_time(appointment_time),
-                    ],
-                    phone_number_id=phone_number_id,
-                )
-            except httpx.HTTPError as exc2:
-                logger.warning(
-                    "send_whatsapp_message_template_fallback_failed",
-                    phone=normalized,
-                    error=str(exc2),
-                )
-                return {"status": "error", "reason": "whatsapp_send_failed"}
+    # An appointment confirmation goes straight out as the approved template:
+    # the recipient (especially a number the caller named) usually has no open
+    # 24h session, so trying plain text first would just fail.
+    if appointment_date and appointment_time:
+        try:
+            await _send_appointment_confirmation_template(
+                db,
+                org,
+                org_id,
+                meta_creds.access_token,
+                normalized,
+                caller.name if caller and caller.name else None,
+                appointment_date,
+                appointment_time,
+            )
+        except httpx.HTTPError as exc2:
+            logger.warning(
+                "send_whatsapp_message_template_fallback_failed",
+                phone=normalized,
+                error=str(exc2),
+                meta_error=wa_client._meta_error_detail(exc2),
+            )
+        else:
             logger.info(
                 "send_whatsapp_message_tool_ok",
                 phone=normalized,
@@ -1630,6 +1657,9 @@ async def send_whatsapp_message(
             )
             return {"status": "ok", "phone": normalized, "via": "template"}
 
+    try:
+        await wa_client.send_text(meta_creds.access_token, normalized, message, phone_number_id=phone_number_id)
+    except httpx.HTTPStatusError as exc:
         if _meta_error_code(exc) == _REENGAGEMENT_ERROR_CODE:
             logger.info("send_whatsapp_message_tool_outside_window", phone=normalized)
             return {
