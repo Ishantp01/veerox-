@@ -13,6 +13,7 @@ Handlers are idempotent where possible — see the Redis-backed dedupe in
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -458,11 +459,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "back on a DIFFERENT number (e.g. \"call me on this other number instead\"). "
                 "Do NOT use this for 'connect me to an agent/human/team member' or any request "
                 "for a person to reach out — that's transfer_to_human, even if their wording "
-                "says 'call' or 'connect'. On WhatsApp, if they don't give a different number, "
-                "it calls their own number automatically. On an active voice call, `phone` is "
-                "REQUIRED (you're already talking to their own number, so there's nothing to "
-                "default to) — the current call keeps running as-is while the new one is "
-                "placed; don't end or mention ending this call because of it."
+                "says 'call' or 'connect'. If they don't give a different number, it calls "
+                "their own number automatically. On an active voice call with no `phone` (or "
+                "their own number), the call is placed to that same number about 35 seconds "
+                "later, after they hang up — tell them to disconnect and expect the call. "
+                "With a DIFFERENT number the call is placed right away and the current call "
+                "keeps running as-is; don't end or mention ending this call because of it."
             ),
             "parameters": {
                 "type": "object",
@@ -471,8 +473,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": (
                             "Phone number to call (E.164 preferred). Omit to use the "
-                            "current caller's own number — WhatsApp only; required when "
-                            "already on a voice call."
+                            "current caller's own number (on a voice call this rings them "
+                            "back after they hang up)."
                         ),
                     },
                     "reason": {
@@ -1929,15 +1931,6 @@ async def initiate_ai_call(
 
     caller = await db.get(User, user_id) if user_id is not None else None
 
-    if channel == "voice":
-        # Already mid-call with the caller's own number — there's nothing
-        # sensible to default to, and calling that same number again would
-        # just ring the call already in progress a second time.
-        if not phone:
-            return {"status": "error", "reason": "phone_required_while_on_a_call"}
-        if caller is not None and caller.phone and _same_phone(phone, caller.phone):
-            return {"status": "error", "reason": "already_on_a_call_with_this_number"}
-
     target_phone = phone
     if not target_phone and caller is not None:
         target_phone = caller.phone
@@ -1947,6 +1940,42 @@ async def initiate_ai_call(
 
     org = await db.get(Org, org_id)
     normalized = normalize_phone(target_phone, org.default_country_code if org else None)
+
+    if (
+        channel == "voice"
+        and caller is not None
+        and caller.phone
+        and _same_phone(normalized, caller.phone)
+    ):
+        # "Call me on this number" on a live call means the caller's OWN
+        # number — they want a call after this one ends. Ringing it right now
+        # would hit their busy line, so dial it a little later, once they've
+        # hung up. (WhatsApp never hit this: no call is in progress there.)
+        task = asyncio.create_task(_dial_self_after_hangup(org_id, normalized))
+        _background_calls.add(task)
+        task.add_done_callback(_background_calls.discard)
+        logger.info("initiate_ai_call_deferred_to_caller_number", phone=normalized)
+        return {
+            "status": "ok",
+            "phone": normalized,
+            "scheduled": True,
+            "note": "Will ring this same number in under a minute, after this call ends.",
+        }
+
+    return await _place_ai_call(db, org, org_id, normalized)
+
+
+_background_calls: set[asyncio.Task[None]] = set()
+
+# How long to wait for the caller to hang up before ringing them back, and how
+# many times to retry when the line is still busy.
+_SELF_CALLBACK_DELAYS_S = (35, 30, 45)
+
+
+async def _place_ai_call(
+    db: AsyncSession, org: Org | None, org_id: UUID, normalized: str
+) -> dict[str, Any]:
+    """Dial ``normalized`` from the org's own number (Plivo/Twilio failover)."""
     plivo_creds = resolve_plivo_credentials(org)
     twilio_creds = resolve_twilio_credentials(org)
 
@@ -1980,6 +2009,26 @@ async def initiate_ai_call(
         "initiate_ai_call_tool_ok", phone=normalized, org_id=str(org_id), provider=provider
     )
     return {"status": "ok", "phone": normalized, "provider": provider}
+
+
+async def _dial_self_after_hangup(org_id: UUID, normalized: str) -> None:
+    """Background: ring the caller back once their current call has ended."""
+    from apps.api.db.session import AsyncSessionLocal
+
+    for delay in _SELF_CALLBACK_DELAYS_S:
+        await asyncio.sleep(delay)
+        try:
+            async with AsyncSessionLocal() as db:
+                org = await db.get(Org, org_id)
+                result = await _place_ai_call(db, org, org_id, normalized)
+        except Exception:  # noqa: BLE001
+            logger.warning("self_callback_attempt_failed", phone=normalized, exc_info=True)
+            continue
+        if result.get("status") == "ok":
+            return
+        if result.get("reason") == "calling_not_configured":
+            return
+    logger.warning("self_callback_gave_up", phone=normalized, org_id=str(org_id))
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ handlers' SQL writes hit the test SQLite session from conftest.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -1083,6 +1084,37 @@ async def test_initiate_ai_call_proceeds_for_genuine_callback_request(
     )
 
     assert result["status"] == "ok"
+
+
+async def test_initiate_ai_call_on_voice_own_number_is_deferred(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a live call, "call me on this number" (own number / no phone) used to
+    be refused outright, so no call ever came. It must now succeed by
+    scheduling the dial for after the caller hangs up — not ring a busy line."""
+    scheduled: list[str] = []
+
+    async def _fake_dial(org_id: object, normalized: str) -> None:
+        scheduled.append(normalized)
+
+    async def _unexpected_place(*args: object, **kwargs: object) -> None:
+        raise AssertionError("must not dial immediately while the caller is on the line")
+
+    monkeypatch.setattr(tools, "_dial_self_after_hangup", _fake_dial)
+    monkeypatch.setattr(tools, "_place_ai_call", _unexpected_place)
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000099", name="Caller")
+    db_session.add(user)
+    await db_session.commit()
+
+    for phone in (None, "+91 00000 00099"):
+        result = await initiate_ai_call(
+            db_session, phone=phone, user_id=user.id, org_id=ORG_ID, channel="voice"
+        )
+        assert result["status"] == "ok"
+        assert result["scheduled"] is True
+    await asyncio.sleep(0)
+    assert scheduled == ["+910000000099", "+910000000099"]
 
 
 async def test_initiate_ai_call_passes_org_preferred_provider(
