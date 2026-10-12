@@ -1405,6 +1405,16 @@ def _meta_error_code(exc: httpx.HTTPStatusError) -> int | None:
 # since a phone call never opens one), so free-form text is rejected.
 _REENGAGEMENT_ERROR_CODE = 131047
 
+# Returned to the model with an outside-the-window failure so it retries with
+# the one thing Meta allows there, instead of telling the caller "sent".
+_OUTSIDE_WINDOW_HINT = (
+    "This contact has no open 24h WhatsApp session (a phone call doesn't open one), so "
+    "plain text/files are rejected. Retry now with send_whatsapp_template using an "
+    "approved template from your instructions (company info/intro/follow-up). If none "
+    "is listed, tell the caller honestly it couldn't be sent and that the team will "
+    "share it - never claim it was sent."
+)
+
 _APPOINTMENT_TEMPLATE_NAME = "appointment_confirmation"
 
 # Separate pre-approved template for reminders (see book_appointment's
@@ -1618,6 +1628,13 @@ async def send_whatsapp_message(
             )
             return {"status": "ok", "phone": normalized, "via": "template"}
 
+        if _meta_error_code(exc) == _REENGAGEMENT_ERROR_CODE:
+            logger.info("send_whatsapp_message_tool_outside_window", phone=normalized)
+            return {
+                "status": "error",
+                "reason": "outside_24h_window",
+                "hint": _OUTSIDE_WINDOW_HINT,
+            }
         logger.warning(
             "send_whatsapp_message_tool_failed",
             phone=normalized,
@@ -1702,7 +1719,11 @@ async def send_whatsapp_file(
                 phone=normalized,
                 file=resolved.name,
             )
-            return {"status": "error", "reason": "outside_24h_window"}
+            return {
+                "status": "error",
+                "reason": "outside_24h_window",
+                "hint": _OUTSIDE_WINDOW_HINT,
+            }
         logger.warning(
             "send_whatsapp_file_tool_failed", phone=normalized, error=str(exc)
         )
