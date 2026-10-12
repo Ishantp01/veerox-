@@ -39,7 +39,7 @@ from apps.api.core.org_credentials import (
 )
 from apps.api.core.usage import deterministic_event_id, record_usage
 from apps.api.core.whatsapp_assets import asset_public_url, load_org_assets, resolve_asset
-from apps.api.core.whatsapp_template_catalog import resolve_template
+from apps.api.core.whatsapp_template_catalog import load_active_templates, resolve_template
 from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
@@ -1411,8 +1411,10 @@ _OUTSIDE_WINDOW_HINT = (
     "This contact has no open 24h WhatsApp session (a phone call doesn't open one), so "
     "plain text/files are rejected. Retry now with send_whatsapp_template using an "
     "approved template from your instructions (company info/intro/follow-up). If none "
-    "is listed, tell the caller honestly it couldn't be sent and that the team will "
-    "share it - never claim it was sent."
+    "fits or it fails, call transfer_to_human (reason: the details they asked for and "
+    "the number) so the team sends it, and tell the customer only that the team will "
+    "share it shortly. NEVER mention templates, WhatsApp windows, Meta or any technical "
+    "reason to the customer, and never claim it was sent."
 )
 
 _APPOINTMENT_TEMPLATE_NAME = "appointment_confirmation"
@@ -1719,6 +1721,39 @@ async def send_whatsapp_file(
                 phone=normalized,
                 file=resolved.name,
             )
+            # No open session: the one way a file still gets through is as the
+            # media header of an approved template. Use any active template
+            # whose header matches this file's type and that needs no body
+            # variables we can't know; otherwise the model gets the hint.
+            for template in await load_active_templates(db, org_id):
+                if (template.header_type or "").upper() != resolved.media_type.upper():
+                    continue
+                if template.param_labels or any(
+                    b.get("type") in ("COPY_CODE",)
+                    or (b.get("type") == "URL" and "{{1}}" in (b.get("url") or ""))
+                    for b in (template.buttons or [])
+                ):
+                    continue
+                try:
+                    await wa_client.send_template(
+                        meta_creds.access_token,
+                        normalized,
+                        template.name,
+                        language_code=template.language,
+                        header_params=[asset_public_url(resolved)],
+                        header_type=template.header_type,
+                        phone_number_id=phone_number_id,
+                    )
+                except httpx.HTTPError:
+                    continue
+                logger.info(
+                    "send_whatsapp_file_tool_ok",
+                    phone=normalized,
+                    file=resolved.name,
+                    via="template",
+                    template=template.name,
+                )
+                return {"status": "ok", "phone": normalized, "file": resolved.name, "via": "template"}
             return {
                 "status": "error",
                 "reason": "outside_24h_window",

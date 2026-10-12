@@ -378,7 +378,59 @@ async def test_send_whatsapp_file_outside_24h_window(
     result = await send_whatsapp_file(
         db_session, name="Price List", user_id=user.id, org_id=ORG_ID
     )
-    assert result == {"status": "error", "reason": "outside_24h_window"}
+    assert result["status"] == "error"
+    assert result["reason"] == "outside_24h_window"
+    assert "send_whatsapp_template" in result["hint"]
+
+
+async def test_send_whatsapp_file_outside_window_falls_back_to_document_template(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No open chat (e.g. a number the caller named): the file still goes out
+    as the document header of an approved, variable-free template."""
+    from apps.api.db.models.template import WhatsAppTemplate
+
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+919000000003")
+    db_session.add(user)
+    await _seed_asset(db_session)
+    db_session.add(
+        WhatsAppTemplate(
+            org_id=ORG_ID,
+            name="doc_share",
+            language="en",
+            category="UTILITY",
+            body_preview="Here is the document you asked for.",
+            header_type="DOCUMENT",
+            active=True,
+        )
+    )
+    await db_session.commit()
+
+    async def _raise_reengagement(*args, **kwargs):  # noqa: ANN002, ANN003
+        req = httpx.Request("POST", "https://graph.facebook.com/v21.0/x/messages")
+        resp = httpx.Response(
+            400, json={"error": {"code": 131047, "message": "re-engagement"}}, request=req
+        )
+        raise httpx.HTTPStatusError("400", request=req, response=resp)
+
+    sent: dict = {}
+
+    async def _fake_template(token, to, name, **kwargs):  # noqa: ANN001, ANN003
+        sent.update(to=to, name=name, **kwargs)
+        return {}
+
+    monkeypatch.setattr(tools.wa_client, "send_media", _raise_reengagement)
+    monkeypatch.setattr(tools.wa_client, "send_template", _fake_template)
+
+    result = await send_whatsapp_file(
+        db_session, name="Price List", phone="+919111111111", user_id=user.id, org_id=ORG_ID
+    )
+    assert result["status"] == "ok"
+    assert result["via"] == "template"
+    assert sent["name"] == "doc_share"
+    assert sent["to"] == "+919111111111"
+    assert sent["header_type"] == "DOCUMENT"
 
 
 # --------------------------------------------------------------------------
