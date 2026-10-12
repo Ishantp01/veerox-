@@ -1308,3 +1308,34 @@ async def test_mark_not_interested_leaves_converted_lead(
     assert result["status"] == "noop"
     await db_session.refresh(lead)
     assert lead.status == "converted"
+
+
+async def test_send_whatsapp_message_to_other_number_without_session_is_not_sent(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A number that hasn't messaged us in 24h must not get plain text: Meta may
+    accept it with HTTP 200 and drop it later, which used to surface as a false
+    "sent". The tool reports outside_24h_window so the AI escalates instead."""
+    sent: list[str] = []
+
+    async def _fake_send_text(*args: object, **kwargs: object) -> dict:
+        sent.append("text")
+        return {}
+
+    monkeypatch.setattr(tools.wa_client, "send_text", _fake_send_text)
+    await _seed_org(db_session)
+    user = User(org_id=ORG_ID, phone="+910000000099", name="Caller")
+    db_session.add(user)
+    await db_session.commit()
+
+    result = await tools.send_whatsapp_message(
+        db_session,
+        message="details",
+        phone="+919888877777",
+        user_id=user.id,
+        org_id=ORG_ID,
+        channel="whatsapp",
+    )
+    assert result["status"] == "error"
+    assert result["reason"] == "outside_24h_window"
+    assert sent == []

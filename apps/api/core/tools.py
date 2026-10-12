@@ -47,6 +47,7 @@ from apps.api.db.models.appointment import Appointment
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.follow_up import FollowUpTask
 from apps.api.db.models.lead import Lead
+from apps.api.db.models.message import Message
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_membership import OrgMembership
 from apps.api.db.models.template import WhatsAppTemplate
@@ -1405,6 +1406,53 @@ def _meta_error_code(exc: httpx.HTTPStatusError) -> int | None:
 # since a phone call never opens one), so free-form text is rejected.
 _REENGAGEMENT_ERROR_CODE = 131047
 
+
+async def _session_open_for(
+    db: AsyncSession, org_id: UUID, normalized: str, caller: User | None, channel: str | None
+) -> bool:
+    """Whether a free-form text/file to ``normalized`` can be delivered now.
+
+    The contact we're chatting with on WhatsApp right now is always open (their
+    current message isn't stored yet); anyone else — another number, or anyone
+    reached from a phone call — needs an inbound WhatsApp message in the last 24h.
+    """
+    if channel == "whatsapp" and caller is not None and caller.phone and _same_phone(
+        normalized, caller.phone
+    ):
+        return True
+    return await _has_open_whatsapp_session(db, org_id, normalized)
+
+
+async def _has_open_whatsapp_session(db: AsyncSession, org_id: UUID, phone: str) -> bool:
+    """True if ``phone`` messaged us on WhatsApp in the last 24h.
+
+    Meta can answer a plain text/file send to a number with no open session
+    with HTTP 200 and only report the failure later in a status webhook,
+    which the app doesn't read — so the tool would say "ok" for a message that
+    never arrived. Checking our own inbound history first avoids relying on
+    Meta's synchronous error. Matches on the last 10 digits, since stored
+    numbers differ in country-code formatting.
+    """
+    digits = re.sub(r"\D", "", phone or "")[-10:]
+    if not digits:
+        return False
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
+    found = (
+        await db.execute(
+            select(Message.id)
+            .join(User, User.id == Message.user_id)
+            .where(
+                Message.org_id == org_id,
+                Message.role == "user",
+                Message.channel == "whatsapp",
+                Message.created_at >= cutoff,
+                User.phone.like(f"%{digits}"),
+            )
+            .limit(1)
+        )
+    ).first()
+    return found is not None
+
 # Returned to the model with an outside-the-window failure so it retries with
 # the one thing Meta allows there, instead of telling the caller "sent".
 _OUTSIDE_WINDOW_HINT = (
@@ -1657,6 +1705,14 @@ async def send_whatsapp_message(
             )
             return {"status": "ok", "phone": normalized, "via": "template"}
 
+    if not await _session_open_for(db, org_id, normalized, caller, channel):
+        logger.info("send_whatsapp_message_tool_no_open_session", phone=normalized)
+        return {
+            "status": "error",
+            "reason": "outside_24h_window",
+            "hint": _OUTSIDE_WINDOW_HINT,
+        }
+
     try:
         await wa_client.send_text(meta_creds.access_token, normalized, message, phone_number_id=phone_number_id)
     except httpx.HTTPStatusError as exc:
@@ -1685,6 +1741,50 @@ async def send_whatsapp_message(
     return {"status": "ok", "phone": normalized}
 
 
+async def _send_file_via_template(
+    db: AsyncSession,
+    org_id: UUID,
+    access_token: str,
+    normalized: str,
+    resolved: Any,
+    phone_number_id: str | None,
+) -> dict[str, Any]:
+    """Deliver a file to a contact with no open session, as the media header
+    of an approved template. Uses any active template whose header matches the
+    file's type and that needs no body variables we can't know; if none works
+    the model gets the hint (retry/escalate) instead of a false "sent"."""
+    for template in await load_active_templates(db, org_id):
+        if (template.header_type or "").upper() != resolved.media_type.upper():
+            continue
+        if template.param_labels or any(
+            b.get("type") in ("COPY_CODE",)
+            or (b.get("type") == "URL" and "{{1}}" in (b.get("url") or ""))
+            for b in (template.buttons or [])
+        ):
+            continue
+        try:
+            await wa_client.send_template(
+                access_token,
+                normalized,
+                template.name,
+                language_code=template.language,
+                header_params=[asset_public_url(resolved)],
+                header_type=template.header_type,
+                phone_number_id=phone_number_id,
+            )
+        except httpx.HTTPError:
+            continue
+        logger.info(
+            "send_whatsapp_file_tool_ok",
+            phone=normalized,
+            file=resolved.name,
+            via="template",
+            template=template.name,
+        )
+        return {"status": "ok", "phone": normalized, "file": resolved.name, "via": "template"}
+    return {"status": "error", "reason": "outside_24h_window", "hint": _OUTSIDE_WINDOW_HINT}
+
+
 async def send_whatsapp_file(
     db: AsyncSession,
     name: str,
@@ -1692,6 +1792,7 @@ async def send_whatsapp_file(
     phone: str | None = None,
     user_id: UUID | None = None,
     org_id: UUID | None = None,
+    channel: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     """Send one of the org's saved WhatsApp media assets to the contact.
@@ -1734,6 +1835,12 @@ async def send_whatsapp_file(
     normalized = normalize_phone(target_phone, org.default_country_code if org else None)
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
 
+    if not await _session_open_for(db, org_id, normalized, caller, channel):
+        logger.info("send_whatsapp_file_tool_no_open_session", phone=normalized, file=resolved.name)
+        return await _send_file_via_template(
+            db, org_id, meta_creds.access_token, normalized, resolved, phone_number_id
+        )
+
     try:
         sent = await wa_client.send_media(
             meta_creds.access_token,
@@ -1751,44 +1858,9 @@ async def send_whatsapp_file(
                 phone=normalized,
                 file=resolved.name,
             )
-            # No open session: the one way a file still gets through is as the
-            # media header of an approved template. Use any active template
-            # whose header matches this file's type and that needs no body
-            # variables we can't know; otherwise the model gets the hint.
-            for template in await load_active_templates(db, org_id):
-                if (template.header_type or "").upper() != resolved.media_type.upper():
-                    continue
-                if template.param_labels or any(
-                    b.get("type") in ("COPY_CODE",)
-                    or (b.get("type") == "URL" and "{{1}}" in (b.get("url") or ""))
-                    for b in (template.buttons or [])
-                ):
-                    continue
-                try:
-                    await wa_client.send_template(
-                        meta_creds.access_token,
-                        normalized,
-                        template.name,
-                        language_code=template.language,
-                        header_params=[asset_public_url(resolved)],
-                        header_type=template.header_type,
-                        phone_number_id=phone_number_id,
-                    )
-                except httpx.HTTPError:
-                    continue
-                logger.info(
-                    "send_whatsapp_file_tool_ok",
-                    phone=normalized,
-                    file=resolved.name,
-                    via="template",
-                    template=template.name,
-                )
-                return {"status": "ok", "phone": normalized, "file": resolved.name, "via": "template"}
-            return {
-                "status": "error",
-                "reason": "outside_24h_window",
-                "hint": _OUTSIDE_WINDOW_HINT,
-            }
+            return await _send_file_via_template(
+                db, org_id, meta_creds.access_token, normalized, resolved, phone_number_id
+            )
         logger.warning(
             "send_whatsapp_file_tool_failed", phone=normalized, error=str(exc)
         )

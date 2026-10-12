@@ -293,7 +293,8 @@ async def test_send_whatsapp_file_happy_path(
     await _seed_asset(db_session)
 
     result = await send_whatsapp_file(
-        db_session, name="price list", caption="Here you go", user_id=user.id, org_id=ORG_ID
+        db_session, name="price list", caption="Here you go", user_id=user.id, org_id=ORG_ID,
+        channel="whatsapp",
     )
 
     assert result == {"status": "ok", "phone": "+919000000001", "file": "Price List"}
@@ -320,7 +321,9 @@ async def test_send_whatsapp_file_records_usage_events(
     await db_session.commit()
     await _seed_asset(db_session, size_bytes=2048)
 
-    await send_whatsapp_file(db_session, name="price list", user_id=user.id, org_id=ORG_ID)
+    await send_whatsapp_file(
+        db_session, name="price list", user_id=user.id, org_id=ORG_ID, channel="whatsapp"
+    )
 
     rows = (
         await db_session.execute(
@@ -376,7 +379,7 @@ async def test_send_whatsapp_file_outside_24h_window(
     monkeypatch.setattr(tools.wa_client, "send_media", _raise_reengagement)
 
     result = await send_whatsapp_file(
-        db_session, name="Price List", user_id=user.id, org_id=ORG_ID
+        db_session, name="Price List", user_id=user.id, org_id=ORG_ID, channel="whatsapp"
     )
     assert result["status"] == "error"
     assert result["reason"] == "outside_24h_window"
