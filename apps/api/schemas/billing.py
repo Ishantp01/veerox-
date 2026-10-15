@@ -3,7 +3,11 @@ from __future__ import annotations
 from pydantic import BaseModel, EmailStr, field_validator
 
 from apps.api.core.phone import validate_country_code
-from apps.api.db.models.org import CONVERSATION_MODES, validate_org_features
+from apps.api.db.models.org import (
+    CONVERSATION_MODES,
+    CONVERSATION_VOICE_MODES,
+    validate_org_features,
+)
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn, OrgPhoneNumberOut
 
 
@@ -41,6 +45,8 @@ class OrgAdminOut(BaseModel):
     max_team_members: int | None = None
     # "strict_script" | "human_conversation" — see Org.conversation_mode.
     conversation_mode: str = "strict_script"
+    # "off" | "shadow" | "live" — see Org.conversation_voice_mode.
+    conversation_voice_mode: str = "shadow"
 
 
 class OrgUpdateIn(BaseModel):
@@ -93,8 +99,16 @@ class OrgUpdateIn(BaseModel):
     enabled_features: list[str] | None = None
     max_team_members: int | None = None
     conversation_mode: str | None = None
+    conversation_voice_mode: str | None = None
 
     _validate_enabled_features = field_validator("enabled_features")(validate_org_features)
+
+    @field_validator("conversation_voice_mode")
+    @classmethod
+    def _validate_conversation_voice_mode(cls, value: str | None) -> str | None:
+        if value is not None and value not in CONVERSATION_VOICE_MODES:
+            raise ValueError(f"conversation_voice_mode must be one of: {', '.join(CONVERSATION_VOICE_MODES)}")
+        return value
 
     @field_validator("conversation_mode")
     @classmethod

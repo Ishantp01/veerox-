@@ -323,6 +323,8 @@ export interface WhatsAppAsset {
 // "strict_script" = the existing script/tool-calling path; "human_conversation"
 // = the engine answers first on WhatsApp (and runs log-only on voice).
 export type ConversationMode = "strict_script" | "human_conversation";
+/** What the engine does on voice calls for an org on Human Conversation. */
+export type ConversationVoiceMode = "off" | "shadow" | "live";
 
 export interface ConversationEngineStatus {
   conversation_mode: ConversationMode;

@@ -33,8 +33,11 @@ def _record_registrations(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 
 def test_default_is_on() -> None:
     # Production relies on the default: leaving the variable unset must keep
-    # today's behaviour.
-    assert settings.plivo_startup_registration is True
+    # today's behaviour. Check the declared default, not the live value, which
+    # a developer's .env legitimately overrides to false.
+    from apps.api.config import Settings
+
+    assert Settings.model_fields["plivo_startup_registration"].default is True
 
 
 async def test_startup_registers_each_org_by_default(

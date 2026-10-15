@@ -41,7 +41,14 @@ Dispatch = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 # Scenarios that may be answered from approved knowledge.
 _KNOWLEDGE_SCENARIOS = frozenset(
-    {"price_question", "objection", "interested", "confused", "unknown_question"}
+    {
+        "price_question",
+        "objection",
+        "interested",
+        "confused",
+        "unknown_question",
+        "whatsapp_info_request",
+    }
 )
 
 
@@ -189,7 +196,9 @@ async def run_engine(
         knowledge: list[Any] = []
         if understanding.scenario in _KNOWLEDGE_SCENARIOS:
             knowledge = await find_knowledge(db, org_id, text, understanding.language)
-        decision = decide(understanding, text=text, memory=memory, knowledge=knowledge)
+        decision = decide(
+            understanding, text=text, memory=memory, knowledge=knowledge, channel=channel
+        )
         if not validate_action(decision.action_id, decision.args):
             return await fall_back("invalid_action", state=state)
 

@@ -281,7 +281,11 @@ def test_validate_action_allow_list() -> None:
     assert validate_action("transfer_to_human", {"reason": "x"})
     assert not validate_action("transfer_to_human", {})  # missing required arg
     assert not validate_action("request_callback", {"date": "2026-10-16"})  # missing time
-    assert not validate_action("book_appointment", {"date": "d", "time": "t"})  # not allow-listed
+    assert validate_action("book_appointment", {"date": "2026-10-16", "time": "17:00"})
+    assert not validate_action("book_appointment", {"date": "2026-10-16"})  # missing time
+    assert validate_action("send_whatsapp_message", {"message": "hello"})
+    assert not validate_action("send_whatsapp_message", {})  # missing message
+    assert not validate_action("send_whatsapp_file", {"x": 1})  # real tool, not allow-listed
     assert not validate_action("initiate_ai_call", {})
     assert not validate_action("drop_all_tables", {})
 
@@ -917,3 +921,62 @@ def test_preferred_channel_only_from_explicit_mention(text: str, channel: str | 
     from apps.api.core.conversation.understand import _extract_facts
 
     assert _extract_facts(text, TODAY).get("preferred_channel") == channel
+
+
+# --- voice mode setting (Decision Layer) -----------------------------------------------
+
+
+async def test_new_orgs_default_to_log_only_voice(db_session: AsyncSession) -> None:
+    db_session.add(Org(id=ORG_ID, name="Fresh"))
+    await db_session.commit()
+    assert (await db_session.get(Org, ORG_ID)).conversation_voice_mode == "shadow"
+
+
+async def test_platform_admin_sets_and_validates_the_voice_mode(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed(db_session, mode="strict_script")
+    bad = await client.patch(
+        f"/billing/orgs/{ORG_ID}", headers=ADMIN_HEADERS, json={"conversation_voice_mode": "loud"}
+    )
+    assert bad.status_code == 422
+
+    for mode in ("live", "off", "shadow"):
+        ok = await client.patch(
+            f"/billing/orgs/{ORG_ID}", headers=ADMIN_HEADERS, json={"conversation_voice_mode": mode}
+        )
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["conversation_voice_mode"] == mode
+
+    # Omitting the field leaves it alone (PATCH semantics).
+    await client.patch(f"/billing/orgs/{ORG_ID}", headers=ADMIN_HEADERS, json={"conversation_voice_mode": "live"})
+    other = await client.patch(
+        f"/billing/orgs/{ORG_ID}", headers=ADMIN_HEADERS, json={"conversation_mode": "human_conversation"}
+    )
+    assert other.json()["conversation_voice_mode"] == "live"
+
+
+async def test_shadow_run_skips_orgs_that_are_not_in_log_only_mode(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, test_engine
+) -> None:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from apps.api.core.conversation import shadow
+
+    conversation = await _seed(db_session)
+    factory = async_sessionmaker(bind=test_engine, expire_on_commit=False)
+    monkeypatch.setattr(shadow, "AsyncSessionLocal", factory)
+    ran: list[str] = []
+
+    async def fake_run_engine(*args: Any, **kwargs: Any) -> None:
+        ran.append(kwargs["mode"])
+
+    monkeypatch.setattr(shadow, "run_engine", fake_run_engine)
+
+    org = await db_session.get(Org, ORG_ID)
+    for voice_mode, expected in (("shadow", ["shadow"]), ("live", []), ("off", [])):
+        org.conversation_voice_mode = voice_mode
+        await db_session.commit()
+        ran.clear()
+        await shadow._run_shadow(ORG_ID, USER_ID, conversation.id, "hello there")
+        assert ran == expected, voice_mode

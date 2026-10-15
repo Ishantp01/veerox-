@@ -13,11 +13,14 @@ from typing import Any
 
 from apps.api.core.conversation.types import (
     ALLOWED_ACTIONS,
+    STATE_APPOINTMENT_SET,
+    STATE_AWAITING_APPOINTMENT_TIME,
     STATE_AWAITING_CALLBACK_TIME,
     STATE_CALLBACK_SET,
     STATE_CLOSED,
     STATE_ENGAGED,
     STATE_HANDED_OFF,
+    STATE_INFO_SENT,
     Decision,
     Understanding,
 )
@@ -65,6 +68,7 @@ def decide(
     text: str,
     memory: dict[str, str],
     knowledge: list[Any],
+    channel: str = "whatsapp",
 ) -> Decision:
     scenario = understanding.scenario
     reason = text.strip()[:_MAX_REASON_LEN]
@@ -103,6 +107,49 @@ def decide(
         if name:
             args["name"] = name
         return Decision("request_callback", args, "callback_confirmed", next_state=STATE_CALLBACK_SET)
+
+    if scenario == "appointment_request":
+        date_value = understanding.facts.get("callback_date")
+        time_value = understanding.facts.get("callback_time_hhmm")
+        if not (date_value and time_value):
+            return Decision(
+                "none", {}, "ask_appointment_time", next_state=STATE_AWAITING_APPOINTMENT_TIME
+            )
+        appointment_args: dict[str, Any] = {
+            "date": date_value,
+            "time": time_value,
+            "notes": f"Customer asked for an appointment: {reason}",
+        }
+        appointment_name = understanding.facts.get("name") or memory.get("name")
+        if appointment_name:
+            appointment_args["name"] = appointment_name
+        return Decision(
+            "book_appointment",
+            appointment_args,
+            "appointment_confirmed",
+            next_state=STATE_APPOINTMENT_SET,
+        )
+
+    if scenario == "whatsapp_info_request":
+        if not knowledge:
+            # Nothing approved to send: never send a made-up message.
+            return Decision(
+                "transfer_to_human",
+                {"reason": f"Customer asked for details on WhatsApp: {reason}", "urgency": "low"},
+                "unknown_followup",
+                next_state=STATE_HANDED_OFF,
+            )
+        if channel == "whatsapp":
+            # Already on WhatsApp: just answer here from the approved text.
+            return Decision("none", {}, "answer", knowledge=knowledge, next_state=STATE_ENGAGED)
+        message = "\n\n".join(f"{item.title}: {item.body}" for item in knowledge)
+        return Decision(
+            "send_whatsapp_message",
+            {"message": message},
+            "whatsapp_sent",
+            knowledge=knowledge,
+            next_state=STATE_INFO_SENT,
+        )
 
     if scenario == "greeting":
         return Decision("none", {}, "greeting", next_state=STATE_ENGAGED)

@@ -17,6 +17,8 @@ SCENARIOS = (
     "unknown_question",
     "human_handoff",
     "greeting",
+    "appointment_request",
+    "whatsapp_info_request",
 )
 
 EMOTIONS = ("neutral", "positive", "negative", "angry", "confused")
@@ -26,7 +28,16 @@ LANGUAGES = ("hi", "en", "hinglish")
 # Action ids the engine may request. "none" = reply only. Everything else is
 # the name of an existing tool in core/tools.py::DISPATCH_TABLE — the backend
 # runs it, the model never does.
-ALLOWED_ACTIONS = frozenset({"none", "request_callback", "transfer_to_human", "mark_not_interested"})
+ALLOWED_ACTIONS = frozenset(
+    {
+        "none",
+        "request_callback",
+        "transfer_to_human",
+        "mark_not_interested",
+        "book_appointment",
+        "send_whatsapp_message",
+    }
+)
 
 # Structured memory keys the engine may store (quotation §2.1).
 MEMORY_KEYS = ("name", "business_type", "preferred_channel", "callback_time")
@@ -36,6 +47,9 @@ STATE_NEW = "new"
 STATE_ENGAGED = "engaged"
 STATE_AWAITING_CALLBACK_TIME = "awaiting_callback_time"
 STATE_CALLBACK_SET = "callback_set"
+STATE_AWAITING_APPOINTMENT_TIME = "awaiting_appointment_time"
+STATE_APPOINTMENT_SET = "appointment_set"
+STATE_INFO_SENT = "info_sent"
 STATE_HANDED_OFF = "handed_off"
 STATE_CLOSED = "closed"
 

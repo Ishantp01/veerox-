@@ -56,6 +56,9 @@ def validate_org_features(features: list[str] | None) -> list[str] | None:
 
 
 CONVERSATION_MODES = ("strict_script", "human_conversation")
+# What the engine does on VOICE for an org that is on human_conversation:
+# "off" = nothing, "shadow" = log-only (default), "live" = steers the call.
+CONVERSATION_VOICE_MODES = ("off", "shadow", "live")
 
 
 class Org(Base):
@@ -108,6 +111,11 @@ class Org(Base):
     # shadow mode on voice). See CONVERSATION_MODES.
     conversation_mode: Mapped[str] = mapped_column(
         String(24), nullable=False, server_default="strict_script"
+    )
+    # Voice side of the engine, only consulted when conversation_mode is
+    # "human_conversation". See CONVERSATION_VOICE_MODES.
+    conversation_voice_mode: Mapped[str] = mapped_column(
+        String(12), nullable=False, server_default="shadow"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -32,6 +32,7 @@ from apps.api.channels.voice import elevenlabs_client
 from apps.api.channels.voice import language_detect
 from apps.api.channels.voice import turn_controller
 from apps.api.config import settings
+from apps.api.core.conversation import voice_decision
 from apps.api.core.conversation.shadow import schedule_voice_shadow
 from apps.api.core.memory import persist_turn
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS, get_or_create_lead_for_user
@@ -108,6 +109,15 @@ class CallState:
     # Transcripts of everything the caller said while the agent was talking,
     # so the repeat-back beat can quote every question, not just the last.
     overlap_transcripts: list[str] = field(default_factory=list)
+    # Live decision for the caller's latest turn (core/conversation/
+    # voice_decision.py). Computed in the background from the final transcript
+    # and consumed by _fire_pending_reply if it is ready in time; None when
+    # the org isn't on live voice mode. voice_actions_done makes sure the same
+    # action never runs twice in one call.
+    voice_decision_task: "asyncio.Task[Any] | None" = field(default=None, repr=False)
+    voice_decision_text: str = ""
+    voice_decision_started: float = 0.0
+    voice_actions_done: set[str] = field(default_factory=set)
     # Mid-answer acknowledgment state machine. ~ACK_GAP_SECONDS after the
     # caller finishes a question that overlapped the agent's answer, the
     # answer is paused and the agent briefly says it heard them, then picks
@@ -675,7 +685,88 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
         state.overlap_transcripts = []
     else:
         state.t_reply_sent = time.monotonic()
-        await oai_ws.send(json.dumps({"type": "response.create"}))
+        payload: dict[str, Any] = {"type": "response.create"}
+        # Decision Layer: if this org is on live voice mode and a decision for
+        # what the caller just said is ready within the budget, steer this one
+        # reply with it. Anything else (not live, late, error, low confidence)
+        # leaves the payload exactly as it has always been.
+        response = await _voice_decision_response(state)
+        if response is not None:
+            payload["response"] = response
+        await oai_ws.send(json.dumps(payload))
+
+
+def _cancel_voice_decision(state: CallState) -> None:
+    task = state.voice_decision_task
+    state.voice_decision_task = None
+    if task is not None and not task.done():
+        task.cancel()
+
+
+def _start_voice_decision(state: CallState, text: str) -> None:
+    """Begin deciding about the caller's turn in the background. Cheap when the
+    org isn't on live voice mode (a cached flag check), and it never raises."""
+    if not settings.conversation_voice_live or not text:
+        return
+    _cancel_voice_decision(state)
+    state.voice_decision_text = text
+    state.voice_decision_started = time.monotonic()
+    state.voice_decision_task = asyncio.create_task(
+        voice_decision.compute_voice_plan(state.org_id, state.user_id, state.conversation_id, text)
+    )
+
+
+async def _voice_decision_response(state: CallState) -> dict[str, Any] | None:
+    """The per-response overrides for the next ``response.create``, or None."""
+    task = state.voice_decision_task
+    if task is None:
+        return None
+    state.voice_decision_task = None
+    try:
+        remaining = max(
+            0.0,
+            settings.conversation_voice_decision_budget_seconds
+            - (time.monotonic() - state.voice_decision_started),
+        )
+        try:
+            plan = await asyncio.wait_for(task, timeout=remaining)
+        except TimeoutError:
+            task.cancel()  # too late: it must not run an action afterwards
+            return None
+        if plan is None or state.voice_decision_text != state.pending_user_transcript:
+            return None  # nothing to apply, or the caller has said something newer
+
+        async def dispatch(action_id: str, args: dict[str, Any]) -> dict[str, Any]:
+            return await _dispatch_realtime_tool(
+                action_id,
+                json.dumps(args),
+                state.user_id,
+                state.org_id,
+                campaign_target_id=state.campaign_target_id,
+                conversation_id=state.conversation_id,
+                raw_message=state.voice_decision_text,
+            )
+
+        reply = await voice_decision.apply_voice_plan(
+            plan,
+            org_id=state.org_id,
+            user_id=state.user_id,
+            conversation_id=state.conversation_id,
+            text=state.voice_decision_text,
+            dispatch=dispatch,
+            done_actions=state.voice_actions_done,
+        )
+        if reply is None:
+            return None
+        response: dict[str, Any] = {
+            "instructions": f"{state.base_instructions}\n\n{reply.instruction}"
+        }
+        if reply.tool_choice_none:
+            response["tool_choice"] = "none"  # the engine already ran the action
+        return response
+    except Exception:  # noqa: BLE001 — a decision problem must never break the call
+        logger.warning("voice_decision_response_failed", exc_info=True)
+        return None
 
 
 def realtime_tools() -> list[dict[str, Any]]:
@@ -1186,6 +1277,10 @@ async def handle_openai_event(
             state.overlap_transcripts.append(state.pending_user_transcript)
         log.info("voice_user_transcript", text=state.pending_user_transcript)
         text = state.pending_user_transcript
+        # Decision Layer: start deciding about this turn while the existing
+        # answer gap elapses (filler like "ok" is not a turn worth deciding on).
+        if text and not (overlapping and _is_backchannel(text)):
+            _start_voice_decision(state, text)
         # Only switch language on an explicit request ("English mein baat
         # karo"). The old auto-hint (detect the caller's language from their
         # first transcript and switch to it unasked) used to flip the whole

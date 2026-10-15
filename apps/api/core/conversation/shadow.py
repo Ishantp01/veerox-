@@ -34,6 +34,9 @@ async def _run_shadow(org_id: UUID, user_id: UUID, conversation_id: UUID, text: 
         org = await db.get(Org, org_id)
         if org is None or org.conversation_mode != "human_conversation":
             return
+        # "live" turns are logged by the live decision itself; "off" logs nothing.
+        if org.conversation_voice_mode != "shadow":
+            return
         history = await load_last_n(db, user_id, n=6)
         await run_engine(
             db,

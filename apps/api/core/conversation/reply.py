@@ -60,6 +60,21 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "hinglish": "Bahut badhiya! Details samjhane ke liye hum aapko kab call karein?",
         "hi": "बहुत बढ़िया! विवरण समझाने के लिए हम आपको कब कॉल करें?",
     },
+    "ask_appointment_time": {
+        "en": "Sure, I can book that. Which day and time suits you?",
+        "hinglish": "Zaroor, main book kar deta hoon. Aapko kaunsa din aur time theek rahega?",
+        "hi": "ज़रूर, मैं बुक कर देता हूँ। आपको कौन सा दिन और समय ठीक रहेगा?",
+    },
+    "appointment_confirmed": {
+        "en": "Done, your appointment is booked for {when}. Thank you!",
+        "hinglish": "Ho gaya, aapki appointment {when} ke liye book ho gayi hai. Dhanyavaad!",
+        "hi": "हो गया, आपकी अपॉइंटमेंट {when} के लिए बुक हो गई है। धन्यवाद!",
+    },
+    "whatsapp_sent": {
+        "en": "I've sent the details to your WhatsApp. Please have a look.",
+        "hinglish": "Maine details aapke WhatsApp par bhej di hain. Please dekh lijiye.",
+        "hi": "मैंने विवरण आपके WhatsApp पर भेज दिए हैं। कृपया देख लीजिए।",
+    },
     "objection_followup": {
         "en": "I understand. Our team can go through the options with you. When would be a good time for a quick call?",
         "hinglish": "Main samajh sakta hoon. Hamari team aapke saath options par baat kar sakti hai. Aapko kab call karein?",
@@ -136,6 +151,6 @@ async def build_reply(
         return reply, tokens_in, tokens_out
 
     when = ""
-    if decision.reply_kind == "callback_confirmed":
+    if decision.reply_kind in ("callback_confirmed", "appointment_confirmed"):
         when = f"{decision.args['date']} {decision.args['time']}"
     return _template(decision.reply_kind, language, when=when), 0, 0

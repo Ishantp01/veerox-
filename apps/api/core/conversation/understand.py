@@ -23,6 +23,7 @@ from apps.api.core.conversation.types import (
     LANGUAGES,
     MEMORY_KEYS,
     SCENARIOS,
+    STATE_AWAITING_APPOINTMENT_TIME,
     STATE_AWAITING_CALLBACK_TIME,
     Understanding,
 )
@@ -44,12 +45,26 @@ class UnderstandError(Exception):
 
 
 _DEVANAGARI = re.compile(r"[ऀ-ॿ]")
+# Common Hindi words as typed in Latin script, including the spelling variants
+# people actually use ("bje", "krna", "nhi", "shaam"/"sham"). Words that are
+# also ordinary English words (to, me, ho, hi, par, pe, main, is) are left out
+# on purpose: they would turn English text into Hinglish.
 _HINGLISH_WORDS = re.compile(
-    r"\b(hai|hain|nahi|nahin|nhi|kya|kitna|kitne|kitni|kab|kal|abhi|mujhe|mera|meri|"
-    r"aap|apka|aapka|bhai|ji|haan|han|theek|thik|chahiye|karo|kijiye|batao|bataiye|"
-    r"paisa|rupay|rupaye|baad|baje|mat|zyada|jyada|bahut|samajh|samjha|wala|wali|se|ko|ka|ki|ke)\b",
+    r"\b(hai|hain|hay|nahi|nahin|nhi|nai|kya|kyaa|kyun|kyu|kaise|kaisa|kaun|kitna|kitne|kitni|"
+    r"kab|kal|aaj|abhi|parso|mujhe|mujhko|mera|meri|mere|tumhara|aapka|apka|aap|hum|humko|"
+    r"bhai|bhaiya|ji|haan|han|theek|thik|chahiye|chahie|chaiye|karo|kro|karna|krna|karni|krni|"
+    r"karunga|karungi|kijiye|kijiyega|batao|btao|bataiye|btaiye|bataye|bhejo|bhej|dijiye|do|"
+    r"paisa|paise|rupay|rupaye|baad|baje|bje|bajey|mat|zyada|jyada|bahut|bohot|bhot|samajh|samjha|"
+    r"samjhao|wala|wali|vala|vali|se|ko|ka|ki|ke|shaam|sham|subah|subha|dopahar|raat|din|"
+    r"lekin|magar|aur|bhi|sirf|kuch|sab|toh|hoon|hun|hu|raha|rahi|rahe|chal|milega|milegi|"
+    r"lena|dena|lunga|dunga|pata|accha|achha|acha|bilkul|zaroor|jaldi|dobara|phir|fir|"
+    r"hoga|hogi|hoge|honge|hota|hoti|hona|hua|hui)\b",
     re.IGNORECASE,
 )
+
+# Hindi words that are also plain English words: they only count when at least
+# one unambiguous Hindi word is present too.
+_AMBIGUOUS_HINDI = frozenset({"do", "hu", "din", "sab", "toh", "chal", "fir", "pata", "lena", "dena", "ji"})
 
 
 def detect_language(text: str) -> str:
@@ -57,7 +72,15 @@ def detect_language(text: str) -> str:
     (Latin script with Hindi words), else en."""
     if _DEVANAGARI.search(text):
         return "hi"
-    if len(_HINGLISH_WORDS.findall(text)) >= 2:
+    # Collapse stretched spellings ("haiii", "kyaaa") before matching.
+    normalized = re.sub(r"(.)\1{2,}", r"\1", text)
+    hits = [w.lower() for w in _HINGLISH_WORDS.findall(normalized)]
+    strong = [w for w in hits if w not in _AMBIGUOUS_HINDI]
+    if len(hits) >= 2 and strong:
+        return "hinglish"
+    # A very short message with one distinctive Hindi word ("price kitna") is
+    # still Hinglish; short function words (se, ko, ka, ...) don't count alone.
+    if len(normalized.split()) <= 4 and any(len(w) >= 4 for w in strong):
         return "hinglish"
     return "en"
 
@@ -90,7 +113,7 @@ _RULES: dict[str, list[tuple[re.Pattern[str], float]]] = {
     "not_interested": [
         (
             re.compile(
-                r"(not interested|no interest|don'?t (call|message|contact)|stop (calling|messaging)|"
+                r"(not interested|no interest|don'?t (call|message|contact)|stop (calling|messaging|sending|texting|contacting|bothering)|"
                 r"remove (me|my number)|unsubscribe|nahi chahiye|nahin chahiye|nhi chahiye|"
                 r"interested nahi|interest nahi|mat karo|mat karna|dobara mat|"
                 r"रुचि नहीं|नहीं चाहिए|मत करो|इंटरेस्टेड नहीं)",
@@ -104,7 +127,7 @@ _RULES: dict[str, list[tuple[re.Pattern[str], float]]] = {
             re.compile(
                 r"(busy|call (me )?(back|later|tomorrow|after)|call kal|kal call|baad (me|mein) call|"
                 r"later\b|abhi (time )?nahi|abhi busy|meeting (me|mein)|driving|not a good time|"
-                r"call karna|phir se call|try again|vyast|व्यस्त|बाद में|कल फोन|कल कॉल)",
+                r"call karna|call krna|call kro|call karo|call kr do|phir se call|try again|vyast|व्यस्त|बाद में|कल फोन|कल कॉल)",
                 re.IGNORECASE,
             ),
             0.85,
@@ -153,6 +176,27 @@ _RULES: dict[str, list[tuple[re.Pattern[str], float]]] = {
             0.8,
         ),
     ],
+    "appointment_request": [
+        (
+            re.compile(
+                r"(?=.*(appointment|demo|meeting|slot|visit|डेमो|मीटिंग|अपॉइंटमेंट))"
+                r"(?=.*(book|schedule|fix|arrange|set up|rakho|rakh do|karo|karna|krna|kro|chahiye|lena|"
+                r"want|need|like|बुक|चाहिए))",
+                re.IGNORECASE | re.DOTALL,
+            ),
+            0.85,
+        ),
+    ],
+    "whatsapp_info_request": [
+        (
+            re.compile(
+                r"(?=.*(whatsapp|whats app|व्हाट्सएप|व्हाट्सऐप))"
+                r"(?=.*(send|share|bhej|bhejo|details|info|information|dijiye|de do|karo|forward|भेज))",
+                re.IGNORECASE | re.DOTALL,
+            ),
+            0.85,  # an explicit "on WhatsApp" request beats the price/plan words in it
+        ),
+    ],
     "greeting": [
         (
             re.compile(
@@ -198,8 +242,8 @@ def _guard_alternatives(pattern: re.Pattern[str]) -> re.Pattern[str]:
     "already". Latin-letter lookbehind only, so Devanagari alternatives are
     unaffected. Anchored patterns (greeting) are left alone."""
     source = pattern.pattern
-    if not (source.startswith("(") and source.endswith(")")):
-        return pattern
+    if source.startswith("(?=") or not (source.startswith("(") and source.endswith(")")):
+        return pattern  # lookahead rules match anywhere; anchored ones stay as written
     alternatives = _split_top_level(source[1:-1])
     guarded = "|".join(f"(?<![A-Za-z]){alt}" for alt in alternatives)
     return re.compile(f"({guarded})", pattern.flags)
@@ -216,6 +260,7 @@ _EMOTION_BY_SCENARIO = {
     "objection": "negative",
     "confused": "confused",
     "interested": "positive",
+    "appointment_request": "positive",
 }
 
 # A rules result is "clear" when it beats every other matched scenario by at
@@ -321,11 +366,27 @@ def classify_with_rules(
 
     # We asked "when should we call?" last turn and the customer answered with
     # a time — that is a callback request even if no keyword matched.
+    # Only when the message is otherwise unremarkable: a time in a sentence that
+    # clearly asks for something else (a demo, a price, details on WhatsApp)
+    # belongs to that request, not to the callback we were waiting on.
     if state == STATE_AWAITING_CALLBACK_TIME and "callback_time_hhmm" in facts:
-        if not any(s in ("not_interested", "angry", "human_handoff") for s, _ in matched):
+        if all(s in ("busy_callback", "interested", "greeting") for s, _ in matched):
             return Understanding(
                 scenario="busy_callback",
                 intent="callback_time_given",
+                emotion="neutral",
+                language=language,
+                confidence=0.9,
+                source="rules",
+                facts=facts,
+            )
+
+    # Same for an appointment: we asked "which day and time?" and got a time.
+    if state == STATE_AWAITING_APPOINTMENT_TIME and "callback_time_hhmm" in facts:
+        if all(s in ("appointment_request", "interested", "greeting") for s, _ in matched):
+            return Understanding(
+                scenario="appointment_request",
+                intent="appointment_time_given",
                 emotion="neutral",
                 language=language,
                 confidence=0.9,
@@ -341,7 +402,7 @@ def classify_with_rules(
     # Hard-stop scenarios always win outright when present.
     if top_scenario in ("human_handoff", "angry", "not_interested"):
         confidence = top_weight
-    elif len(matched) > 1 and top_weight - matched[1][1] < _CLEAR_MARGIN:
+    elif len(matched) > 1 and round(top_weight - matched[1][1], 2) < _CLEAR_MARGIN:
         # price_question + objection etc. — let the LLM arbitrate.
         return None
     else:

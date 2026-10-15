@@ -21,7 +21,7 @@ import { OrgFeatureChecklist } from "./org-feature-checklist";
 import { useUpdateOrgAdmin, type AdminOrg } from "@/lib/hooks/useAdminOrgs";
 import { CountryCodeField } from "@/components/common/country-code-field";
 import { E164_REGEX, E164_MESSAGE } from "@/lib/phone";
-import type { ConversationMode } from "@/lib/types";
+import type { ConversationMode, ConversationVoiceMode } from "@/lib/types";
 
 const editOrgSchema = z.object({
   orgName: z.string().trim().min(1, "Organization name is required"),
@@ -110,6 +110,9 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
   const [conversationMode, setConversationMode] = useState<ConversationMode>(
     () => org.conversation_mode ?? "strict_script",
   );
+  const [conversationVoiceMode, setConversationVoiceMode] = useState<ConversationVoiceMode>(
+    () => org.conversation_voice_mode ?? "shadow",
+  );
   const updateOrg = useUpdateOrgAdmin();
   const { toast } = useToast();
 
@@ -168,6 +171,7 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
         enabled_features: enabledFeatures,
         max_team_members: maxTeamMembers.trim() ? Number(maxTeamMembers) : null,
         conversation_mode: conversationMode,
+        conversation_voice_mode: conversationVoiceMode,
       },
       {
         onSuccess: () => {
@@ -192,6 +196,7 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
       setEnabledFeatures(org.enabled_features);
       setMaxTeamMembers(org.max_team_members?.toString() ?? "");
       setConversationMode(org.conversation_mode ?? "strict_script");
+      setConversationVoiceMode(org.conversation_voice_mode ?? "shadow");
     } else {
       setFieldErrors({});
       updateOrg.reset();
@@ -303,7 +308,25 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
               </Select>
               <p className="mt-1 text-xs text-slate-400">
                 Human Conversation lets the AI understand intent and use approved knowledge on
-                WhatsApp (voice is log-only). Switch back to Strict Script any time to roll back.
+                WhatsApp. Voice calls follow the setting below. Switch back to Strict Script any time
+                to roll back.
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="edit-org-conversation-voice-mode">Voice calls (Human Conversation only)</Label>
+              <Select
+                id="edit-org-conversation-voice-mode"
+                value={conversationVoiceMode}
+                onChange={(value) => setConversationVoiceMode(value as ConversationVoiceMode)}
+                disabled={conversationMode !== "human_conversation"}
+              >
+                <option value="off">Off: the engine does nothing on calls</option>
+                <option value="shadow">Log only (default): records what it would do, never changes the call</option>
+                <option value="live">Live: the engine steers the call</option>
+              </Select>
+              <p className="mt-1 text-xs text-slate-400">
+                Live voice is for tested organizations only. Set it back to Log only or Off to stop
+                it immediately.
               </p>
             </div>
             <PhoneNumberListField

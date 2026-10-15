@@ -82,6 +82,15 @@ class Settings(BaseSettings):
     # Voice only ever runs the engine in log-only shadow mode — set
     # CONVERSATION_VOICE_SHADOW=false to stop the extra LLM calls entirely.
     conversation_voice_shadow: bool = True
+    # Live voice decisions (Decision Layer). This is only the global ceiling:
+    # a call is steered only when its org is ALSO set to voice mode "live"
+    # (Org.conversation_voice_mode). CONVERSATION_VOICE_LIVE=false switches it
+    # off everywhere without a deploy.
+    conversation_voice_live: bool = True
+    # How long the reply may wait for a decision before the call just
+    # continues exactly as it does today, and the model-call timeout inside it.
+    conversation_voice_decision_budget_seconds: float = 1.0
+    conversation_voice_llm_timeout_seconds: float = 0.9
     conversation_llm_timeout_seconds: float = 6.0
     conversation_min_confidence: float = 0.6
     voice_live_transcribe_model: str = "gpt-live-transcribe"
