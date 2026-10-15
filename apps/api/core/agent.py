@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
+from apps.api.core.conversation.engine import run_engine
 from apps.api.core.llm import ChatResult, ToolCall, chat_completion
 from apps.api.core.org_openai_key import resolve_openai_api_key
 from apps.api.core.memory import load_last_n, persist_turn
@@ -329,6 +330,94 @@ async def _dispatch_tool_isolated(
         )
 
 
+async def _persist_and_meter(
+    db: AsyncSession,
+    *,
+    conversation: Conversation,
+    user_id: UUID,
+    org_id: UUID,
+    channel: Channel,
+    input_text: str,
+    assistant_text: str,
+    tokens_in: int,
+    tokens_out: int,
+) -> str:
+    """Persist the (user, assistant) turn and record its usage events.
+
+    Shared by the legacy script path and the Conversation Intelligence
+    Engine path in ``AgentCore.handle_turn`` so both meter identically.
+    """
+    assistant_message_id = await persist_turn(
+        db,
+        conversation_id=conversation.id,
+        user_id=user_id,
+        org_id=org_id,
+        channel=channel,
+        user_text=input_text,
+        assistant_text=assistant_text,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+    )
+
+    # Usage metering (req §6): one AI usage event per turn, keyed to the
+    # just-persisted assistant Message so a retried delivery of the same
+    # inbound turn (which would re-run handle_turn and produce a new
+    # Message either way) never double-records this specific event.
+    try:
+        if tokens_in:
+            await record_usage(
+                db,
+                organization_id=org_id,
+                event_id=deterministic_event_id("ai_input_tokens", str(assistant_message_id)),
+                service="ai",
+                usage_type="ai_input_tokens",
+                quantity=tokens_in,
+                unit="tokens",
+                provider="openai",
+                source="agent_core",
+                request_id=str(conversation.id),
+            )
+        if tokens_out:
+            await record_usage(
+                db,
+                organization_id=org_id,
+                event_id=deterministic_event_id("ai_output_tokens", str(assistant_message_id)),
+                service="ai",
+                usage_type="ai_output_tokens",
+                quantity=tokens_out,
+                unit="tokens",
+                provider="openai",
+                source="agent_core",
+                request_id=str(conversation.id),
+            )
+        await record_usage(
+            db,
+            organization_id=org_id,
+            event_id=deterministic_event_id("ai_request_count", str(assistant_message_id)),
+            service="ai",
+            usage_type="ai_request_count",
+            quantity=1,
+            unit="requests",
+            provider="openai",
+            source="agent_core",
+            request_id=str(conversation.id),
+            metadata={"channel": channel},
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        # Usage metering must never break the actual conversation turn —
+        # the turn itself already persisted successfully above. `db` is
+        # the caller's shared session (still used after handle_turn
+        # returns, e.g. whatsapp/adapter.py sending the reply within
+        # the same request), so a failed commit must be rolled back
+        # rather than left pending — matches every other try/commit/
+        # except pattern in this codebase (e.g. routers/crm.py).
+        await db.rollback()
+        logger.exception("usage_metering_failed", conversation_id=str(conversation.id))
+
+    return assistant_text
+
+
 class AgentCore:
     """Channel-agnostic AI agent — one brain, two mouths.
 
@@ -404,7 +493,57 @@ class AgentCore:
                     whatsapp_script_id = campaign.whatsapp_script_id if campaign else None
 
         history = await load_last_n(db, user_id)
-        openai_api_key = resolve_openai_api_key(await db.get(Org, org_id))
+        org_row = await db.get(Org, org_id)
+        openai_api_key = resolve_openai_api_key(org_row)
+
+        # Human Conversation mode (per-org opt-in, WhatsApp only): the
+        # Conversation Intelligence Engine answers first. On any fallback
+        # (timeout, invalid output, low confidence, error) it returns no
+        # reply and the unchanged script/tool-calling path below runs.
+        engine_tokens_in = engine_tokens_out = 0
+        if (
+            channel == "whatsapp"
+            and org_row is not None
+            and org_row.conversation_mode == "human_conversation"
+        ):
+
+            async def _engine_dispatch(action_id: str, args: dict[str, Any]) -> dict[str, Any]:
+                return await _dispatch_tool(
+                    db,
+                    ToolCall(id="engine", name=action_id, arguments_json=json.dumps(args)),
+                    user_id,
+                    org_id,
+                    channel,
+                    campaign_target_id=campaign_target_id,
+                    conversation_id=conversation.id,
+                    raw_message=input_text,
+                )
+
+            engine_result = await run_engine(
+                db,
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation.id,
+                channel=channel,
+                text=input_text,
+                history=history,
+                api_key=openai_api_key,
+                dispatch=_engine_dispatch,
+            )
+            if engine_result.reply is not None:
+                return await _persist_and_meter(
+                    db,
+                    conversation=conversation,
+                    user_id=user_id,
+                    org_id=org_id,
+                    channel=channel,
+                    input_text=input_text,
+                    assistant_text=engine_result.reply,
+                    tokens_in=engine_result.tokens_in,
+                    tokens_out=engine_result.tokens_out,
+                )
+            engine_tokens_in = engine_result.tokens_in
+            engine_tokens_out = engine_result.tokens_out
 
         system_prompt = await _system_prompt_for(
             db, org_id, channel, whatsapp_script_id, whatsapp_phone_number_id
@@ -425,8 +564,8 @@ class AgentCore:
         # returns plain text or we hit the iteration ceiling.
         result: ChatResult | None = None
         assistant_text = HUMAN_SUPPORT_FALLBACK
-        total_tokens_in = 0
-        total_tokens_out = 0
+        total_tokens_in = engine_tokens_in
+        total_tokens_out = engine_tokens_out
 
         for iteration in range(MAX_AGENT_ITERATIONS):
             result = await chat_completion(messages, tools=TOOL_DEFINITIONS, api_key=openai_api_key)
@@ -505,75 +644,17 @@ class AgentCore:
                 channel=channel,
             )
 
-        assistant_message_id = await persist_turn(
+        return await _persist_and_meter(
             db,
-            conversation_id=conversation.id,
+            conversation=conversation,
             user_id=user_id,
             org_id=org_id,
             channel=channel,
-            user_text=input_text,
+            input_text=input_text,
             assistant_text=assistant_text,
             tokens_in=total_tokens_in,
             tokens_out=total_tokens_out,
         )
-
-        # Usage metering (req §6): one AI usage event per turn, keyed to the
-        # just-persisted assistant Message so a retried delivery of the same
-        # inbound turn (which would re-run handle_turn and produce a new
-        # Message either way) never double-records this specific event.
-        try:
-            if total_tokens_in:
-                await record_usage(
-                    db,
-                    organization_id=org_id,
-                    event_id=deterministic_event_id("ai_input_tokens", str(assistant_message_id)),
-                    service="ai",
-                    usage_type="ai_input_tokens",
-                    quantity=total_tokens_in,
-                    unit="tokens",
-                    provider="openai",
-                    source="agent_core",
-                    request_id=str(conversation.id),
-                )
-            if total_tokens_out:
-                await record_usage(
-                    db,
-                    organization_id=org_id,
-                    event_id=deterministic_event_id("ai_output_tokens", str(assistant_message_id)),
-                    service="ai",
-                    usage_type="ai_output_tokens",
-                    quantity=total_tokens_out,
-                    unit="tokens",
-                    provider="openai",
-                    source="agent_core",
-                    request_id=str(conversation.id),
-                )
-            await record_usage(
-                db,
-                organization_id=org_id,
-                event_id=deterministic_event_id("ai_request_count", str(assistant_message_id)),
-                service="ai",
-                usage_type="ai_request_count",
-                quantity=1,
-                unit="requests",
-                provider="openai",
-                source="agent_core",
-                request_id=str(conversation.id),
-                metadata={"channel": channel},
-            )
-            await db.commit()
-        except Exception:  # noqa: BLE001
-            # Usage metering must never break the actual conversation turn —
-            # the turn itself already persisted successfully above. `db` is
-            # the caller's shared session (still used after handle_turn
-            # returns, e.g. whatsapp/adapter.py sending the reply within
-            # the same request), so a failed commit must be rolled back
-            # rather than left pending — matches every other try/commit/
-            # except pattern in this codebase (e.g. routers/crm.py).
-            await db.rollback()
-            logger.exception("usage_metering_failed", conversation_id=str(conversation.id))
-
-        return assistant_text
 
 
 # Module-level singleton — stateless, safe to share across requests.

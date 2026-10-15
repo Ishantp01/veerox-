@@ -319,6 +319,55 @@ export interface WhatsAppAsset {
   updated_at: string;
 }
 
+// Conversation Intelligence Engine (apps/api/core/conversation/).
+// "strict_script" = the existing script/tool-calling path; "human_conversation"
+// = the engine answers first on WhatsApp (and runs log-only on voice).
+export type ConversationMode = "strict_script" | "human_conversation";
+
+export interface ConversationEngineStatus {
+  conversation_mode: ConversationMode;
+}
+
+export type KnowledgeKind = "product" | "pricing" | "policy" | "faq";
+export type KnowledgeLanguage = "hi" | "en" | "hinglish";
+
+export interface KnowledgeItem {
+  id: string;
+  kind: KnowledgeKind;
+  title: string;
+  body: string;
+  keywords: string | null;
+  language: KnowledgeLanguage | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationTurn {
+  id: string;
+  conversation_id: string | null;
+  user_id: string | null;
+  channel: string;
+  /** "live" = reply was sent; "shadow" = log-only (voice). */
+  mode: "live" | "shadow";
+  user_text: string;
+  state: string | null;
+  intent: string | null;
+  scenario: string | null;
+  emotion: string | null;
+  language: string | null;
+  confidence: number | null;
+  source: "rules" | "llm" | null;
+  knowledge_ids: string[] | null;
+  action_id: string | null;
+  action_result: Record<string, unknown> | null;
+  reply_text: string | null;
+  /** Set when the engine fell back to the script path (timeout, invalid_output, low_confidence, ...). */
+  fallback_reason: string | null;
+  latency_ms: number | null;
+  created_at: string;
+}
+
 // One of an org's dedicated Plivo/Twilio/WhatsApp numbers — an org can have
 // several per provider (see apps/api/db/models/org_phone_number.py).
 // Outbound calls dial from whichever row per provider has is_default true;

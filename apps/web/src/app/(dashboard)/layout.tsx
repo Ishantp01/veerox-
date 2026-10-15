@@ -49,7 +49,7 @@ function FullScreenLoader() {
  * bounces a direct URL visit back to "/" too (see lib/orgFeatures.ts's
  * FEATURE_GATED_ROUTES).
  */
-const MEMBER_RESTRICTED_PREFIXES = ["/team", "/settings"];
+const MEMBER_RESTRICTED_PREFIXES = ["/team", "/settings", "/conversation-engine"];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { status, user } = useAuth();

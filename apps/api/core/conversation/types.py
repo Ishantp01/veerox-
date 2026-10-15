@@ -1,0 +1,83 @@
+"""Shared types and constants for the Conversation Intelligence Engine."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+# Scenario ids the engine understands (quotation §2.2 priority scenarios).
+SCENARIOS = (
+    "busy_callback",
+    "price_question",
+    "objection",
+    "interested",
+    "not_interested",
+    "confused",
+    "angry",
+    "unknown_question",
+    "human_handoff",
+    "greeting",
+)
+
+EMOTIONS = ("neutral", "positive", "negative", "angry", "confused")
+
+LANGUAGES = ("hi", "en", "hinglish")
+
+# Action ids the engine may request. "none" = reply only. Everything else is
+# the name of an existing tool in core/tools.py::DISPATCH_TABLE — the backend
+# runs it, the model never does.
+ALLOWED_ACTIONS = frozenset({"none", "request_callback", "transfer_to_human", "mark_not_interested"})
+
+# Structured memory keys the engine may store (quotation §2.1).
+MEMORY_KEYS = ("name", "business_type", "preferred_channel", "callback_time")
+
+# Conversation states, stored on each ConversationTurn.
+STATE_NEW = "new"
+STATE_ENGAGED = "engaged"
+STATE_AWAITING_CALLBACK_TIME = "awaiting_callback_time"
+STATE_CALLBACK_SET = "callback_set"
+STATE_HANDED_OFF = "handed_off"
+STATE_CLOSED = "closed"
+
+
+@dataclass
+class Understanding:
+    """Output of process 2.0 — what the customer meant."""
+
+    scenario: str
+    intent: str
+    emotion: str
+    language: str
+    confidence: float
+    source: str  # "rules" | "llm"
+    # Facts pulled out of the text: any of MEMORY_KEYS plus callback_date /
+    # callback_time_hhmm (ISO date + 24h time) when they were stated.
+    facts: dict[str, str] = field(default_factory=dict)
+    # Optional action id proposed by the LLM; validated by the engine.
+    proposed_action: str | None = None
+    tokens_in: int = 0
+    tokens_out: int = 0
+
+
+@dataclass
+class Decision:
+    """Output of process 4.0 — what to do about it."""
+
+    action_id: str
+    args: dict[str, Any]
+    # Reply kind consumed by reply.py: "answer", "ask_callback_time",
+    # "callback_confirmed", "handoff", "angry_handoff", "not_interested",
+    # "unknown_followup", "interested", "confused", "greeting".
+    reply_kind: str
+    knowledge: list[Any] = field(default_factory=list)
+    next_state: str = STATE_ENGAGED
+
+
+@dataclass
+class EngineResult:
+    """What the engine hands back to AgentCore."""
+
+    reply: str | None  # None => caller must use the legacy script path
+    fallback_reason: str | None = None
+    tokens_in: int = 0
+    tokens_out: int = 0

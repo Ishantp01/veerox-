@@ -13,6 +13,7 @@ import {
   DialogFooter,
   Input,
   Label,
+  Select,
   useToast,
 } from "@/components/ui";
 import { PhoneNumberListField, type PhoneNumberEntry } from "./phone-number-list-field";
@@ -20,6 +21,7 @@ import { OrgFeatureChecklist } from "./org-feature-checklist";
 import { useUpdateOrgAdmin, type AdminOrg } from "@/lib/hooks/useAdminOrgs";
 import { CountryCodeField } from "@/components/common/country-code-field";
 import { E164_REGEX, E164_MESSAGE } from "@/lib/phone";
+import type { ConversationMode } from "@/lib/types";
 
 const editOrgSchema = z.object({
   orgName: z.string().trim().min(1, "Organization name is required"),
@@ -105,6 +107,9 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
   const [maxTeamMembers, setMaxTeamMembers] = useState(
     () => org.max_team_members?.toString() ?? "",
   );
+  const [conversationMode, setConversationMode] = useState<ConversationMode>(
+    () => org.conversation_mode ?? "strict_script",
+  );
   const updateOrg = useUpdateOrgAdmin();
   const { toast } = useToast();
 
@@ -162,6 +167,7 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
         openai_api_key: credentials.openaiApiKey.trim() || undefined,
         enabled_features: enabledFeatures,
         max_team_members: maxTeamMembers.trim() ? Number(maxTeamMembers) : null,
+        conversation_mode: conversationMode,
       },
       {
         onSuccess: () => {
@@ -185,6 +191,7 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
       setCredentialsOpen(false);
       setEnabledFeatures(org.enabled_features);
       setMaxTeamMembers(org.max_team_members?.toString() ?? "");
+      setConversationMode(org.conversation_mode ?? "strict_script");
     } else {
       setFieldErrors({});
       updateOrg.reset();
@@ -284,6 +291,21 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
               maxTeamMembers={maxTeamMembers}
               onChangeMaxTeamMembers={setMaxTeamMembers}
             />
+            <div>
+              <Label htmlFor="edit-org-conversation-mode">Conversation behaviour</Label>
+              <Select
+                id="edit-org-conversation-mode"
+                value={conversationMode}
+                onChange={(value) => setConversationMode(value as ConversationMode)}
+              >
+                <option value="strict_script">Strict Script (default)</option>
+                <option value="human_conversation">Human Conversation</option>
+              </Select>
+              <p className="mt-1 text-xs text-slate-400">
+                Human Conversation lets the AI understand intent and use approved knowledge on
+                WhatsApp (voice is log-only). Switch back to Strict Script any time to roll back.
+              </p>
+            </div>
             <PhoneNumberListField
               id="edit-org-plivo-number"
               label="Dedicated Plivo numbers"

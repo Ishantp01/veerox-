@@ -143,6 +143,7 @@ def _org_admin_out(
         ],
         enabled_features=org.enabled_features,
         max_team_members=org.max_team_members,
+        conversation_mode=org.conversation_mode,
     )
 
 
@@ -248,6 +249,8 @@ async def update_org(
     if payload.openai_api_key:
         org_row.openai_api_key_encrypted = encrypt_secret(payload.openai_api_key.strip())
 
+    if fields.get("conversation_mode") is None:
+        fields.pop("conversation_mode", None)  # NOT NULL column — null means "leave as is"
     if fields.get("default_country_code") is None:
         fields.pop("default_country_code", None)  # NOT NULL column — null means "leave as is"
     if "name" in fields:

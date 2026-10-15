@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
-import type { OrgPhoneNumber } from "@/lib/types";
+import type { ConversationMode, OrgPhoneNumber } from "@/lib/types";
 
 export interface AdminOrg {
   id: string;
@@ -24,6 +24,9 @@ export interface AdminOrg {
   enabled_features: string[] | null;
   // null = unlimited — see apps/api/routers/team.py's invite_member.
   max_team_members: number | null;
+  // "strict_script" (default) | "human_conversation" — see
+  // apps/api/db/models/org.py's Org.conversation_mode.
+  conversation_mode: ConversationMode;
 }
 
 // Input shape for one number in ProvisionOrgInput/UpdateOrgInput's
@@ -153,6 +156,8 @@ export interface UpdateOrgInput {
   // explicit value (including null, to clear it) replaces it.
   enabled_features?: string[] | null;
   max_team_members?: number | null;
+  // Omitted = leave the org's behaviour mode untouched.
+  conversation_mode?: ConversationMode;
 }
 
 /**

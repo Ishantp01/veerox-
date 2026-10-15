@@ -41,6 +41,14 @@ jobs:
             # bare `docker compose` picks compose.yml by Compose v2's file
             # precedence, silently rebuilding the wrong stack.
             docker compose -f docker-compose.yml build
+            # Migrate BEFORE swapping containers, in a one-off container built
+            # from the NEW image (--no-deps: no other service is touched). The
+            # schema changes are additive, so the old containers keep serving
+            # the old code against the migrated database; and if the migration
+            # fails, script_stop aborts here and the old containers stay up
+            # on the old code. Previously `up -d` came first, which left every
+            # query that used a new column failing until `alembic upgrade head`
+            # finished (or forever, if it failed).
+            docker compose -f docker-compose.yml run --rm --no-deps api alembic upgrade head
             docker compose -f docker-compose.yml up -d
-            docker compose -f docker-compose.yml exec -T api alembic upgrade head
             docker image prune -f

@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   FileText,
   Paperclip,
+  Brain,
   Phone,
   UserCheck,
   AlertTriangle,
@@ -70,6 +71,7 @@ const GROUPS: NavGroup[] = [
       { href: "/whatsapp", label: "AI WhatsApp", Icon: WhatsappIcon, iconClassName: "text-green-500" },
       { href: "/whatsapp/templates", label: "WhatsApp Templates", Icon: FileText, iconClassName: "text-blue-400" },
       { href: "/whatsapp/media", label: "WhatsApp Media", Icon: WhatsappIcon, iconClassName: "text-green-500" },
+      { href: "/conversation-engine", label: "Conversation Engine", Icon: Brain, iconClassName: "text-purple-500" },
     ],
   },
   {
@@ -149,7 +151,7 @@ export interface NavProps {
 // Org-level pages (team management, connection settings) — visible to the
 // org's admin, hidden for a plain "member" so they land on their working
 // tools only, not the org's back office.
-const MEMBER_RESTRICTED_HREFS = new Set(["/team", "/settings"]);
+const MEMBER_RESTRICTED_HREFS = new Set(["/team", "/settings", "/conversation-engine"]);
 
 export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
   const pathname = usePathname();

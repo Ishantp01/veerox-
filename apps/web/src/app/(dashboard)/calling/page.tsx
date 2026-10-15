@@ -71,6 +71,18 @@ export default function CallingDialPage() {
       { to_phone: normalizePhone(values.to_phone, countryCode), provider: hasBothProviders ? provider : undefined },
       {
         onSuccess: (res) => {
+          // The backend answers 200 with status "stub" when the org has no
+          // Plivo/Twilio credentials, skipping the real call (see
+          // apps/api/routers/admin.py::outbound_call). That is NOT a placed call.
+          if (res.status === "stub") {
+            toast({
+              title: "No call was placed",
+              description:
+                "This organization has no Plivo or Twilio calling set up, so nothing was dialed. Add credentials and a number in Settings.",
+              variant: "error",
+            });
+            return;
+          }
           setCallSid(res.call_sid);
           toast({
             title: "Call initiated",

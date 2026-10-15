@@ -186,3 +186,13 @@ export {
   type AdminAwsCosts,
   type BillingPeriodCloseResult,
 } from "./useAdminUsage";
+export {
+  useConversationEngineStatus,
+  useConversationTurns,
+  useCreateKnowledgeItem,
+  useDeleteKnowledgeItem,
+  useKnowledgeItems,
+  useUpdateKnowledgeItem,
+  type ConversationTurnFilters,
+  type KnowledgeInput,
+} from "./useConversationEngine";

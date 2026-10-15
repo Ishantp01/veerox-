@@ -5,6 +5,7 @@ from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.contact import Contact
 from apps.api.db.models.conversation import Conversation
+from apps.api.db.models.conversation_engine import ConversationMemory, ConversationTurn, KnowledgeItem
 from apps.api.db.models.cost_allocation import CostAllocation
 from apps.api.db.models.cost_rate import CostRate
 from apps.api.db.models.follow_up import FollowUpRule, FollowUpTask
@@ -36,6 +37,9 @@ __all__ = [
     "CampaignTarget",
     "Contact",
     "Conversation",
+    "ConversationMemory",
+    "ConversationTurn",
+    "KnowledgeItem",
     "CostAllocation",
     "CostRate",
     "FollowUpRule",

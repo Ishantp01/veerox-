@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.voice import plivo_client
+from apps.api.config import settings
 from apps.api.core.org_credentials import resolve_plivo_credentials
 from apps.api.db.models.org import Org
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
@@ -94,7 +95,16 @@ async def register_all_org_plivo_numbers(db: AsyncSession) -> None:
     """Best-effort startup pass: for every org with its own Plivo
     credentials configured, register the inbound Answer URL for each of its
     dedicated Plivo numbers. Never raises — swallows and logs per-org
-    failures so one bad org can't block startup or other orgs."""
+    failures so one bad org can't block startup or other orgs.
+
+    Skipped entirely when ``PLIVO_STARTUP_REGISTRATION=false``. A dev server
+    must set that: it registers ``PUBLIC_BASE_URL`` (the dev ngrok URL) as the
+    answer URL of the Plivo account's shared application, which silently
+    reroutes production's inbound calls to the developer's laptop whenever the
+    dev ``.env`` carries the production Plivo credentials."""
+    if not settings.plivo_startup_registration:
+        logger.info("plivo_startup_registration_disabled")
+        return
     try:
         org_ids = (await db.execute(select(Org.id))).scalars().all()
     except Exception:

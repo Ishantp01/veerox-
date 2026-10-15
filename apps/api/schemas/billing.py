@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, EmailStr, field_validator
 
 from apps.api.core.phone import validate_country_code
-from apps.api.db.models.org import validate_org_features
+from apps.api.db.models.org import CONVERSATION_MODES, validate_org_features
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn, OrgPhoneNumberOut
 
 
@@ -39,6 +39,8 @@ class OrgAdminOut(BaseModel):
     enabled_features: list[str] | None = None
     # NULL = unlimited — see routers/team.py's invite_member.
     max_team_members: int | None = None
+    # "strict_script" | "human_conversation" — see Org.conversation_mode.
+    conversation_mode: str = "strict_script"
 
 
 class OrgUpdateIn(BaseModel):
@@ -90,8 +92,16 @@ class OrgUpdateIn(BaseModel):
     # back to "unrestricted" — see OrgAdminOut.enabled_features.
     enabled_features: list[str] | None = None
     max_team_members: int | None = None
+    conversation_mode: str | None = None
 
     _validate_enabled_features = field_validator("enabled_features")(validate_org_features)
+
+    @field_validator("conversation_mode")
+    @classmethod
+    def _validate_conversation_mode(cls, value: str | None) -> str | None:
+        if value is not None and value not in CONVERSATION_MODES:
+            raise ValueError(f"conversation_mode must be one of: {', '.join(CONVERSATION_MODES)}")
+        return value
 
     @field_validator("default_country_code")
     @classmethod

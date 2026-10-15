@@ -32,6 +32,7 @@ from apps.api.channels.voice import elevenlabs_client
 from apps.api.channels.voice import language_detect
 from apps.api.channels.voice import turn_controller
 from apps.api.config import settings
+from apps.api.core.conversation.shadow import schedule_voice_shadow
 from apps.api.core.memory import persist_turn
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS, get_or_create_lead_for_user
 from apps.api.db.models.campaign_target import CampaignTarget
@@ -877,6 +878,8 @@ async def _persist_voice_turn(state: CallState, assistant_text: str) -> None:
             user_text=user_text,
             assistant_text=assistant_text,
         )
+    # Conversation engine, log-only: never awaited, never affects the call.
+    schedule_voice_shadow(state.org_id, state.user_id, state.conversation_id, user_text)
     state.pending_user_transcript = None
 
 

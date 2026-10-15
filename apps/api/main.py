@@ -23,6 +23,7 @@ from apps.api.routers import (
     appointments,
     auth,
     billing,
+    conversation_engine,
     conversations,
     crm,
     diag,
@@ -121,6 +122,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(billing.router)
     app.include_router(conversations.router)
+    app.include_router(conversation_engine.router)
     app.include_router(leads.router)
     app.include_router(crm.router)
     app.include_router(appointments.router)

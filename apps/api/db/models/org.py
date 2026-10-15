@@ -55,6 +55,9 @@ def validate_org_features(features: list[str] | None) -> list[str] | None:
     return features
 
 
+CONVERSATION_MODES = ("strict_script", "human_conversation")
+
+
 class Org(Base):
     __tablename__ = "orgs"
 
@@ -96,6 +99,16 @@ class Org(Base):
     # routers/team.py's invite_member. NULL = unlimited (unchanged default
     # behavior for every org today).
     max_team_members: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Behaviour mode for the Conversation Intelligence Engine
+    # (core/conversation/). Deliberately its own opt-in column rather than an
+    # `enabled_features` key: NULL there means "every feature on", which
+    # would silently switch the engine on for every unrestricted org.
+    # "strict_script" (default) = unchanged script/tool-calling path;
+    # "human_conversation" = engine runs first on WhatsApp (and in log-only
+    # shadow mode on voice). See CONVERSATION_MODES.
+    conversation_mode: Mapped[str] = mapped_column(
+        String(24), nullable=False, server_default="strict_script"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

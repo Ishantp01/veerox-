@@ -71,6 +71,10 @@ export const queryKeys = {
   leadFollowUps: (filters?: { due?: boolean }) => ["lead-follow-ups", filters ?? {}] as const,
   templates: (filters?: { active?: boolean }) => ["whatsapp-templates", filters ?? {}] as const,
   whatsappAssets: () => ["whatsapp-assets"] as const,
+  conversationEngineStatus: () => ["conversation-engine", "status"] as const,
+  conversationEngineKnowledge: () => ["conversation-engine", "knowledge"] as const,
+  conversationEngineTurns: (filters: object) =>
+    ["conversation-engine", "turns", filters] as const,
   platformSettings: () => ["platform-settings"] as const,
   socialLinks: () => ["social-links"] as const,
 };

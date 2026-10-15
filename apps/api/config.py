@@ -72,6 +72,18 @@ class Settings(BaseSettings):
     # Any failure falls back to the older duration-based rules; set false to
     # turn it off entirely (saves the extra connection per call).
     voice_live_turn_detection: bool = True
+    # Register each org's Plivo numbers' inbound answer URL at every server
+    # start (channels/voice/plivo_provisioning.py). Leave ON in production;
+    # set PLIVO_STARTUP_REGISTRATION=false in any dev .env, otherwise starting
+    # a dev server re-points the shared Plivo application at the dev ngrok URL.
+    plivo_startup_registration: bool = True
+    # Conversation Intelligence Engine (core/conversation/). The per-org
+    # switch is Org.conversation_mode; these are global tuning/kill knobs.
+    # Voice only ever runs the engine in log-only shadow mode — set
+    # CONVERSATION_VOICE_SHADOW=false to stop the extra LLM calls entirely.
+    conversation_voice_shadow: bool = True
+    conversation_llm_timeout_seconds: float = 6.0
+    conversation_min_confidence: float = 0.6
     voice_live_transcribe_model: str = "gpt-live-transcribe"
     # gpt-live-transcribe streaming delay: minimal|low|medium|high|xhigh —
     # measured ~1s lower lag at "minimal" than the default.
