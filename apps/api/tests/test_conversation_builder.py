@@ -991,3 +991,27 @@ async def test_deleting_a_custom_scenario_removes_it_from_the_next_version_only(
         )
     ).json()
     assert body["scenario"] != "warranty_query"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I am busy , camm me Tommorow at 5pm",  # the real message that was booked for today
+        "I am busy, call me tomorow at 5 pm",
+        "I am busy, call me tmrw 5pm",
+        "I am busy, call me 2morrow at 5 pm",
+        "I am busy, call me tomorrow at 5 pm",
+    ],
+)
+def test_misspelt_tomorrow_still_means_tomorrow(text: str) -> None:
+    result = classify_with_rules(text, state=None, today=TODAY, config=default_config())
+    assert result is not None and result.scenario in ("busy_callback", "callback_request")
+    assert result.facts["callback_date"] == "2026-10-16"  # TODAY is 15 Oct
+    assert result.facts["callback_time_hhmm"] == "17:00"
+
+
+@pytest.mark.parametrize("text", ["I will borrow it later, busy now", "no sorrow, I am busy at 5 pm"])
+def test_words_that_only_look_like_tomorrow_do_not_move_the_date(text: str) -> None:
+    result = classify_with_rules(text, state=None, today=TODAY, config=default_config())
+    assert result is not None
+    assert result.facts.get("callback_date", "2026-10-15") == "2026-10-15"

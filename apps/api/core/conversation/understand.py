@@ -9,6 +9,7 @@ and the engine falls back to the legacy script path.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -360,6 +361,21 @@ _PAIN_RE = re.compile(
 _PAIN_REJECT = re.compile(r"^(nahi|nhi|nahin|no\b|not\b|koi nahi)", re.IGNORECASE)
 
 
+_TOMORROW_SHORT = frozenset({"tmrw", "tmr", "tmrow", "tomo", "2morrow", "2moro", "2mrw"})
+
+
+def _mentions_tomorrow(lowered: str) -> bool:
+    """"tomorrow" as people really type it on a phone: "tommorow", "tomorow",
+    "tmrw", "2morrow". A wrong date is worse than a missed one (a callback
+    booked for today instead of tomorrow), so close misspellings count."""
+    for token in re.findall(r"[a-z0-9]+", lowered):
+        if token in _TOMORROW_SHORT:
+            return True
+        if 6 <= len(token) <= 10 and difflib.get_close_matches(token, ["tomorrow"], n=1, cutoff=0.8):
+            return True
+    return False
+
+
 def _extract_facts(text: str, today: date) -> dict[str, str]:
     facts: dict[str, str] = {}
     name_match = _NAME_RE.search(text)
@@ -377,7 +393,7 @@ def _extract_facts(text: str, today: date) -> dict[str, str]:
 
     lowered = text.lower()
     callback_date: date | None = None
-    if re.search(r"\b(tomorrow|kal)\b|कल", lowered):
+    if re.search(r"\b(tomorrow|kal)\b|कल", lowered) or _mentions_tomorrow(lowered):
         callback_date = today + timedelta(days=1)
     elif re.search(r"\b(today|aaj)\b|आज", lowered):
         callback_date = today
