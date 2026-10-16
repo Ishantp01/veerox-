@@ -22,13 +22,14 @@ import {
   useToast,
 } from "@/components/ui";
 import {
+  useConversationEngineStatus,
   useCheckEngineConfig,
   useDiscardEngineDraft,
   useEngineConfig,
   usePublishEngineDraft,
   useSaveEngineDraft,
 } from "@/lib/hooks";
-import type { ConfigCheck, ScenarioConfig } from "@/lib/types";
+import type { ConfigCheck, ConversationMode, ScenarioConfig } from "@/lib/types";
 
 const ACTIONS: { id: string; label: string }[] = [
   { id: "request_callback", label: "Schedule a callback" },
@@ -39,6 +40,20 @@ const ACTIONS: { id: string; label: string }[] = [
 ];
 
 const ID_RE = /^[a-z][a-z0-9_]{1,30}$/;
+
+// Mirrors SMART_SCRIPT_ENGINE_SCENARIOS in apps/api/core/conversation/config.py:
+// the only scenarios the engine itself acts on in Smart Script mode. For every
+// other scenario Smart Script just hands the guidance to the org's script.
+const SMART_SCRIPT_ENGINE_IDS = new Set([
+  "human_handoff",
+  "angry",
+  "not_interested",
+  "busy_callback",
+  "callback_request",
+  "appointment_request",
+  "whatsapp_info_request",
+  "closing",
+]);
 
 function slugify(name: string): string {
   return name
@@ -107,11 +122,13 @@ function ProblemList({ title, items, tone }: { title: string; items: string[]; t
 function ScenarioForm({
   scenario,
   all,
+  mode,
   onChange,
   onRemove,
 }: {
   scenario: ScenarioConfig;
   all: ScenarioConfig[];
+  mode: ConversationMode | undefined;
   onChange: (next: ScenarioConfig) => void;
   onRemove: () => void;
 }) {
@@ -120,6 +137,11 @@ function ScenarioForm({
   const [jsonText, setJsonText] = useState("");
   const [jsonError, setJsonError] = useState<string | null>(null);
   const builtin = scenario.builtin === true;
+  // In Smart Script the engine only acts on a fixed list of built-in scenarios;
+  // for all others the org's script writes the reply, so a scenario's action and
+  // example reply are never used. Hide them instead of letting them mislead.
+  const scriptWritesReply =
+    mode === "smart_script" && !(builtin && SMART_SCRIPT_ENGINE_IDS.has(scenario.id));
   const customAction = scenario.actions.find((a) => a !== "none") ?? "none";
 
   useEffect(() => {
@@ -263,7 +285,16 @@ function ScenarioForm({
         </Field>
       </div>
 
-      {builtin ? (
+      {scriptWritesReply && (
+        <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+          Your organization is on <strong>Smart Script</strong>: your own script writes the reply, and
+          this scenario only guides it (situation, examples, goal, do and avoid). Actions and example
+          replies are hidden because they are not used in this mode. Switch to Human Conversation
+          (top of the page) to use them.
+        </p>
+      )}
+
+      {scriptWritesReply ? null : builtin ? (
         <Field
           label="Actions this scenario may use"
           hint="Unticking an action only removes it: the AI will still reply but will not run it. Nothing outside this list can ever run."
@@ -330,18 +361,20 @@ function ScenarioForm({
         </div>
       </Field>
 
-      <Field
-        label="Example reply"
-        htmlFor="sc-reply"
-        hint="A sample of the wanted tone. For a custom scenario it is also the wording used if the AI model is unavailable."
-      >
-        <Textarea
-          id="sc-reply"
-          rows={2}
-          value={scenario.reply_example}
-          onChange={(e) => patch({ reply_example: e.target.value })}
-        />
-      </Field>
+      {!scriptWritesReply && (
+        <Field
+          label="Example reply"
+          htmlFor="sc-reply"
+          hint="A sample of the wanted tone. For a custom scenario it is also the wording used if the AI model is unavailable."
+        >
+          <Textarea
+            id="sc-reply"
+            rows={2}
+            value={scenario.reply_example}
+            onChange={(e) => patch({ reply_example: e.target.value })}
+          />
+        </Field>
+      )}
 
       <div>
         <Button
@@ -473,6 +506,7 @@ function PublishDialog({
 
 export function ScenarioBuilder() {
   const config = useEngineConfig();
+  const status = useConversationEngineStatus();
   const check = useCheckEngineConfig();
   const save = useSaveEngineDraft();
   const discard = useDiscardEngineDraft();
@@ -729,6 +763,7 @@ export function ScenarioBuilder() {
                       key={selected.id}
                       scenario={selected}
                       all={scenarios}
+                      mode={status.data?.conversation_mode}
                       onChange={update}
                       onRemove={() => handleRemove(selected.id)}
                     />
