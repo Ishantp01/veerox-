@@ -24,6 +24,7 @@ export const ORG_FEATURES: { key: string; label: string }[] = [
   { key: "follow_up_tasks", label: "Follow-up reminders & tasks" },
   { key: "reports", label: "Reports" },
   { key: "team", label: "Team" },
+  { key: "conversation_engine", label: "Conversation Engine (scenarios, simulator, AI mode)" },
 ];
 
 /** True once `enabledFeatures` (from MeInfo.enabled_features) explicitly
@@ -63,6 +64,7 @@ export const FEATURE_GATED_ROUTES: { prefix: string; feature: string }[] = [
   { prefix: "/calling", feature: "calling" },
   { prefix: "/whatsapp", feature: "whatsapp" },
   { prefix: "/team", feature: "team" },
+  { prefix: "/conversation-engine", feature: "conversation_engine" },
 ];
 
 /** The feature key gating this pathname, if any — first matching prefix

@@ -40,6 +40,7 @@ AVAILABLE_ORG_FEATURES = (
     "leads",
     "reports",
     "team",
+    "conversation_engine",
 )
 
 
@@ -55,7 +56,7 @@ def validate_org_features(features: list[str] | None) -> list[str] | None:
     return features
 
 
-CONVERSATION_MODES = ("strict_script", "human_conversation")
+CONVERSATION_MODES = ("strict_script", "smart_script", "human_conversation")
 # What the engine does on VOICE for an org that is on human_conversation:
 # "off" = nothing, "shadow" = log-only (default), "live" = steers the call.
 CONVERSATION_VOICE_MODES = ("off", "shadow", "live")

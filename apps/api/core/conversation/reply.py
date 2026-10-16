@@ -13,6 +13,7 @@ from typing import Any
 
 import structlog
 
+from apps.api.core.conversation.config import ScenarioDef, scenario_guidance
 from apps.api.core.conversation.types import Decision, Understanding
 from apps.api.core.conversation.understand import LLMCall
 
@@ -21,9 +22,14 @@ logger = structlog.get_logger(__name__)
 # kind -> language -> text. {when} = "YYYY-MM-DD HH:MM" callback slot.
 _TEMPLATES: dict[str, dict[str, str]] = {
     "greeting": {
-        "en": "Hello! How can I help you today?",
-        "hinglish": "Namaste! Main aapki kya madad kar sakta hoon?",
-        "hi": "नमस्ते! मैं आपकी क्या मदद कर सकता हूँ?",
+        "en": "Hello{who}! How can I help you today?",
+        "hinglish": "Namaste{who}! Main aapki kya madad kar sakta hoon?",
+        "hi": "नमस्ते{who}! मैं आपकी क्या मदद कर सकता हूँ?",
+    },
+    "greeting_again": {
+        "en": "I'm here. What would you like to know?",
+        "hinglish": "Main yahin hoon. Aap kya jaanna chahenge?",
+        "hi": "मैं यहीं हूँ। आप क्या जानना चाहेंगे?",
     },
     "ask_callback_time": {
         "en": "No problem. When would be a good time for us to call you back?",
@@ -31,9 +37,9 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "hi": "कोई बात नहीं। हम आपको कब कॉल करें? बस समय बता दीजिए।",
     },
     "callback_confirmed": {
-        "en": "Done, we'll call you back on {when}. Thank you!",
-        "hinglish": "Theek hai, hum aapko {when} par call karenge. Dhanyavaad!",
-        "hi": "ठीक है, हम आपको {when} पर कॉल करेंगे। धन्यवाद!",
+        "en": "Done, we'll call you back on {when}. Thank you{who}!",
+        "hinglish": "Theek hai, hum aapko {when} par call karenge. Dhanyavaad{who}!",
+        "hi": "ठीक है, हम आपको {when} पर कॉल करेंगे। धन्यवाद{who}!",
     },
     "handoff": {
         "en": "Sure, I've asked a team member to get in touch with you shortly.",
@@ -85,6 +91,41 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "hinglish": "Confusion ke liye maaf kijiye. Aap thoda aur bata dijiye ki aap kya jaanna chahte hain?",
         "hi": "भ्रम के लिए क्षमा करें। आप थोड़ा और बता दीजिए कि आप क्या जानना चाहते हैं?",
     },
+    "identification": {
+        "en": "Thank you{who}! May I ask what kind of business you run?",
+        "hinglish": "Shukriya{who}! Kya main puch sakta hoon ki aap kaunsa business karte hain?",
+        "hi": "धन्यवाद{who}! क्या मैं पूछ सकता हूँ कि आप कौन सा बिज़नेस करते हैं?",
+    },
+    "discovery_business": {
+        "en": "Got it{who}. What kind of business do you run?",
+        "hinglish": "Samajh gaya{who}. Aap kaunsa business karte hain?",
+        "hi": "समझ गया{who}। आप कौन सा बिज़नेस करते हैं?",
+    },
+    "discovery_pain": {
+        "en": "Thanks for sharing{who}. What is the biggest challenge you face with it right now?",
+        "hinglish": "Batane ke liye shukriya{who}. Abhi aapko sabse badi dikkat kya aa rahi hai?",
+        "hi": "बताने के लिए धन्यवाद{who}। अभी आपको सबसे बड़ी परेशानी क्या आ रही है?",
+    },
+    "discovery_offer": {
+        "en": "Thanks{who}, that is something we can help with. Shall we set up a quick call to go through it?",
+        "hinglish": "Shukriya{who}, isme hum madad kar sakte hain. Kya hum ek quick call set kar dein?",
+        "hi": "धन्यवाद{who}, इसमें हम मदद कर सकते हैं। क्या हम एक छोटा कॉल तय कर दें?",
+    },
+    "discount_followup": {
+        "en": "I can't promise a discount myself, but our team can share the best offer. When is a good time for a quick call?",
+        "hinglish": "Discount ka vaada main khud nahi kar sakta, lekin hamari team best offer bata sakti hai. Aapko kab call karein?",
+        "hi": "छूट का वादा मैं खुद नहीं कर सकता, लेकिन हमारी टीम सबसे अच्छा ऑफर बता सकती है। आपको कब कॉल करें?",
+    },
+    "closing": {
+        "en": "Thank you{who}! Have a great day.",
+        "hinglish": "Dhanyavaad{who}! Aapka din shubh ho.",
+        "hi": "धन्यवाद{who}! आपका दिन शुभ हो।",
+    },
+    "guided": {
+        "en": "I understand. Let me help you with that.",
+        "hinglish": "Main samajh gaya. Main isme aapki madad karta hoon.",
+        "hi": "मैं समझ गया। मैं इसमें आपकी मदद करता हूँ।",
+    },
 }
 
 _NEXT_STEP = {
@@ -103,12 +144,90 @@ def _template(kind: str, language: str, **fmt: str) -> str:
     return by_language.get(language, by_language["en"]).format(**fmt)
 
 
+def _who(memory: dict[str, str] | None) -> str:
+    """" Asha" when we remember the customer's name, else an empty string."""
+    name = (memory or {}).get("name")
+    return f" {name}" if name else ""
+
+
+def _already_replied(history: list[dict[str, Any]] | None) -> bool:
+    return any(m.get("role") == "assistant" and m.get("content") for m in history or [])
+
+
+def _context_block(history: list[dict[str, Any]] | None, memory: dict[str, str] | None) -> str:
+    """Compact conversation context for the phrasing model: what we already
+    know about the customer and the last few messages."""
+    parts: list[str] = []
+    known = {k: v for k, v in (memory or {}).items() if v}
+    if known:
+        parts.append("Known about the customer: " + "; ".join(f"{k}: {v}" for k, v in known.items()))
+    recent = [
+        f"{m['role']}: {str(m.get('content') or '')[:200]}"
+        for m in (history or [])[-4:]
+        if m.get("role") in ("user", "assistant") and m.get("content")
+    ]
+    if recent:
+        parts.append("Recent conversation:\n" + "\n".join(recent))
+    return "\n".join(parts)
+
+
 def _facts_block(knowledge: list[Any]) -> str:
     return "\n".join(f"- {item.title}: {item.body}" for item in knowledge)
 
 
 def _extractive(knowledge: list[Any]) -> str:
     return knowledge[0].body.strip()[:_MAX_FALLBACK_CHARS]
+
+
+async def _guided_reply(
+    decision: Decision,
+    scenario_def: ScenarioDef | None,
+    *,
+    language: str,
+    text: str,
+    llm: LLMCall | None,
+    timeout: float,
+    history: list[dict[str, Any]] | None,
+    memory: dict[str, str] | None,
+) -> tuple[str, int, int]:
+    """Reply for a scenario the business defined (or a built-in whose action was
+    switched off): the model phrases it from the scenario's goal / do / avoid and
+    the approved facts only. Without a model the admin's example reply (or a
+    neutral line) is used, so a reply is always available."""
+    fallback = (scenario_def.reply_example if scenario_def else "").strip() or _template(
+        "guided", language
+    )
+    if llm is None:
+        return fallback, 0, 0
+    parts = [
+        f"Reply in {_LANGUAGE_NAME.get(language, 'English')}, in at most two short sentences suited "
+        "to being read aloud. Follow the situation guidance below. Never invent prices, dates, "
+        "offers or promises, and never claim an action was done unless told so."
+    ]
+    guidance = scenario_guidance(scenario_def)
+    if guidance:
+        parts.append(f"Situation guidance: {guidance}")
+    if scenario_def and scenario_def.reply_example:
+        parts.append(f"Example of the wanted style (do not copy exactly): {scenario_def.reply_example}")
+    if decision.knowledge:
+        parts.append("Approved facts you may use:\n" + _facts_block(decision.knowledge))
+    context = _context_block(history, memory)
+    if context:
+        parts.append(
+            "Do not repeat what the customer was already told and do not ask for things already "
+            f"known.\n{context}"
+        )
+    messages = [
+        {"role": "system", "content": "\n\n".join(parts)},
+        {"role": "user", "content": text},
+    ]
+    try:
+        result = await asyncio.wait_for(llm(messages), timeout=timeout)
+        phrased = (result.content or "").strip()
+        return (phrased or fallback), result.tokens_in, result.tokens_out
+    except Exception:  # noqa: BLE001 — keep the safe fallback line
+        logger.warning("conversation_guided_reply_failed", exc_info=True)
+        return fallback, 0, 0
 
 
 async def build_reply(
@@ -118,13 +237,28 @@ async def build_reply(
     text: str,
     llm: LLMCall | None,
     timeout: float,
+    history: list[dict[str, Any]] | None = None,
+    memory: dict[str, str] | None = None,
+    scenario_def: ScenarioDef | None = None,
 ) -> tuple[str, int, int]:
     """(reply, tokens_in, tokens_out). ``llm=None`` => no model call (shadow)."""
     language = understanding.language
+    if decision.reply_kind == "guided":
+        return await _guided_reply(
+            decision,
+            scenario_def,
+            language=language,
+            text=text,
+            llm=llm,
+            timeout=timeout,
+            history=history,
+            memory=memory,
+        )
     if decision.reply_kind == "answer":
         reply = _extractive(decision.knowledge)
         tokens_in = tokens_out = 0
         if llm is not None:
+            context = _context_block(history, memory)
             messages = [
                 {
                     "role": "system",
@@ -134,6 +268,13 @@ async def build_reply(
                         "Do not add prices, dates, promises or details that are not in them. If they "
                         "do not fully answer the question, say our team will confirm the rest.\n\n"
                         f"Approved facts:\n{_facts_block(decision.knowledge)}"
+                        + (
+                            "\n\nUse the context below so the reply fits the conversation: do not "
+                            "repeat what the customer was already told, and do not ask for things "
+                            f"already known.\n{context}"
+                            if context
+                            else ""
+                        )
                     ),
                 },
                 {"role": "user", "content": text},
@@ -153,4 +294,7 @@ async def build_reply(
     when = ""
     if decision.reply_kind in ("callback_confirmed", "appointment_confirmed"):
         when = f"{decision.args['date']} {decision.args['time']}"
-    return _template(decision.reply_kind, language, when=when), 0, 0
+    kind = decision.reply_kind
+    if kind == "greeting" and _already_replied(history):
+        kind = "greeting_again"  # the conversation is already under way
+    return _template(kind, language, when=when, who=_who(memory)), 0, 0

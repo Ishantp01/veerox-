@@ -225,3 +225,12 @@ async def client(
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture(autouse=True)
+def _reset_conversation_config_cache() -> None:
+    """The scenario-config caches are module-level and keyed by org/conversation
+    id; every test reuses the same ids against a fresh database."""
+    from apps.api.core.conversation.config import reset_config_cache
+
+    reset_config_cache()

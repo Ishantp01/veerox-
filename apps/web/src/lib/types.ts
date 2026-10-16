@@ -322,12 +322,15 @@ export interface WhatsAppAsset {
 // Conversation Intelligence Engine (apps/api/core/conversation/).
 // "strict_script" = the existing script/tool-calling path; "human_conversation"
 // = the engine answers first on WhatsApp (and runs log-only on voice).
-export type ConversationMode = "strict_script" | "human_conversation";
+export type ConversationMode = "strict_script" | "smart_script" | "human_conversation";
 /** What the engine does on voice calls for an org on Human Conversation. */
 export type ConversationVoiceMode = "off" | "shadow" | "live";
 
 export interface ConversationEngineStatus {
   conversation_mode: ConversationMode;
+  voice_mode: string;
+  active_config_version: number | null;
+  has_draft: boolean;
 }
 
 export type KnowledgeKind = "product" | "pricing" | "policy" | "faq";
@@ -367,7 +370,133 @@ export interface ConversationTurn {
   /** Set when the engine fell back to the script path (timeout, invalid_output, low_confidence, ...). */
   fallback_reason: string | null;
   latency_ms: number | null;
+  config_version: number | null;
+  /** Human review of what the engine understood (Shadow Mode accuracy). */
+  review_label: "correct" | "incorrect" | null;
+  review_scenario: string | null;
   created_at: string;
+}
+
+// --- Scenario Builder / simulator / audit / metrics (apps/api/routers/conversation_engine_config.py) ---
+
+export type EngineActionId =
+  | "none"
+  | "request_callback"
+  | "book_appointment"
+  | "send_whatsapp_message"
+  | "transfer_to_human"
+  | "mark_not_interested";
+
+export interface ScenarioConfig {
+  id: string;
+  name: string;
+  situation: string;
+  examples: string[];
+  goal: string;
+  should_do: string;
+  must_avoid: string;
+  actions: string[];
+  next_scenarios: string[];
+  enabled: boolean;
+  reply_example: string;
+  /** True for the built-in library; custom scenarios are false. */
+  builtin?: boolean;
+}
+
+export interface ConfigVersion {
+  id: string;
+  /** null while it is still a draft. */
+  version: number | null;
+  status: "draft" | "published";
+  note: string | null;
+  rolled_back_from: number | null;
+  created_by: string | null;
+  published_by: string | null;
+  created_at: string;
+  published_at: string | null;
+  scenario_count: number;
+  scenarios: ScenarioConfig[] | null;
+}
+
+export interface ConfigOverview {
+  active: ConfigVersion | null;
+  draft: ConfigVersion | null;
+  /** Complete scenario list a new draft starts from. */
+  base: ScenarioConfig[];
+}
+
+export interface ConfigCheck {
+  valid: boolean;
+  problems: string[];
+  regression: string[];
+}
+
+export interface SimulateInput {
+  text: string;
+  source: string;
+  state: string | null;
+  memory: Record<string, string>;
+  history: { role: "user" | "assistant"; content: string }[];
+  use_llm: boolean;
+  channel: "whatsapp" | "voice";
+}
+
+export interface SimulateResult {
+  config_version: number;
+  config_source: string;
+  state_before: string | null;
+  state_after: string | null;
+  scenario: string | null;
+  intent: string | null;
+  emotion: string | null;
+  language: string | null;
+  confidence: number | null;
+  source: "rules" | "llm" | null;
+  facts: Record<string, string>;
+  memory_after: Record<string, string>;
+  action_id: string | null;
+  action_args: Record<string, unknown> | null;
+  would_run_action: boolean;
+  reply_kind: string | null;
+  reply: string | null;
+  knowledge: { id: string; title: string }[];
+  guidance: string | null;
+  fallback_reason: string | null;
+  handled_by: string;
+  latency_ms: number;
+}
+
+export interface EngineAuditEvent {
+  id: string;
+  actor: string;
+  action: string;
+  target_type: string;
+  target_id: string | null;
+  detail: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface EngineMetrics {
+  days: number;
+  channel: string | null;
+  turns: number;
+  engine_answered: number;
+  handed_to_script_by_design: number;
+  fallbacks: number;
+  fallback_rate: number | null;
+  fallback_reasons: Record<string, number>;
+  latency_ms: { mean: number | null; p50: number | null; p95: number | null };
+  scenarios: Record<string, number>;
+  reviewed_turns: number;
+  scenario_accuracy: number | null;
+  conversations: number;
+  call_completion_rate: number | null;
+  appointments_booked: number;
+  appointment_conversion: number | null;
+  transfers: number;
+  transfer_rate: number | null;
+  by_channel: Record<string, number>;
+  by_mode: Record<string, number>;
 }
 
 // One of an org's dedicated Plivo/Twilio/WhatsApp numbers — an org can have

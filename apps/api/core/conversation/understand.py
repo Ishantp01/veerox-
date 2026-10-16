@@ -17,6 +17,7 @@ from typing import Any
 
 import structlog
 
+from apps.api.core.conversation.config import EngineConfig
 from apps.api.core.conversation.types import (
     ALLOWED_ACTIONS,
     EMOTIONS,
@@ -147,7 +148,7 @@ _RULES: dict[str, list[tuple[re.Pattern[str], float]]] = {
         (
             re.compile(
                 r"(too (expensive|costly|much)|expensive|costly|mehenga|mehnga|bahut zyada|"
-                r"discount|cheaper|already (have|use|using)|competitor|not sure|think about it|"
+                r"cheaper|already (have|use|using)|competitor|not sure|think about it|"
                 r"sochna|sochta|sochungi|sochunga|budget (nahi|nhi|issue)|महंगा|सोचना)",
                 re.IGNORECASE,
             ),
@@ -205,6 +206,58 @@ _RULES: dict[str, list[tuple[re.Pattern[str], float]]] = {
                 re.IGNORECASE,
             ),
             0.85,
+        ),
+    ],
+    # --- Scenario library additions (quotation 2.3) -------------------------
+    "identification": [
+        (
+            re.compile(
+                r"(yes[, ]+speaking|this is (me|he|she)\b|haan (ji )?(bol raha|bol rahi|boliye|bolo)|"
+                r"ji bol raha|bol raha (hoon|hun|hu)\b|bol rahi (hoon|hun|hu)\b|ji boliye|"
+                r"हाँ बोल रहा|जी बोलिए)",
+                re.IGNORECASE,
+            ),
+            0.78,
+        ),
+    ],
+    "discovery": [
+        (
+            re.compile(
+                r"(i (run|own|manage|have) (a |an |the |my )?[a-z ]{0,25}"
+                r"(business|agency|shop|store|company|firm|clinic|restaurant|hotel|school|salon|showroom|startup|factory)|"
+                r"we (run|own|manage|are a|have a) [a-z ]{0,25}"
+                r"(business|agency|shop|store|company|firm|clinic|restaurant|hotel|school|salon|showroom|startup|factory)|"
+                r"my (business|company|shop|store|agency|firm|clinic)|"
+                r"our (business|company|shop|store|agency|firm|problem|challenge)|"
+                r"(mera|hamara|meri|hamari) [a-z ]{0,25}(business|dukaan|shop|agency|company|clinic|hotel|school|team)|"
+                r"(problem|issue|challenge|dikkat|pareshani) (is|hai|yeh hai)|team size|employees|"
+                r"मेरा .{0,20}(बिज़नेस|दुकान|कंपनी)|हमारा .{0,20}(बिज़नेस|दुकान|कंपनी))",
+                re.IGNORECASE,
+            ),
+            0.75,
+        ),
+    ],
+    "discount_request": [
+        (
+            re.compile(
+                r"(discount|any offers?|koi offer|offers? hai|best price|final price|last price|"
+                r"reduce (the )?price|price (kam|kum)|kam kar(o|na|do)|rate (kam|kum)|negotiat|"
+                r"thoda (kam|sasta)|sasta|छूट|डिस्काउंट|ऑफर)",
+                re.IGNORECASE,
+            ),
+            0.88,
+        ),
+    ],
+    "closing": [
+        (
+            re.compile(
+                r"^\s*(?:(?:ok(?:ay)?|theek hai|thik hai|accha|achha|ji|alright|fine|great|sure|cool)[\s,.!]+)*"
+                r"(?:thanks?(?: you)?|thank you|dhanyavaad|dhanyawad|shukriya|bye|goodbye|good ?bye|"
+                r"that'?s all|that is all|nothing else|bas(?: itna(?: hi)?)?|धन्यवाद|शुक्रिया)"
+                r"(?:[\s,.!]+\w+){0,3}[\s.!]*$",
+                re.IGNORECASE,
+            ),
+            0.8,
         ),
     ],
 }
@@ -290,11 +343,37 @@ _CHANNEL_RE = re.compile(
 )
 
 
+_BUSINESS_NOUNS = (
+    r"business|agency|shop|store|company|firm|clinic|restaurant|hotel|school|salon|showroom|"
+    r"startup|factory|dukaan"
+)
+_BUSINESS_RE = re.compile(
+    rf"(?:\b(?:i|we)\s+(?:run|own|manage|have)\s+(?:a|an|the|my|our)?\s*|"
+    rf"\b(?:mera|hamara|meri|hamari|my|our)\s+)((?:[a-z]+\s+){{0,2}}(?:{_BUSINESS_NOUNS}))\b",
+    re.IGNORECASE,
+)
+_PAIN_RE = re.compile(
+    r"(?<!no )(?<!koi )\b(?:problem|issue|challenge|struggling with|difficulty|dikkat|pareshani|takleef)"
+    r"\s+(?:is|hai|yeh hai|ye hai|with|in|ki|that)?\s*([^.!?\n]{4,120})",
+    re.IGNORECASE,
+)
+_PAIN_REJECT = re.compile(r"^(nahi|nhi|nahin|no\b|not\b|koi nahi)", re.IGNORECASE)
+
+
 def _extract_facts(text: str, today: date) -> dict[str, str]:
     facts: dict[str, str] = {}
     name_match = _NAME_RE.search(text)
     if name_match and name_match.group(1).lower() not in _NAME_STOPWORDS:
         facts["name"] = name_match.group(1).strip().title()
+
+    business_match = _BUSINESS_RE.search(text)
+    if business_match:
+        facts["business_type"] = business_match.group(1).strip().title()[:80]
+    pain_match = _PAIN_RE.search(text)
+    if pain_match:
+        pain = pain_match.group(1).strip(" ,;:-")
+        if pain and not _PAIN_REJECT.match(pain):
+            facts["pain_point"] = pain[:120]
 
     lowered = text.lower()
     callback_date: date | None = None
@@ -349,8 +428,40 @@ def _extract_facts(text: str, today: date) -> dict[str, str]:
     return facts
 
 
+_BUSY_CUE_RE = re.compile(
+    r"(busy|later\b|meeting|driving|not a good time|abhi (time )?nahi|vyast|व्यस्त|बाद में|baad (me|mein))",
+    re.IGNORECASE,
+)
+# Weight of an admin-written example phrase: above the generic rules so a
+# business's own wording wins, below the hard-stop scenarios.
+_EXAMPLE_WEIGHT = 0.87
+
+
+def _normalise(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", text.lower(), flags=re.UNICODE)).strip()
+
+
+def _match_examples(text: str, config: EngineConfig) -> list[tuple[str, float]]:
+    """Scenarios whose admin-written example phrases appear in the text."""
+    normalised = f" {_normalise(text)} "
+    found: list[tuple[str, float]] = []
+    for scenario in config.scenarios.values():
+        if not scenario.enabled:
+            continue
+        for example in scenario.examples:
+            needle = _normalise(example)
+            if needle and f" {needle} " in normalised:
+                found.append((scenario.id, _EXAMPLE_WEIGHT))
+                break
+    return found
+
+
 def classify_with_rules(
-    text: str, *, state: str | None, today: date | None = None
+    text: str,
+    *,
+    state: str | None,
+    today: date | None = None,
+    config: EngineConfig | None = None,
 ) -> Understanding | None:
     """Return a confident Understanding, or None when the LLM should decide."""
     today = today or date.today()
@@ -359,10 +470,16 @@ def classify_with_rules(
 
     matched: list[tuple[str, float]] = []
     for scenario, patterns in _RULES.items():
+        if config is not None and not config.is_enabled(scenario):
+            continue  # switched off in the Scenario Builder
         for pattern, weight in patterns:
             if pattern.search(text):
                 matched.append((scenario, weight))
                 break
+    if config is not None:
+        for scenario_id, weight in _match_examples(text, config):
+            matched = [m for m in matched if m[0] != scenario_id]
+            matched.append((scenario_id, weight))
 
     # We asked "when should we call?" last turn and the customer answered with
     # a time — that is a callback request even if no keyword matched.
@@ -412,6 +529,16 @@ def classify_with_rules(
     if top_scenario == "busy_callback" and "callback_time_hhmm" in facts:
         confidence = min(_MAX_CONFIDENCE, confidence + 0.05)
 
+    # "Call me at 6" without any sign the customer is busy is a plain callback
+    # request, not a customer-busy situation; both are handled alike.
+    if (
+        top_scenario == "busy_callback"
+        and not _BUSY_CUE_RE.search(text)
+        and config is not None
+        and config.is_enabled("callback_request")
+    ):
+        top_scenario = "callback_request"
+
     return Understanding(
         scenario=top_scenario,
         intent=top_scenario,
@@ -423,20 +550,40 @@ def classify_with_rules(
     )
 
 
-_LLM_SYSTEM = (
-    "You classify ONE customer message for a sales/support assistant. Reply with a single JSON "
-    "object and nothing else, with keys: "
-    f'"scenario" (one of {list(SCENARIOS) + ["other"]}), '
-    '"intent" (short snake_case label), '
-    f'"emotion" (one of {list(EMOTIONS)}), '
-    f'"language" (one of {list(LANGUAGES)}), '
-    '"confidence" (number 0..1), '
-    '"facts" (object, optional keys name, business_type, preferred_channel, '
-    "callback_date as YYYY-MM-DD, callback_time_hhmm as HH:MM 24h), "
-    f'"action_id" (one of {sorted(ALLOWED_ACTIONS)}). '
-    'Use "unknown_question" when the customer asks something factual about the business. '
-    'Use "other" only for messages that fit no scenario. Never invent facts the customer did not state.'
-)
+def _llm_system(config: EngineConfig | None) -> str:
+    ids = config.enabled_ids() if config is not None else list(SCENARIOS)
+    catalog = ""
+    if config is not None:
+        lines = []
+        for scenario_id in ids:
+            scenario = config.get(scenario_id)
+            if scenario is None:
+                continue
+            line = f"- {scenario.id}: {scenario.name}"
+            if scenario.situation:
+                line += f" ({scenario.situation})"
+            if scenario.examples:
+                line += " e.g. " + "; ".join(f'"{e}"' for e in scenario.examples[:4])
+            lines.append(line[:400])
+        catalog = "\nScenarios:\n" + "\n".join(lines) + "\n"
+    return (
+        "You classify ONE customer message for a sales/support assistant. Reply with a single JSON "
+        "object and nothing else, with keys: "
+        f'"scenario" (one of {ids + ["other"]}), '
+        '"intent" (short snake_case label), '
+        f'"emotion" (one of {list(EMOTIONS)}), '
+        f'"language" (one of {list(LANGUAGES)}), '
+        '"confidence" (number 0..1), '
+        '"facts" (object, optional keys name, business_type, pain_point, preferred_channel, '
+        "callback_date as YYYY-MM-DD, callback_time_hhmm as HH:MM 24h), "
+        f'"action_id" (one of {sorted(ALLOWED_ACTIONS)}). '
+        'Use "unknown_question" when the customer asks something factual about the business. '
+        'Use "other" only for messages that fit no scenario. Never invent facts the customer did not state.'
+        f"{catalog}"
+    )
+
+
+_LLM_SYSTEM = _llm_system(None)
 
 
 def _parse_llm_json(content: str | None) -> dict[str, Any]:
@@ -469,6 +616,7 @@ async def classify_with_llm(
     llm: LLMCall,
     timeout: float,
     today: date | None = None,
+    config: EngineConfig | None = None,
 ) -> Understanding:
     today = today or date.today()
     context_lines = [
@@ -484,7 +632,7 @@ async def classify_with_llm(
         f"Customer message: {text}"
     )
     messages = [
-        {"role": "system", "content": _LLM_SYSTEM},
+        {"role": "system", "content": _llm_system(config) if config is not None else _LLM_SYSTEM},
         {"role": "user", "content": user_block},
     ]
     try:
@@ -502,8 +650,11 @@ async def classify_with_llm(
         confidence_cap = 0.5  # "fits nothing" must not look confident
     else:
         confidence_cap = 1.0
-    if scenario not in SCENARIOS:
+    valid = set(config.ids()) if config is not None else set(SCENARIOS)
+    if scenario not in valid:
         raise UnderstandError("invalid_output")
+    if config is not None and not config.is_enabled(scenario):
+        raise UnderstandError("scenario_disabled")
     try:
         confidence = float(data.get("confidence"))
     except (TypeError, ValueError):
@@ -549,10 +700,18 @@ async def understand(
     llm: LLMCall,
     timeout: float,
     today: date | None = None,
+    config: EngineConfig | None = None,
 ) -> Understanding:
-    ruled = classify_with_rules(text, state=state, today=today)
+    ruled = classify_with_rules(text, state=state, today=today, config=config)
     if ruled is not None:
         return ruled
     return await classify_with_llm(
-        text, history=history, state=state, memory=memory, llm=llm, timeout=timeout, today=today
+        text,
+        history=history,
+        state=state,
+        memory=memory,
+        llm=llm,
+        timeout=timeout,
+        today=today,
+        config=config,
     )

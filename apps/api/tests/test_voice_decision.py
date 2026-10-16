@@ -40,6 +40,12 @@ def _reset(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
+def live_cache() -> None:
+    """The call path only waits for an org it already knows is on live voice."""
+    voice_decision.set_cached_voice_mode(ORG_ID, "live")
+
+
+@pytest.fixture
 def session_factory(test_engine, monkeypatch: pytest.MonkeyPatch) -> async_sessionmaker[AsyncSession]:
     factory = async_sessionmaker(bind=test_engine, expire_on_commit=False)
     monkeypatch.setattr(voice_decision, "AsyncSessionLocal", factory)
@@ -333,6 +339,7 @@ async def test_without_a_decision_the_reply_is_exactly_what_it_always_was() -> N
     assert ws.sent == [{"type": "response.create"}]
 
 
+@pytest.mark.usefixtures("live_cache")
 async def test_a_ready_decision_steers_the_reply(monkeypatch: pytest.MonkeyPatch) -> None:
     ws = _FakeSocket()
     state = _state(voice_decision_text="kal 5 baje call karna")
@@ -353,6 +360,7 @@ async def test_a_ready_decision_steers_the_reply(monkeypatch: pytest.MonkeyPatch
     assert state.voice_decision_task is None  # consumed
 
 
+@pytest.mark.usefixtures("live_cache")
 async def test_no_tool_choice_override_when_no_action_ran(monkeypatch: pytest.MonkeyPatch) -> None:
     ws = _FakeSocket()
     state = _state(voice_decision_text="kal 5 baje call karna")
@@ -367,6 +375,7 @@ async def test_no_tool_choice_override_when_no_action_ran(monkeypatch: pytest.Mo
     assert "tool_choice" not in ws.sent[0]["response"]
 
 
+@pytest.mark.usefixtures("live_cache")
 async def test_a_late_decision_is_dropped_and_never_applied(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "conversation_voice_decision_budget_seconds", 0.05)
     applied: list[Any] = []
@@ -389,6 +398,7 @@ async def test_a_late_decision_is_dropped_and_never_applied(monkeypatch: pytest.
     assert task.cancelled()
 
 
+@pytest.mark.usefixtures("live_cache")
 async def test_a_stale_decision_for_an_older_utterance_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     called: list[Any] = []
 
@@ -405,6 +415,7 @@ async def test_a_stale_decision_for_an_older_utterance_is_ignored(monkeypatch: p
     assert ws.sent == [{"type": "response.create"}] and called == []
 
 
+@pytest.mark.usefixtures("live_cache")
 async def test_no_plan_or_a_failing_decision_leaves_the_reply_untouched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -423,6 +434,7 @@ async def test_no_plan_or_a_failing_decision_leaves_the_reply_untouched(
         assert ws.sent == [{"type": "response.create"}]
 
 
+@pytest.mark.usefixtures("live_cache")
 async def test_apply_returning_nothing_leaves_the_reply_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_apply(plan: Any, **kwargs: Any) -> None:
         return None
@@ -436,6 +448,7 @@ async def test_apply_returning_nothing_leaves_the_reply_untouched(monkeypatch: p
     assert ws.sent == [{"type": "response.create"}]
 
 
+@pytest.mark.usefixtures("live_cache")
 async def test_the_restate_branch_never_consults_the_decision(monkeypatch: pytest.MonkeyPatch) -> None:
     called: list[Any] = []
 
@@ -474,3 +487,78 @@ async def test_starting_a_decision_respects_the_global_switch(monkeypatch: pytes
     assert state.voice_decision_task is not first
     await asyncio.sleep(0)
     assert first.cancelled() or first.done()
+
+
+# --- existing orgs are never slowed down or touched --------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["none", "off", "shadow"])
+async def test_a_reply_never_waits_for_an_org_that_is_not_live(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    voice_decision.set_cached_voice_mode(ORG_ID, mode)
+    applied: list[Any] = []
+
+    async def fake_apply(plan: Any, **kwargs: Any) -> VoiceReply:
+        applied.append(plan)
+        return VoiceReply(instruction="x", tool_choice_none=True)
+
+    monkeypatch.setattr(voice_decision, "apply_voice_plan", fake_apply)
+    ws = _FakeSocket()
+    state = _state(voice_decision_text="kal 5 baje call karna")
+    state.voice_decision_started = time.monotonic()
+    state.voice_decision_task = _task_returning(object(), delay=5.0)  # would stall for 5 s
+    started = time.monotonic()
+    await adapter._fire_pending_reply(ws, state)
+    assert time.monotonic() - started < 0.3  # sent at once, as it always has been
+    assert ws.sent == [{"type": "response.create"}]
+    assert applied == []
+
+
+async def test_a_reply_for_an_org_not_seen_yet_does_not_wait_either(monkeypatch: pytest.MonkeyPatch) -> None:
+    voice_decision.reset_flag_cache()  # cold cache
+    ws = _FakeSocket()
+    state = _state(voice_decision_text="kal 5 baje call karna")
+    state.voice_decision_started = time.monotonic()
+    state.voice_decision_task = _task_returning(object(), delay=5.0)
+    started = time.monotonic()
+    await adapter._fire_pending_reply(ws, state)
+    assert time.monotonic() - started < 0.3
+    assert ws.sent == [{"type": "response.create"}]
+
+
+async def test_no_task_is_even_started_for_an_org_known_not_to_be_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: list[str] = []
+
+    async def fake_compute(*args: Any) -> None:
+        started.append(args[3])
+
+    monkeypatch.setattr(voice_decision, "compute_voice_plan", fake_compute)
+    voice_decision.set_cached_voice_mode(ORG_ID, "shadow")
+    state = _state()
+    adapter._start_voice_decision(state, "hello")
+    assert state.voice_decision_task is None and started == []
+
+    # Unknown or expired -> a background check refreshes the cache, so switching
+    # an org to live still takes effect.
+    voice_decision.reset_flag_cache()
+    adapter._start_voice_decision(state, "hello")
+    assert state.voice_decision_task is not None
+    await asyncio.sleep(0)
+    assert started == ["hello"]
+
+
+async def test_shadow_logging_does_not_open_a_session_for_non_shadow_orgs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apps.api.core.conversation import shadow
+
+    def boom() -> Any:
+        raise AssertionError("a database session was opened for an org that is not in log-only mode")
+
+    monkeypatch.setattr(shadow, "AsyncSessionLocal", boom)
+    for mode in ("none", "off", "live"):
+        voice_decision.set_cached_voice_mode(ORG_ID, mode)
+        await shadow._run_shadow(ORG_ID, USER_ID, uuid.uuid4(), "hello there")  # must return quietly

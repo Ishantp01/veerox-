@@ -91,6 +91,12 @@ class Settings(BaseSettings):
     # continues exactly as it does today, and the model-call timeout inside it.
     conversation_voice_decision_budget_seconds: float = 1.0
     conversation_voice_llm_timeout_seconds: float = 0.9
+    # Silence handling on live-voice calls: after the agent finishes, this many
+    # seconds of caller silence trigger a gentle "are you there?"; after
+    # CONVERSATION_SILENCE_MAX_CHECKS of those the call enters the
+    # connection-issue state. 0 switches silence handling off.
+    conversation_silence_check_seconds: float = 8.0
+    conversation_silence_max_checks: int = 2
     conversation_llm_timeout_seconds: float = 6.0
     conversation_min_confidence: float = 0.6
     voice_live_transcribe_model: str = "gpt-live-transcribe"

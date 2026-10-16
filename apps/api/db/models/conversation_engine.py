@@ -68,6 +68,16 @@ class ConversationTurn(Base):
     # invalid_output, low_confidence, error, ...). NULL = engine answered.
     fallback_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The configuration version this turn ran under (NULL = built-in defaults).
+    config_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("conversation_config_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    config_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Human review (Shadow Mode accuracy): "correct" | "incorrect".
+    review_label: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    review_scenario: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
@@ -119,4 +129,57 @@ class KnowledgeItem(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class ConversationConfigVersion(Base):
+    """One scenario configuration for an org.
+
+    ``status``: ``draft`` (editable, at most one per org, ``version`` NULL) or
+    ``published`` (immutable, numbered 1, 2, 3 ... per org). The active
+    configuration is the highest published version; a rollback publishes a
+    copy of an older version as a new one, so history is never rewritten.
+    """
+
+    __tablename__ = "conversation_config_versions"
+    __table_args__ = (UniqueConstraint("org_id", "version", name="uq_conversation_config_version"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    org_id: Mapped[UUID] = mapped_column(
+        ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(10), nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Set on a rollback copy: the version it was copied from.
+    rolled_back_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    published_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AuditEvent(Base):
+    """Who changed what in the engine's configuration (quotation D7)."""
+
+    __tablename__ = "conversation_audit_events"
+    __table_args__ = (Index("ix_conversation_audit_org_created", "org_id", "created_at"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    org_id: Mapped[UUID] = mapped_column(
+        ForeignKey("orgs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    actor: Mapped[str] = mapped_column(String(120), nullable=False)
+    action: Mapped[str] = mapped_column(String(48), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )

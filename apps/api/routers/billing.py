@@ -27,6 +27,7 @@ from sqlalchemy.orm import selectinload
 from apps.api.channels.voice.org_numbers import replace_org_phone_numbers
 from apps.api.channels.voice.plivo_provisioning import fire_and_forget_register_org_plivo_numbers
 from apps.api.channels.whatsapp.webhook_registration import fire_and_forget_register_org_webhook
+from apps.api.core.conversation.builder import add_audit as add_conversation_audit
 from apps.api.core.crypto import encrypt_secret
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import invalidate_user_sessions
@@ -261,6 +262,18 @@ async def update_org(
         if not name:
             raise HTTPException(status_code=400, detail="Organization name cannot be empty")
         fields["name"] = name
+    for mode_field in ("conversation_mode", "conversation_voice_mode"):
+        if mode_field in fields and fields[mode_field] != getattr(org_row, mode_field):
+            # Switching the engine on or off for an org is an audited event.
+            add_conversation_audit(
+                db,
+                org_row.id,
+                "platform-admin",
+                f"org.{mode_field}_changed",
+                "org",
+                str(org_row.id),
+                {"from": getattr(org_row, mode_field), "to": fields[mode_field]},
+            )
     for field, value in fields.items():
         setattr(org_row, field, value)
     if phone_numbers is not None:

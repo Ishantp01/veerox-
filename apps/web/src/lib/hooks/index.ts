@@ -196,3 +196,18 @@ export {
   type ConversationTurnFilters,
   type KnowledgeInput,
 } from "./useConversationEngine";
+export {
+  useCheckEngineConfig,
+  useConfigVersions,
+  useDiscardEngineDraft,
+  useEngineAudit,
+  useEngineConfig,
+  useEngineMetrics,
+  usePublishEngineDraft,
+  useReviewTurn,
+  useRollbackEngineConfig,
+  useSaveEngineDraft,
+  useSetConversationMode,
+  useSimulateTurn,
+  type DraftInput,
+} from "./useConversationEngineBuilder";

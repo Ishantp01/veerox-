@@ -31,24 +31,32 @@ from uuid import UUID
 import structlog
 
 from apps.api.config import settings
+from apps.api.core.conversation.config import (
+    SMART_SCRIPT_ENGINE_SCENARIOS,
+    EngineConfig,
+    resolve_config,
+    scenario_guidance,
+)
 from apps.api.core.conversation.decide import decide, validate_action
 from apps.api.core.conversation.engine import (
-    _KNOWLEDGE_SCENARIOS,
     _default_llm,
     _last_state,
     _log_turn,
+    wants_knowledge,
 )
 from apps.api.core.conversation.knowledge import find_knowledge
 from apps.api.core.conversation.memory import load_memory, save_facts
 from apps.api.core.conversation.types import (
     ALLOWED_ACTIONS,
     MEMORY_KEYS,
+    STATE_CONNECTION_ISSUE,
     Decision,
     Understanding,
 )
 from apps.api.core.conversation.understand import UnderstandError, understand
 from apps.api.core.memory import load_last_n
 from apps.api.core.org_openai_key import resolve_openai_api_key
+from apps.api.db.models.conversation_engine import ConversationTurn
 from apps.api.db.models.org import Org
 from apps.api.db.session import AsyncSessionLocal
 
@@ -58,7 +66,11 @@ logger = structlog.get_logger(__name__)
 Dispatch = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 _FLAG_TTL_SECONDS = 30.0
-_flag_cache: dict[UUID, tuple[float, bool]] = {}
+# org id -> (checked at, mode) where mode is the org's voice mode while it is on
+# human_conversation ("off" / "shadow" / "live") and "none" otherwise.
+_mode_cache: dict[UUID, tuple[float, str]] = {}
+# org id -> True while the org is on Smart Script (refreshed with _mode_cache).
+_smart_cache: dict[UUID, bool] = {}
 
 _LANGUAGE_NAME = {
     "en": "English",
@@ -76,6 +88,9 @@ class VoicePlan:
     memory: dict[str, str]
     state_before: str | None
     started: float
+    # The scenario's goal / do / avoid, for guided replies and Smart Script.
+    guidance: str = ""
+    config: EngineConfig | None = None
 
 
 @dataclass
@@ -88,28 +103,56 @@ class VoiceReply:
     tool_choice_none: bool
 
 
-async def voice_live_enabled(org_id: UUID) -> bool:
-    """Global ceiling AND this org opted in. Cached briefly so the check costs
-    nothing on most turns, but a switch change takes effect within seconds."""
-    if not settings.conversation_voice_live:
-        return False
-    cached = _flag_cache.get(org_id)
+async def org_voice_mode(org_id: UUID) -> str:
+    """What the engine does on this org's calls: "live", "shadow", "off", or
+    "none" (the org isn't on Human Conversation). One DB read per org every
+    few seconds, so ordinary calls pay nothing for the check."""
+    cached = _mode_cache.get(org_id)
     now = time.monotonic()
     if cached is not None and now - cached[0] < _FLAG_TTL_SECONDS:
         return cached[1]
     async with AsyncSessionLocal() as db:
         org = await db.get(Org, org_id)
-    live = bool(
-        org is not None
-        and org.conversation_mode == "human_conversation"
-        and org.conversation_voice_mode == "live"
-    )
-    _flag_cache[org_id] = (now, live)
-    return live
+    mode = "none"
+    if org is not None and org.conversation_mode in ("human_conversation", "smart_script"):
+        mode = org.conversation_voice_mode
+    _mode_cache[org_id] = (now, mode)
+    _smart_cache[org_id] = org is not None and org.conversation_mode == "smart_script"
+    return mode
+
+
+def cached_voice_mode(org_id: UUID) -> tuple[str | None, bool]:
+    """(last known mode, still fresh?) without touching the database or
+    waiting. ``(None, False)`` for an org not seen yet. The call path uses this
+    so that an org that is not on live voice can never be slowed down."""
+    cached = _mode_cache.get(org_id)
+    if cached is None:
+        return None, False
+    return cached[1], time.monotonic() - cached[0] < _FLAG_TTL_SECONDS
+
+
+def set_cached_voice_mode(org_id: UUID, mode: str) -> None:
+    """Seed the cache (used by tests and by anything that just changed the setting)."""
+    _mode_cache[org_id] = (time.monotonic(), mode)
+
+
+async def voice_live_enabled(org_id: UUID) -> bool:
+    """Global ceiling AND this org opted in. A switch change takes effect
+    within a few seconds."""
+    if not settings.conversation_voice_live:
+        return False
+    return await org_voice_mode(org_id) == "live"
+
+
+def forget_org(org_id: UUID) -> None:
+    """Drop the cached mode for one org, so a mode change takes effect at once."""
+    _mode_cache.pop(org_id, None)
+    _smart_cache.pop(org_id, None)
 
 
 def reset_flag_cache() -> None:
-    _flag_cache.clear()
+    _mode_cache.clear()
+    _smart_cache.clear()
 
 
 async def compute_voice_plan(
@@ -127,6 +170,7 @@ async def compute_voice_plan(
             state = await _last_state(db, org_id, conversation_id)
             memory = await load_memory(db, org_id, user_id)
             history = await load_last_n(db, user_id, n=4)
+            config = await resolve_config(db, org_id, conversation_id)
             understanding: Understanding | None = None
             fallback: str | None = None
             try:
@@ -137,6 +181,7 @@ async def compute_voice_plan(
                     memory=memory,
                     llm=_default_llm(api_key),
                     timeout=settings.conversation_voice_llm_timeout_seconds,
+                    config=config,
                 )
             except UnderstandError as exc:
                 fallback = exc.reason
@@ -161,14 +206,36 @@ async def compute_voice_plan(
                     understanding=understanding,
                     state=state,
                     fallback_reason=fallback,
+                    config=config,
                 )
                 return None
             assert understanding is not None
+            if _smart_cache.get(org_id) and (
+                understanding.scenario not in SMART_SCRIPT_ENGINE_SCENARIOS
+            ):
+                # Smart Script: keep the org's script, add this scenario's guidance.
+                guidance = scenario_guidance(config.get(understanding.scenario))
+                if not guidance:
+                    return None
+                return VoicePlan(
+                    understanding,
+                    Decision("none", {}, "script_guidance", next_state=state or "engaged"),
+                    memory,
+                    state,
+                    started,
+                    guidance,
+                    config,
+                )
             knowledge: list[Any] = []
-            if understanding.scenario in _KNOWLEDGE_SCENARIOS:
+            if wants_knowledge(understanding.scenario, config):
                 knowledge = await find_knowledge(db, org_id, text, understanding.language)
             decision = decide(
-                understanding, text=text, memory=memory, knowledge=knowledge, channel="voice"
+                understanding,
+                text=text,
+                memory=memory,
+                knowledge=knowledge,
+                channel="voice",
+                config=config,
             )
             if not validate_action(decision.action_id, decision.args):
                 await _log_turn(
@@ -184,9 +251,19 @@ async def compute_voice_plan(
                     decision=decision,
                     state=state,
                     fallback_reason="invalid_action",
+                    config=config,
                 )
                 return None
-            return VoicePlan(understanding, decision, memory, state, started)
+            defined = config.get(understanding.scenario)
+            return VoicePlan(
+                understanding,
+                decision,
+                memory,
+                state,
+                started,
+                scenario_guidance(defined) if decision.reply_kind == "guided" else "",
+                config,
+            )
     except Exception:  # noqa: BLE001 — a decision problem must never reach the caller
         logger.warning("voice_decision_failed", org_id=str(org_id), exc_info=True)
         return None
@@ -243,6 +320,31 @@ def build_instruction(plan: VoicePlan, *, action_result: dict[str, Any] | None) 
             "are not in them. If they do not fully answer the question, say the team will "
             f"confirm the rest.\nApproved facts:\n{facts}"
         )
+    elif kind == "identification":
+        body = "Thank the caller, use their name if known, and ask what kind of business they run."
+    elif kind == "discovery_business":
+        body = "Acknowledge what they said and ask what kind of business they run."
+    elif kind == "discovery_pain":
+        body = "Thank them for sharing and ask ONE question: the biggest challenge they face right now."
+    elif kind == "discovery_offer":
+        body = "Acknowledge their challenge, say we can help and offer a quick call or demo."
+    elif kind == "discount_followup":
+        body = (
+            "Do not promise any discount or offer. Say the team can share the best offer and ask "
+            "when a quick call would suit them."
+        )
+    elif kind == "closing":
+        body = "The caller is wrapping up. Thank them warmly and say goodbye. Do not pitch again."
+    elif kind == "guided":
+        body = (
+            f"Follow this situation guidance: {plan.guidance or 'help the caller politely'} "
+            "Never invent prices, dates or promises."
+        )
+    elif kind == "script_guidance":
+        body = (
+            "Carry on with your script, but apply this guidance for this turn: "
+            f"{plan.guidance} Do not mention that you were given guidance."
+        )
     elif kind == "objection_followup":
         body = (
             "The caller raised an objection. Acknowledge it without arguing, and offer a "
@@ -257,6 +359,15 @@ def build_instruction(plan: VoicePlan, *, action_result: dict[str, Any] | None) 
 
     if action_result is not None and action_result.get("status") == "error":
         body += " The action did not complete; do not claim it did."
+    # Continuity: what we already know about the caller, so the agent neither
+    # asks for it again nor repeats itself.
+    known = {**plan.memory, **{k: v for k, v in plan.understanding.facts.items() if k in MEMORY_KEYS}}
+    known = {k: v for k, v in known.items() if v}
+    if known:
+        body += " Already known about the caller (do not ask for it again): " + "; ".join(
+            f"{k}: {v}" for k, v in known.items()
+        ) + "."
+    body += " Do not repeat information you have already given in this call."
     return f"DECISION FOR THIS TURN: {lead}{body}"
 
 
@@ -301,6 +412,7 @@ async def apply_voice_plan(
                             state=plan.state_before,
                             action_result=action_result,
                             fallback_reason="action_failed",
+                            config=plan.config,
                         )
                     return None
                 done_actions.add(key)
@@ -329,8 +441,40 @@ async def apply_voice_plan(
                 knowledge_ids=[str(item.id) for item in decision.knowledge],
                 action_result=action_result,
                 reply=f"[voice instruction] {instruction}",
+                config=plan.config,
             )
         return VoiceReply(instruction=instruction, tool_choice_none=executed)
     except Exception:  # noqa: BLE001
         logger.warning("voice_decision_apply_failed", exc_info=True)
         return None
+
+
+async def log_silence_event(
+    org_id: UUID, user_id: UUID, conversation_id: UUID, *, kind: str
+) -> None:
+    """Turn-log row for a silence prompt ("check") or the call entering the
+    connection-issue state. Best effort: never raises."""
+    try:
+        async with AsyncSessionLocal() as db:
+            db.add(
+                ConversationTurn(
+                    org_id=org_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    channel="voice",
+                    mode="live",
+                    user_text="(silence)",
+                    state=STATE_CONNECTION_ISSUE if kind == "connection_issue" else None,
+                    intent=kind,
+                    scenario="silence",
+                    reply_text=(
+                        "[silence] caller unreachable, ending politely"
+                        if kind == "connection_issue"
+                        else "[silence] gentle check"
+                    ),
+                    latency_ms=0,
+                )
+            )
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.warning("voice_silence_log_failed", exc_info=True)

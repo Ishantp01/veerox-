@@ -304,21 +304,23 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
                 onChange={(value) => setConversationMode(value as ConversationMode)}
               >
                 <option value="strict_script">Strict Script (default)</option>
+                <option value="smart_script">Smart Script (your script, steered by scenarios)</option>
                 <option value="human_conversation">Human Conversation</option>
               </Select>
               <p className="mt-1 text-xs text-slate-400">
-                Human Conversation lets the AI understand intent and use approved knowledge on
-                WhatsApp. Voice calls follow the setting below. Switch back to Strict Script any time
-                to roll back.
+                Smart Script keeps your script for most replies and only lets the AI act on callbacks,
+                appointments, hand-offs and opt-outs. Human Conversation lets the AI understand intent
+                and use approved knowledge on WhatsApp. Voice calls follow the setting below. Switch
+                back to Strict Script any time to roll back.
               </p>
             </div>
             <div>
-              <Label htmlFor="edit-org-conversation-voice-mode">Voice calls (Human Conversation only)</Label>
+              <Label htmlFor="edit-org-conversation-voice-mode">Voice calls (Smart Script / Human Conversation)</Label>
               <Select
                 id="edit-org-conversation-voice-mode"
                 value={conversationVoiceMode}
                 onChange={(value) => setConversationVoiceMode(value as ConversationVoiceMode)}
-                disabled={conversationMode !== "human_conversation"}
+                disabled={conversationMode === "strict_script"}
               >
                 <option value="off">Off: the engine does nothing on calls</option>
                 <option value="shadow">Log only (default): records what it would do, never changes the call</option>

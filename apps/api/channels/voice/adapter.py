@@ -33,6 +33,7 @@ from apps.api.channels.voice import language_detect
 from apps.api.channels.voice import turn_controller
 from apps.api.config import settings
 from apps.api.core.conversation import voice_decision
+from apps.api.core.conversation.silence import SilenceMonitor
 from apps.api.core.conversation.shadow import schedule_voice_shadow
 from apps.api.core.memory import persist_turn
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS, get_or_create_lead_for_user
@@ -118,6 +119,10 @@ class CallState:
     voice_decision_text: str = ""
     voice_decision_started: float = 0.0
     voice_actions_done: set[str] = field(default_factory=set)
+    # Silence handling (core/conversation/silence.py): only created for orgs on
+    # live voice mode, the first time one of the agent's responses finishes.
+    silence: SilenceMonitor | None = field(default=None, repr=False)
+    silence_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
     # Mid-answer acknowledgment state machine. ~ACK_GAP_SECONDS after the
     # caller finishes a question that overlapped the agent's answer, the
     # answer is paused and the agent briefly says it heard them, then picks
@@ -696,6 +701,93 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
         await oai_ws.send(json.dumps(payload))
 
 
+def _silence_enabled(state: CallState) -> bool:
+    """Silence handling only runs for orgs on live voice mode, so every other
+    call behaves exactly as it always has."""
+    if settings.conversation_silence_check_seconds <= 0 or not settings.conversation_voice_live:
+        return False
+    return voice_decision.cached_voice_mode(state.org_id)[0] == "live"
+
+
+async def _prime_voice_mode(org_id: UUID) -> None:
+    try:
+        await voice_decision.org_voice_mode(org_id)
+    except Exception:  # noqa: BLE001 - a failed lookup just leaves silence handling off
+        logger.warning("voice_mode_prime_failed", exc_info=True)
+
+
+def _arm_silence(oai_ws: Any, state: CallState, log: Any) -> None:
+    """The agent just finished a response: start (or restart) the silence clock."""
+    if voice_decision.cached_voice_mode(state.org_id)[0] is None:
+        # First response of the call (the greeting): learn the org's voice mode
+        # in the background so the next one can start the silence clock.
+        asyncio.create_task(_prime_voice_mode(state.org_id))
+        return
+    if not _silence_enabled(state):
+        return
+    if state.silence is None:
+        state.silence = SilenceMonitor(
+            check_after=settings.conversation_silence_check_seconds,
+            max_checks=settings.conversation_silence_max_checks,
+        )
+    state.silence.agent_finished(max(time.monotonic(), state.playback_end))
+    if state.silence_task is None or state.silence_task.done():
+        state.silence_task = asyncio.create_task(_silence_loop(oai_ws, state, log))
+
+
+def _caller_is_active(state: CallState) -> None:
+    if state.silence is not None:
+        state.silence.caller_active()
+
+
+_SILENCE_CHECK_REQUEST = (
+    "The caller has been silent for a few seconds. Say ONE short, gentle sentence checking that "
+    "they are still there and can hear you, for example \"hello, kya aap mujhe sun pa rahe hain?\". "
+    "Say it in the same language as the sample below. Do not repeat your last point and do not "
+    "ask anything else."
+)
+_SILENCE_GOODBYE_REQUEST = (
+    "The caller has not answered for a while and the line may be bad. Say ONE short, polite "
+    "sentence: you cannot hear them, you will try again later, and goodbye. Say it in the same "
+    "language as the sample below. Add nothing else."
+)
+
+
+async def _silence_loop(oai_ws: Any, state: CallState, log: Any) -> None:
+    """Poll the silence monitor once a second; never raises into the call."""
+    try:
+        while state.silence is not None and not state.silence.issue:
+            await asyncio.sleep(1.0)
+            monitor = state.silence
+            if monitor is None or not _silence_enabled(state):
+                continue
+            busy = (
+                _agent_busy(state)
+                or state.reply_pending
+                or state.caller_speaking
+                or state.ack_stage is not None
+                or state.transcripts_outstanding > 0
+            )
+            action = monitor.poll(time.monotonic(), busy=busy)
+            if action is None:
+                continue
+            log.info("voice_silence", action=action, checks=monitor.checks)
+            request = _SILENCE_CHECK_REQUEST if action == "check" else _SILENCE_GOODBYE_REQUEST
+            state.response_active = True
+            await oai_ws.send(
+                _oob_response(
+                    request, f"Language sample of the call so far: {_language_sample(state)!r}"
+                )
+            )
+            await voice_decision.log_silence_event(
+                state.org_id, state.user_id, state.conversation_id, kind=action
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — silence handling must never break the call
+        logger.warning("voice_silence_failed", exc_info=True)
+
+
 def _cancel_voice_decision(state: CallState) -> None:
     task = state.voice_decision_task
     state.voice_decision_task = None
@@ -707,6 +799,12 @@ def _start_voice_decision(state: CallState, text: str) -> None:
     """Begin deciding about the caller's turn in the background. Cheap when the
     org isn't on live voice mode (a cached flag check), and it never raises."""
     if not settings.conversation_voice_live or not text:
+        return
+    # An org already known not to be on live voice has nothing to decide: no
+    # task, no lookup. The flag is re-checked in the background every few
+    # seconds, so switching an org to live still takes effect quickly.
+    mode, fresh = voice_decision.cached_voice_mode(state.org_id)
+    if fresh and mode != "live":
         return
     _cancel_voice_decision(state)
     state.voice_decision_text = text
@@ -722,6 +820,11 @@ async def _voice_decision_response(state: CallState) -> dict[str, Any] | None:
     if task is None:
         return None
     state.voice_decision_task = None
+    # The reply only ever waits for an org that is known to be on live voice.
+    # For every other org (or one not seen yet) the reply goes out at once, as
+    # it always has; a task still running just refreshes the cached setting.
+    if voice_decision.cached_voice_mode(state.org_id)[0] != "live":
+        return None
     try:
         remaining = max(
             0.0,
@@ -1048,7 +1151,7 @@ async def cancel_pending_tasks(state: CallState) -> None:
     so left running they'd try to ``.send()`` on a dead connection instead
     of picking up the fresh one. Turn-state fields (ack_stage etc.) are reset
     by the caller after this; here we only stop the tasks themselves."""
-    for attr in ("cut_task", "ack_task", "hold_task", "reply_task", "live_llm_task"):
+    for attr in ("cut_task", "ack_task", "hold_task", "reply_task", "live_llm_task", "silence_task"):
         task = getattr(state, attr)
         if task is not None and not task.done():
             task.cancel()
@@ -1168,6 +1271,7 @@ async def handle_openai_event(
             log.info("voice_greeting_barge_in_suppressed")
             return
         state.caller_speaking = True
+        _caller_is_active(state)
         _clear_hold(state)
         # OpenAI's VAD can fire speech_started more than once for what is
         # really one continuous overlap (a brief gap it reads as a new
@@ -1262,6 +1366,8 @@ async def handle_openai_event(
 
     elif etype == "conversation.item.input_audio_transcription.completed":
         state.pending_user_transcript = (event.get("transcript") or "").strip()
+        if state.pending_user_transcript:
+            _caller_is_active(state)
         state.transcripts_outstanding = max(0, state.transcripts_outstanding - 1)
         overlapping = state.interrupted_mid_response or state.restate_next or state.reply_pending
         if overlapping and _is_backchannel(state.pending_user_transcript):
@@ -1411,6 +1517,8 @@ async def handle_openai_event(
                 return
         if state.reply_pending:
             _schedule_reply(oai_ws, state)
+        else:
+            _arm_silence(oai_ws, state, log)
 
     elif etype == "error":
         log.warning("openai_realtime_error", error=event.get("error"))

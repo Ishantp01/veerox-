@@ -14,6 +14,7 @@ from uuid import UUID
 import structlog
 
 from apps.api.config import settings
+from apps.api.core.conversation import voice_decision
 from apps.api.core.conversation.engine import run_engine
 from apps.api.core.memory import load_last_n
 from apps.api.core.org_openai_key import resolve_openai_api_key
@@ -30,9 +31,13 @@ _tasks: set[asyncio.Task[None]] = set()
 
 
 async def _run_shadow(org_id: UUID, user_id: UUID, conversation_id: UUID, text: str) -> None:
+    # Cheap, cached check first: calls for orgs that are not in log-only mode
+    # (almost all of them) must not open a database session on every turn.
+    if await voice_decision.org_voice_mode(org_id) != "shadow":
+        return
     async with AsyncSessionLocal() as db:
         org = await db.get(Org, org_id)
-        if org is None or org.conversation_mode != "human_conversation":
+        if org is None or org.conversation_mode not in ("human_conversation", "smart_script"):
             return
         # "live" turns are logged by the live decision itself; "off" logs nothing.
         if org.conversation_voice_mode != "shadow":

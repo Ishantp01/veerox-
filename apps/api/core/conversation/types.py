@@ -19,6 +19,12 @@ SCENARIOS = (
     "greeting",
     "appointment_request",
     "whatsapp_info_request",
+    # Added with the Scenario Builder (quotation 2.3 initial library).
+    "identification",
+    "discovery",
+    "discount_request",
+    "callback_request",
+    "closing",
 )
 
 EMOTIONS = ("neutral", "positive", "negative", "angry", "confused")
@@ -40,7 +46,7 @@ ALLOWED_ACTIONS = frozenset(
 )
 
 # Structured memory keys the engine may store (quotation §2.1).
-MEMORY_KEYS = ("name", "business_type", "preferred_channel", "callback_time")
+MEMORY_KEYS = ("name", "business_type", "pain_point", "preferred_channel", "callback_time")
 
 # Conversation states, stored on each ConversationTurn.
 STATE_NEW = "new"
@@ -52,6 +58,11 @@ STATE_APPOINTMENT_SET = "appointment_set"
 STATE_INFO_SENT = "info_sent"
 STATE_HANDED_OFF = "handed_off"
 STATE_CLOSED = "closed"
+STATE_DISCOVERY = "discovery"
+STATE_QUALIFICATION = "qualification"
+STATE_OBJECTION = "objection"
+# Repeated silence on a call: the caller is probably not hearing us.
+STATE_CONNECTION_ISSUE = "connection_issue"
 
 
 @dataclass
@@ -95,3 +106,6 @@ class EngineResult:
     fallback_reason: str | None = None
     tokens_in: int = 0
     tokens_out: int = 0
+    # Smart Script mode: scenario guidance to add to the script prompt when the
+    # engine hands the turn to the script path.
+    guidance: str | None = None

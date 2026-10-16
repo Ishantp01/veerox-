@@ -18,6 +18,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
+from apps.api.core.conversation.config import (
+    SMART_SCRIPT_ENGINE_SCENARIOS,
+    EngineConfig,
+    resolve_config,
+    scenario_guidance,
+)
 from apps.api.core.conversation.decide import decide, validate_action
 from apps.api.core.conversation.knowledge import find_knowledge
 from apps.api.core.conversation.memory import load_memory, save_facts
@@ -48,8 +54,18 @@ _KNOWLEDGE_SCENARIOS = frozenset(
         "confused",
         "unknown_question",
         "whatsapp_info_request",
+        "discount_request",
     }
 )
+
+
+def wants_knowledge(scenario: str, config: EngineConfig | None) -> bool:
+    """Built-in knowledge scenarios, plus every business-defined one (it may
+    be answered from approved facts, never from the model's own)."""
+    if scenario in _KNOWLEDGE_SCENARIOS:
+        return True
+    defined = config.get(scenario) if config is not None else None
+    return defined is not None and not defined.builtin
 
 
 def _default_llm(api_key: str | None) -> LLMCall:
@@ -92,6 +108,7 @@ async def _log_turn(
     action_result: dict[str, Any] | None = None,
     reply: str | None = None,
     fallback_reason: str | None = None,
+    config: EngineConfig | None = None,
 ) -> None:
     """Best-effort: a logging failure must never break the customer's turn."""
     try:
@@ -116,11 +133,25 @@ async def _log_turn(
                 reply_text=reply,
                 fallback_reason=fallback_reason,
                 latency_ms=int((time.monotonic() - started) * 1000),
+                config_version_id=config.version_id if config else None,
+                config_version=config.version if config else None,
             )
         )
         await db.commit()
     except Exception:  # noqa: BLE001
         logger.warning("conversation_turn_log_failed", exc_info=True)
+        await db.rollback()
+
+
+async def _save_facts(
+    db: AsyncSession, org_id: UUID, user_id: UUID, understanding: Understanding
+) -> None:
+    facts = {k: v for k, v in understanding.facts.items() if k in MEMORY_KEYS}
+    try:
+        await save_facts(db, org_id, user_id, facts)
+        await db.commit()
+    except Exception:  # noqa: BLE001 — memory is best effort
+        logger.warning("conversation_memory_save_failed", exc_info=True)
         await db.rollback()
 
 
@@ -137,11 +168,17 @@ async def run_engine(
     dispatch: Dispatch | None,
     mode: str = "live",
     llm: LLMCall | None = None,
+    config: EngineConfig | None = None,
+    smart_script: bool = False,
 ) -> EngineResult:
     """Run one customer turn through the engine.
 
     ``mode="shadow"`` (voice) runs the same pipeline but executes no action,
     writes no memory and makes no phrasing LLM call — it only logs.
+
+    ``smart_script=True`` (Smart Script mode): the engine only decides the
+    scenarios that end in an action or protect the customer; for all others it
+    returns the scenario's guidance and leaves the wording to the org's script.
     """
     started = time.monotonic()
     live = mode == "live"
@@ -161,6 +198,7 @@ async def run_engine(
     tokens_in = tokens_out = 0
 
     async def fall_back(reason: str, **extra: Any) -> EngineResult:
+        log_ctx["config"] = config
         logger.info("conversation_engine_fallback", reason=reason, org_id=str(org_id), mode=mode)
         await _log_turn(
             db,
@@ -173,12 +211,20 @@ async def run_engine(
         return EngineResult(None, reason, tokens_in, tokens_out)
 
     try:
+        config = config or await resolve_config(db, org_id, conversation_id)
+        log_ctx["config"] = config
         state = await _last_state(db, org_id, conversation_id)
         memory = await load_memory(db, org_id, user_id)
 
         try:
             understanding = await understand(
-                text, state=state, history=history, memory=memory, llm=llm, timeout=timeout
+                text,
+                state=state,
+                history=history,
+                memory=memory,
+                llm=llm,
+                timeout=timeout,
+                config=config,
             )
         except UnderstandError as exc:
             return await fall_back(exc.reason)
@@ -193,11 +239,30 @@ async def run_engine(
         if understanding.confidence < settings.conversation_min_confidence:
             return await fall_back("low_confidence", state=state)
 
+        if smart_script and understanding.scenario not in SMART_SCRIPT_ENGINE_SCENARIOS:
+            # Smart Script: the org's script answers, steered by the scenario.
+            if live:
+                await _save_facts(db, org_id, user_id, understanding)
+            guidance = scenario_guidance(config.get(understanding.scenario))
+            await _log_turn(
+                db,
+                understanding=understanding,
+                state=state,
+                fallback_reason="smart_script",
+                **log_ctx,
+            )
+            return EngineResult(None, "smart_script", tokens_in, tokens_out, guidance or None)
+
         knowledge: list[Any] = []
-        if understanding.scenario in _KNOWLEDGE_SCENARIOS:
+        if wants_knowledge(understanding.scenario, config):
             knowledge = await find_knowledge(db, org_id, text, understanding.language)
         decision = decide(
-            understanding, text=text, memory=memory, knowledge=knowledge, channel=channel
+            understanding,
+            text=text,
+            memory=memory,
+            knowledge=knowledge,
+            channel=channel,
+            config=config,
         )
         if not validate_action(decision.action_id, decision.args):
             return await fall_back("invalid_action", state=state)
@@ -216,18 +281,15 @@ async def run_engine(
             text=text,
             llm=llm if live else None,
             timeout=timeout,
+            history=history,
+            memory=memory,
+            scenario_def=config.get(understanding.scenario),
         )
         tokens_in += phrase_in
         tokens_out += phrase_out
 
         if live:
-            facts = {k: v for k, v in understanding.facts.items() if k in MEMORY_KEYS}
-            try:
-                await save_facts(db, org_id, user_id, facts)
-                await db.commit()
-            except Exception:  # noqa: BLE001 — memory is best effort
-                logger.warning("conversation_memory_save_failed", exc_info=True)
-                await db.rollback()
+            await _save_facts(db, org_id, user_id, understanding)
 
         await _log_turn(
             db,

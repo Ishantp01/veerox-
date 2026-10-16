@@ -27,6 +27,7 @@ PERSISTENT_TTL = timedelta(days=90)
 KEY_SCOPE: dict[str, str] = {
     "name": "persistent",
     "business_type": "persistent",
+    "pain_point": "persistent",
     "preferred_channel": "persistent",
     "callback_time": "call",
 }

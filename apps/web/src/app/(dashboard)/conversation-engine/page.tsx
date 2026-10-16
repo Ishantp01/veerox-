@@ -3,6 +3,13 @@
 import { useState } from "react";
 import { Brain, Pencil, Plus, Trash2 } from "lucide-react";
 
+import { MetricsPanel } from "@/components/conversation-engine/metrics-panel";
+import { ScenarioBuilder } from "@/components/conversation-engine/scenario-builder";
+import { Simulator } from "@/components/conversation-engine/simulator";
+import {
+  AuditSection,
+  VersionsSection,
+} from "@/components/conversation-engine/versions-audit";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import {
@@ -34,11 +41,15 @@ import {
   useConversationTurns,
   useCreateKnowledgeItem,
   useDeleteKnowledgeItem,
+  useEngineConfig,
   useKnowledgeItems,
+  useReviewTurn,
+  useSetConversationMode,
   useUpdateKnowledgeItem,
 } from "@/lib/hooks";
 import { formatDateTime } from "@/lib/format";
 import type {
+  ConversationMode,
   ConversationTurn,
   KnowledgeItem,
   KnowledgeKind,
@@ -336,6 +347,72 @@ function KnowledgeSection() {
   );
 }
 
+function ReviewCell({ turn }: { turn: ConversationTurn }) {
+  const review = useReviewTurn();
+  const config = useEngineConfig();
+  const { toast } = useToast();
+  const scenarios = config.data?.base ?? [];
+  const onError = (err: Error) =>
+    toast({ title: "Could not save review", description: err.message, variant: "error" });
+
+  if (turn.scenario === null || turn.scenario === "silence") {
+    return <span className="text-xs text-slate-400">—</span>;
+  }
+  return (
+    <div className="flex min-w-[9rem] flex-col gap-1">
+      <div className="flex items-center gap-1">
+        <Button
+          variant={turn.review_label === "correct" ? "primary" : "outline"}
+          size="sm"
+          aria-pressed={turn.review_label === "correct"}
+          aria-label="Mark understanding as right"
+          onClick={() =>
+            review.mutate(
+              { id: turn.id, label: turn.review_label === "correct" ? null : "correct" },
+              { onError },
+            )
+          }
+        >
+          Right
+        </Button>
+        <Button
+          variant={turn.review_label === "incorrect" ? "danger" : "outline"}
+          size="sm"
+          aria-pressed={turn.review_label === "incorrect"}
+          aria-label="Mark understanding as wrong"
+          onClick={() =>
+            review.mutate(
+              { id: turn.id, label: turn.review_label === "incorrect" ? null : "incorrect" },
+              { onError },
+            )
+          }
+        >
+          Wrong
+        </Button>
+      </div>
+      {turn.review_label === "incorrect" && (
+        <Select
+          aria-label="What it should have been"
+          value={turn.review_scenario ?? ""}
+          onChange={(value) =>
+            review.mutate(
+              { id: turn.id, label: "incorrect", correct_scenario: value || null },
+              { onError },
+            )
+          }
+        >
+          <option value="">Should have been…</option>
+          {scenarios.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </Select>
+      )}
+    </div>
+  );
+}
+
 function TurnRow({ turn }: { turn: ConversationTurn }) {
   const fellBack = turn.fallback_reason !== null;
   return (
@@ -381,6 +458,10 @@ function TurnRow({ turn }: { turn: ConversationTurn }) {
       </TableCell>
       <TableCell className="text-xs text-slate-500">
         {turn.latency_ms === null ? "—" : `${turn.latency_ms} ms`}
+        {turn.config_version ? <div className="text-slate-400">v{turn.config_version}</div> : null}
+      </TableCell>
+      <TableCell>
+        <ReviewCell turn={turn} />
       </TableCell>
     </TableRow>
   );
@@ -398,8 +479,8 @@ function TurnLogSection() {
           <div>
             <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Turn log</h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Every engine decision: what it understood, what it did and what it said. Review this
-              before enabling more customers.
+              Every engine decision: what it understood, what it did and what it said. Mark turns
+              Right or Wrong to measure accuracy before enabling more customers.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -431,7 +512,7 @@ function TurnLogSection() {
           loadingFallback={
             <table className="w-full border-collapse text-sm">
               <tbody>
-                <SkeletonRows rows={4} cols={9} />
+                <SkeletonRows rows={4} cols={10} />
               </tbody>
             </table>
           }
@@ -457,6 +538,7 @@ function TurnLogSection() {
                   <TableHeader>Action</TableHeader>
                   <TableHeader>Reply</TableHeader>
                   <TableHeader>Time</TableHeader>
+                  <TableHeader>Review</TableHeader>
                 </TableRow>
               </thead>
               <tbody>
@@ -472,31 +554,142 @@ function TurnLogSection() {
   );
 }
 
+type TabId = "overview" | "scenarios" | "simulator" | "versions" | "metrics";
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "scenarios", label: "Scenarios" },
+  { id: "simulator", label: "Simulator" },
+  { id: "versions", label: "Versions & audit" },
+  { id: "metrics", label: "Metrics" },
+];
+
+const MODE_LABEL: Record<string, string> = {
+  strict_script: "Strict Script",
+  smart_script: "Smart Script",
+  human_conversation: "Human Conversation",
+};
+
+const MODE_HELP: Record<ConversationMode, string> = {
+  strict_script: "The AI follows your script exactly, as before. The engine is off.",
+  smart_script:
+    "Your script answers most messages. The AI only acts on callbacks, appointments, hand-offs and opt-outs, and gets scenario guidance for the rest.",
+  human_conversation:
+    "The AI understands what the customer means and answers from your approved knowledge, falling back to your script when unsure.",
+};
+
+function ModeSwitcher({ mode }: { mode: ConversationMode }) {
+  const setMode = useSetConversationMode();
+  const confirm = useConfirm();
+  const { toast } = useToast();
+
+  async function change(next: string) {
+    const target = next as ConversationMode;
+    if (target === mode) return;
+    const ok = await confirm({
+      title: `Switch to ${MODE_LABEL[target]}?`,
+      description: `${MODE_HELP[target]} It applies to new messages straight away. You can switch back to Strict Script at any time.`,
+      confirmLabel: "Switch",
+      variant: "primary",
+    });
+    if (!ok) return;
+    setMode.mutate(target, {
+      onSuccess: () => toast({ title: `Now on ${MODE_LABEL[target]}`, variant: "success" }),
+      onError: (err) => toast({ title: "Could not switch", description: err.message, variant: "error" }),
+    });
+  }
+
+  return (
+    <div className="flex flex-col gap-1 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+      <Label htmlFor="ce-mode">How should the AI behave for your organization?</Label>
+      <Select id="ce-mode" value={mode} onChange={change} disabled={setMode.isPending}>
+        <option value="strict_script">Strict Script (default)</option>
+        <option value="smart_script">Smart Script</option>
+        <option value="human_conversation">Human Conversation</option>
+      </Select>
+      <p className="text-xs text-slate-500 dark:text-slate-400">{MODE_HELP[mode]}</p>
+    </div>
+  );
+}
+
 export default function ConversationEnginePage() {
   const status = useConversationEngineStatus();
-  const human = status.data?.conversation_mode === "human_conversation";
+  const [tab, setTab] = useState<TabId>("overview");
+  const mode = status.data?.conversation_mode;
+  const off = mode === "strict_script";
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-6">
       <PageHeader
         title="Conversation Engine"
-        description="The AI understands what a customer means, remembers context and answers only from knowledge you approve. Voice calls run in log-only mode."
+        description="The AI understands what a customer means, remembers context and answers only from knowledge you approve. Define its scenarios, test them, then publish."
         action={
           status.data ? (
-            <Badge variant={human ? "success" : "neutral"} icon={null}>
-              {human ? "Human Conversation" : "Strict Script"}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant={off ? "neutral" : "success"} icon={null}>
+                {MODE_LABEL[mode ?? "strict_script"] ?? mode}
+              </Badge>
+              {status.data.active_config_version ? (
+                <Badge variant="voice" icon={null}>
+                  Scenarios v{status.data.active_config_version}
+                </Badge>
+              ) : null}
+              {status.data.has_draft ? (
+                <Badge variant="live" icon={null}>
+                  Draft pending
+                </Badge>
+              ) : null}
+            </div>
           ) : undefined
         }
       />
-      {status.data && !human && (
+      {status.data && <ModeSwitcher mode={status.data.conversation_mode} />}
+      {status.data && off && (
         <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-          This organization is on Strict Script, so the engine is off. Ask your platform admin to
-          switch it to Human Conversation (Organizations, then Edit) to go live.
+          This organization is on Strict Script, so the engine is off. You can still build and test
+          scenarios here. Switch the mode above to go live.
         </p>
       )}
-      <KnowledgeSection />
-      <TurnLogSection />
+      <nav
+        role="tablist"
+        aria-label="Conversation Engine sections"
+        className="-mb-2 flex gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-800"
+      >
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            type="button"
+            aria-selected={tab === t.id}
+            onClick={() => setTab(t.id)}
+            className={`relative shrink-0 px-3 py-2.5 text-sm font-medium transition-colors ${
+              tab === t.id
+                ? "text-primary-600 dark:text-primary-400"
+                : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100"
+            }`}
+          >
+            {t.label}
+            {tab === t.id && (
+              <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary-600 dark:bg-primary-500" />
+            )}
+          </button>
+        ))}
+      </nav>
+      {tab === "overview" && (
+        <>
+          <KnowledgeSection />
+          <TurnLogSection />
+        </>
+      )}
+      {tab === "scenarios" && <ScenarioBuilder />}
+      {tab === "simulator" && <Simulator />}
+      {tab === "versions" && (
+        <>
+          <VersionsSection />
+          <AuditSection />
+        </>
+      )}
+      {tab === "metrics" && <MetricsPanel />}
     </div>
   );
 }

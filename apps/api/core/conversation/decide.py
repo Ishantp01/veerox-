@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from apps.api.core.conversation.config import EngineConfig, ScenarioDef
 from apps.api.core.conversation.types import (
     ALLOWED_ACTIONS,
     STATE_APPOINTMENT_SET,
@@ -18,9 +19,12 @@ from apps.api.core.conversation.types import (
     STATE_AWAITING_CALLBACK_TIME,
     STATE_CALLBACK_SET,
     STATE_CLOSED,
+    STATE_DISCOVERY,
     STATE_ENGAGED,
     STATE_HANDED_OFF,
     STATE_INFO_SENT,
+    STATE_OBJECTION,
+    STATE_QUALIFICATION,
     Decision,
     Understanding,
 )
@@ -62,6 +66,89 @@ def _resolve_callback(facts: dict[str, str], memory: dict[str, str]) -> tuple[st
     return None
 
 
+# Reply kinds that tell the customer an action happened. When a scenario does
+# not permit that action the reply must not claim it.
+_ACTION_CLAIMING_KINDS = frozenset(
+    {
+        "callback_confirmed",
+        "appointment_confirmed",
+        "whatsapp_sent",
+        "handoff",
+        "angry_handoff",
+        "not_interested",
+    }
+)
+
+
+def apply_scenario_actions(decision: Decision, scenario: ScenarioDef | None) -> Decision:
+    """Enforce the scenario's own list of allowed actions (Scenario Builder).
+
+    An action the scenario does not allow is dropped, and a reply that would
+    have announced it becomes a guided reply instead. A scenario can only ever
+    narrow what the engine does: it cannot add an action the rules did not pick.
+    """
+    if scenario is None or decision.action_id == "none" or decision.action_id in scenario.actions:
+        return decision
+    kind = "guided" if decision.reply_kind in _ACTION_CLAIMING_KINDS else decision.reply_kind
+    return Decision("none", {}, kind, knowledge=decision.knowledge, next_state=STATE_ENGAGED)
+
+
+def _custom_decision(
+    scenario: ScenarioDef,
+    understanding: Understanding,
+    *,
+    reason: str,
+    memory: dict[str, str],
+    knowledge: list[Any],
+) -> Decision:
+    """A business-defined scenario: run its one configured action when the
+    inputs for it are there, otherwise just give a guided reply."""
+    action = next((a for a in scenario.actions if a != "none" and a in ALLOWED_ACTIONS), "none")
+    facts = understanding.facts
+    name = facts.get("name") or memory.get("name")
+    if action == "request_callback":
+        resolved = _resolve_callback(facts, memory)
+        if resolved is None:
+            return Decision("none", {}, "ask_callback_time", next_state=STATE_AWAITING_CALLBACK_TIME)
+        args: dict[str, Any] = {
+            "date": resolved[0],
+            "time": resolved[1],
+            "notes": f"{scenario.name}: {reason}",
+        }
+        if name:
+            args["name"] = name
+        return Decision(action, args, "callback_confirmed", next_state=STATE_CALLBACK_SET)
+    if action == "book_appointment":
+        date_value, time_value = facts.get("callback_date"), facts.get("callback_time_hhmm")
+        if not (date_value and time_value):
+            return Decision(
+                "none", {}, "ask_appointment_time", next_state=STATE_AWAITING_APPOINTMENT_TIME
+            )
+        args = {"date": date_value, "time": time_value, "notes": f"{scenario.name}: {reason}"}
+        if name:
+            args["name"] = name
+        return Decision(action, args, "appointment_confirmed", next_state=STATE_APPOINTMENT_SET)
+    if action == "transfer_to_human":
+        return Decision(
+            action,
+            {"reason": f"{scenario.name}: {reason}", "urgency": "medium"},
+            "handoff",
+            next_state=STATE_HANDED_OFF,
+        )
+    if action == "mark_not_interested":
+        return Decision(action, {"reason": reason}, "not_interested", next_state=STATE_CLOSED)
+    if action == "send_whatsapp_message" and knowledge:
+        message = "\n\n".join(f"{item.title}: {item.body}" for item in knowledge)
+        return Decision(
+            action,
+            {"message": message},
+            "whatsapp_sent",
+            knowledge=knowledge,
+            next_state=STATE_INFO_SENT,
+        )
+    return Decision("none", {}, "guided", knowledge=knowledge, next_state=STATE_ENGAGED)
+
+
 def decide(
     understanding: Understanding,
     *,
@@ -69,9 +156,34 @@ def decide(
     memory: dict[str, str],
     knowledge: list[Any],
     channel: str = "whatsapp",
+    config: EngineConfig | None = None,
+) -> Decision:
+    decision = _decide(
+        understanding, text=text, memory=memory, knowledge=knowledge, channel=channel, config=config
+    )
+    if config is not None:
+        decision = apply_scenario_actions(decision, config.get(understanding.scenario))
+    return decision
+
+
+def _decide(
+    understanding: Understanding,
+    *,
+    text: str,
+    memory: dict[str, str],
+    knowledge: list[Any],
+    channel: str,
+    config: EngineConfig | None,
 ) -> Decision:
     scenario = understanding.scenario
     reason = text.strip()[:_MAX_REASON_LEN]
+
+    if config is not None:
+        defined = config.get(scenario)
+        if defined is not None and not defined.builtin:
+            return _custom_decision(
+                defined, understanding, reason=reason, memory=memory, knowledge=knowledge
+            )
 
     if scenario == "human_handoff":
         return Decision(
@@ -91,7 +203,24 @@ def decide(
         return Decision(
             "mark_not_interested", {"reason": reason}, "not_interested", next_state=STATE_CLOSED
         )
-    if scenario == "busy_callback":
+    if scenario == "closing":
+        return Decision("none", {}, "closing", next_state=STATE_CLOSED)
+    if scenario == "identification":
+        return Decision("none", {}, "identification", next_state=STATE_DISCOVERY)
+    if scenario == "discovery":
+        known_business = understanding.facts.get("business_type") or memory.get("business_type")
+        known_pain = understanding.facts.get("pain_point") or memory.get("pain_point")
+        if not known_business:
+            return Decision("none", {}, "discovery_business", next_state=STATE_DISCOVERY)
+        if not known_pain:
+            return Decision("none", {}, "discovery_pain", next_state=STATE_QUALIFICATION)
+        return Decision("none", {}, "discovery_offer", next_state=STATE_AWAITING_CALLBACK_TIME)
+    if scenario == "discount_request":
+        if knowledge:
+            return Decision("none", {}, "answer", knowledge=knowledge, next_state=STATE_OBJECTION)
+        # No approved offer on file: never promise one.
+        return Decision("none", {}, "discount_followup", next_state=STATE_AWAITING_CALLBACK_TIME)
+    if scenario in ("busy_callback", "callback_request"):
         resolved = _resolve_callback(understanding.facts, memory)
         if resolved is None:
             return Decision(

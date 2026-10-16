@@ -766,7 +766,9 @@ async def test_status_endpoint(client: AsyncClient, db_session: AsyncSession) ->
     await _seed(db_session)
     response = await client.get("/conversation-engine/status", headers=ADMIN_HEADERS)
     assert response.status_code == 200
-    assert response.json() == {"conversation_mode": "human_conversation"}
+    body = response.json()
+    assert body["conversation_mode"] == "human_conversation"
+    assert body["active_config_version"] is None and body["has_draft"] is False
 
 
 async def test_knowledge_crud_is_org_scoped(client: AsyncClient, db_session: AsyncSession) -> None:
@@ -966,6 +968,9 @@ async def test_shadow_run_skips_orgs_that_are_not_in_log_only_mode(
     conversation = await _seed(db_session)
     factory = async_sessionmaker(bind=test_engine, expire_on_commit=False)
     monkeypatch.setattr(shadow, "AsyncSessionLocal", factory)
+    from apps.api.core.conversation import voice_decision
+
+    monkeypatch.setattr(voice_decision, "AsyncSessionLocal", factory)  # never a real database
     ran: list[str] = []
 
     async def fake_run_engine(*args: Any, **kwargs: Any) -> None:
@@ -977,6 +982,7 @@ async def test_shadow_run_skips_orgs_that_are_not_in_log_only_mode(
     for voice_mode, expected in (("shadow", ["shadow"]), ("live", []), ("off", [])):
         org.conversation_voice_mode = voice_mode
         await db_session.commit()
+        voice_decision.reset_flag_cache()
         ran.clear()
         await shadow._run_shadow(ORG_ID, USER_ID, conversation.id, "hello there")
         assert ran == expected, voice_mode

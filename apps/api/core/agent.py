@@ -501,10 +501,11 @@ class AgentCore:
         # (timeout, invalid output, low confidence, error) it returns no
         # reply and the unchanged script/tool-calling path below runs.
         engine_tokens_in = engine_tokens_out = 0
+        engine_guidance: str | None = None
         if (
             channel == "whatsapp"
             and org_row is not None
-            and org_row.conversation_mode == "human_conversation"
+            and org_row.conversation_mode in ("human_conversation", "smart_script")
         ):
 
             async def _engine_dispatch(action_id: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -529,7 +530,9 @@ class AgentCore:
                 history=history,
                 api_key=openai_api_key,
                 dispatch=_engine_dispatch,
+                smart_script=org_row.conversation_mode == "smart_script",
             )
+            engine_guidance = engine_result.guidance
             if engine_result.reply is not None:
                 return await _persist_and_meter(
                     db,
@@ -548,6 +551,12 @@ class AgentCore:
         system_prompt = await _system_prompt_for(
             db, org_id, channel, whatsapp_script_id, whatsapp_phone_number_id
         )
+        if engine_guidance:
+            # Smart Script: the script answers, steered by the detected scenario.
+            system_prompt = (
+                f"{system_prompt}\n\nCONVERSATION GUIDANCE FOR THIS TURN (follow it while "
+                f"staying within the script above): {engine_guidance}"
+            )
         if history:
             # We already have this user's history loaded — skip the redundant
             # lookup_customer round-trip the model would otherwise make on

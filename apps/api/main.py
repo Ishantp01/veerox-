@@ -24,6 +24,7 @@ from apps.api.routers import (
     auth,
     billing,
     conversation_engine,
+    conversation_engine_config,
     conversations,
     crm,
     diag,
@@ -123,6 +124,7 @@ def create_app() -> FastAPI:
     app.include_router(billing.router)
     app.include_router(conversations.router)
     app.include_router(conversation_engine.router)
+    app.include_router(conversation_engine_config.router)
     app.include_router(leads.router)
     app.include_router(crm.router)
     app.include_router(appointments.router)
