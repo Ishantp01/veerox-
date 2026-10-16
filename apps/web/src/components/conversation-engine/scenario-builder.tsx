@@ -582,11 +582,26 @@ export function ScenarioBuilder() {
     }
   }
 
-  function handleRemove(id: string) {
+  async function handleRemove(id: string) {
+    const target = scenarios?.find((s) => s.id === id);
+    if (!target || target.builtin !== false) return; // built-in scenarios can only be switched off
+    const ok = await confirm({
+      title: `Delete "${target.name}"?`,
+      description:
+        "It is removed from your draft. It stays live for customers until you Save draft and Publish. Conversations already under way keep using the version they started with. You can undo this by discarding the draft or rolling back.",
+      confirmLabel: "Delete",
+      variant: "danger",
+    });
+    if (!ok) return;
     setScenarios((list) => (list ? list.filter((s) => s.id !== id) : list));
     setSelectedId(null);
     setDirty(true);
     setResult(null);
+    toast({
+      title: `"${target.name}" removed from the draft`,
+      description: "Click Save draft, then Publish to make it live.",
+      variant: "success",
+    });
   }
 
   return (
@@ -666,16 +681,19 @@ export function ScenarioBuilder() {
               <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
                 <nav aria-label="Scenarios" className="flex max-h-[34rem] flex-col gap-1 overflow-y-auto pr-1">
                   {scenarios.map((s) => (
-                    <button
+                    <div
                       key={s.id}
-                      type="button"
-                      onClick={() => setSelectedId(s.id)}
-                      aria-current={s.id === selectedId ? "true" : undefined}
-                      className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                      className={`flex items-center gap-1 rounded-lg border transition-colors ${
                         s.id === selectedId
                           ? "border-primary-500 bg-primary-50 dark:bg-primary-500/10"
                           : "border-transparent hover:bg-slate-50 dark:hover:bg-slate-800"
                       }`}
+                    >
+                    <button
+                      type="button"
+                      onClick={() => setSelectedId(s.id)}
+                      aria-current={s.id === selectedId ? "true" : undefined}
+                      className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 py-2 text-left text-sm"
                     >
                       <span className={s.enabled ? "" : "text-slate-400 line-through"}>{s.name}</span>
                       <span className="flex shrink-0 items-center gap-1">
@@ -691,6 +709,18 @@ export function ScenarioBuilder() {
                         )}
                       </span>
                     </button>
+                    {s.builtin === false && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemove(s.id)}
+                        aria-label={`Delete ${s.name}`}
+                        title="Delete this scenario"
+                        className="mr-1 shrink-0 rounded-md p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:hover:bg-red-500/10"
+                      >
+                        <Trash2 size={14} aria-hidden />
+                      </button>
+                    )}
+                    </div>
                   ))}
                 </nav>
                 <div className="min-w-0 rounded-lg border border-slate-200 p-4 dark:border-slate-700">

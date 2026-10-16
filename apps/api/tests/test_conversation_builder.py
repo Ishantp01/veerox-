@@ -959,3 +959,35 @@ async def test_conversation_engine_feature_can_be_switched_off_per_org(
     org.enabled_features = ["calling", "conversation_engine"]
     await db_session.commit()
     assert (await client.get("/conversation-engine/status", headers=ADMIN_HEADERS)).status_code == 200
+
+
+async def test_deleting_a_custom_scenario_removes_it_from_the_next_version_only(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed(db_session)
+    await client.put("/conversation-engine/config/draft", headers=ADMIN_HEADERS, json=_payload(_scenario()))
+    assert (
+        await client.post("/conversation-engine/config/draft/publish", headers=ADMIN_HEADERS, json={})
+    ).json()["version"] == 1
+
+    # The builder removes it from the draft (the Delete button) and publishes.
+    without = {"scenarios": [s.to_json() for s in DEFAULT_SCENARIOS]}
+    await client.put("/conversation-engine/config/draft", headers=ADMIN_HEADERS, json=without)
+    assert (
+        await client.post("/conversation-engine/config/draft/publish", headers=ADMIN_HEADERS, json={})
+    ).json()["version"] == 2
+
+    live = (await client.get("/conversation-engine/config", headers=ADMIN_HEADERS)).json()["active"]
+    assert "warranty_query" not in [s["id"] for s in live["scenarios"]]
+    old = (await client.get("/conversation-engine/config/versions/1", headers=ADMIN_HEADERS)).json()
+    assert "warranty_query" in [s["id"] for s in old["scenarios"]]  # history is intact
+
+    # The phrase no longer selects the deleted scenario.
+    body = (
+        await client.post(
+            "/conversation-engine/simulate",
+            headers=ADMIN_HEADERS,
+            json={"text": "what about warranty", "source": "active", "use_llm": False},
+        )
+    ).json()
+    assert body["scenario"] != "warranty_query"
