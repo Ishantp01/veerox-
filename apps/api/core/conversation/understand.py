@@ -358,6 +358,29 @@ _PAIN_RE = re.compile(
     r"\s+(?:is|hai|yeh hai|ye hai|with|in|ki|that)?\s*([^.!?\n]{4,120})",
     re.IGNORECASE,
 )
+_TEAM_SIZE_RE = re.compile(
+    r"(?:\bteam (?:of|size(?: is| of)?)\s*(\d{1,4})\b|"
+    r"\b(\d{1,4})\s*(?:employees|staff|people|members|salespeople|agents|workers|log)\b)",
+    re.IGNORECASE,
+)
+# How warm the customer is, from the scenario they landed in (blueprint section 10
+# "interest_level"). Only set when the message itself shows a clear signal.
+_INTEREST_BY_SCENARIO = {
+    "interested": "high",
+    "appointment_request": "high",
+    "price_question": "medium",
+    "objection": "medium",
+    "discount_request": "medium",
+    "whatsapp_info_request": "medium",
+    "not_interested": "low",
+}
+
+
+def _with_interest(facts: dict[str, str], scenario: str) -> dict[str, str]:
+    level = _INTEREST_BY_SCENARIO.get(scenario)
+    return {**facts, "interest_level": level} if level else facts
+
+
 _PAIN_REJECT = re.compile(r"^(nahi|nhi|nahin|no\b|not\b|koi nahi)", re.IGNORECASE)
 
 
@@ -381,6 +404,10 @@ def _extract_facts(text: str, today: date) -> dict[str, str]:
     name_match = _NAME_RE.search(text)
     if name_match and name_match.group(1).lower() not in _NAME_STOPWORDS:
         facts["name"] = name_match.group(1).strip().title()
+
+    team_match = _TEAM_SIZE_RE.search(text)
+    if team_match:
+        facts["team_size"] = (team_match.group(1) or team_match.group(2)).lstrip("0") or "0"
 
     business_match = _BUSINESS_RE.search(text)
     if business_match:
@@ -562,7 +589,7 @@ def classify_with_rules(
         language=language,
         confidence=min(confidence, _MAX_CONFIDENCE),
         source="rules",
-        facts=facts,
+        facts=_with_interest(facts, top_scenario),
     )
 
 
@@ -590,7 +617,7 @@ def _llm_system(config: EngineConfig | None) -> str:
         f'"emotion" (one of {list(EMOTIONS)}), '
         f'"language" (one of {list(LANGUAGES)}), '
         '"confidence" (number 0..1), '
-        '"facts" (object, optional keys name, business_type, pain_point, preferred_channel, '
+        '"facts" (object, optional keys name, business_type, pain_point, team_size, preferred_channel, '
         "callback_date as YYYY-MM-DD, callback_time_hhmm as HH:MM 24h), "
         f'"action_id" (one of {sorted(ALLOWED_ACTIONS)}). '
         'Use "unknown_question" when the customer asks something factual about the business. '
@@ -700,7 +727,7 @@ async def classify_with_llm(
         language=language,
         confidence=confidence,
         source="llm",
-        facts=facts,
+        facts=_with_interest(facts, scenario),
         proposed_action=action_id if isinstance(action_id, str) else None,
         tokens_in=result.tokens_in,
         tokens_out=result.tokens_out,

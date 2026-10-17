@@ -58,7 +58,11 @@ A short pause while the caller thinks (under 8 s) must cause nothing. `CONVERSAT
 
 With Voice calls = Live: busy / callback / appointment / not interested / hand-off turns are decided by the engine as above; every other turn (price, objection, interested ...) is answered from the org's own script with the scenario's guidance added. Confirm the agent keeps using the script wording on price and product questions.
 
-Also check: caller interrupts mid-reply (barge-in still works), ElevenLabs voice if used.
+### When the AI is unsure (live voice)
+
+Set the scenario setting "When the AI is not sure what the customer means" to **Ask one short clarifying question**, publish, then on a call mumble or say something unrelated. The agent should say it wants to be sure and ask you to say a little more, once, and do nothing else. With **Pass to a team member** a human follow-up is created exactly once. With the default the call carries on as before.
+
+Also check: caller interrupts mid-reply (barge-in still works), ElevenLabs voice if used. The logic of every row above is also covered by simulated-call tests (see Conversation-Engine-Handover.md), so a failure on a real call points at audio, network or provider rather than the decision code.
 
 ## Acceptance
 

@@ -29,6 +29,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.core.conversation.types import ALLOWED_ACTIONS
 
 SCENARIO_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,30}$")
+# What to do when the AI is not sure what the customer meant (blueprint section 8):
+# "script" = hand the turn to the org's script (default, safest), "clarify" = ask the
+# customer one short clarifying question, "handoff" = give the question to a person.
+LOW_CONFIDENCE_ACTIONS = ("script", "clarify", "handoff")
 MAX_SCENARIOS = 60
 MAX_EXAMPLES = 40
 
@@ -253,6 +257,7 @@ class EngineConfig:
     version_id: UUID | None = None
     version: int = 0  # 0 = the built-in defaults
     custom_ids: frozenset[str] = field(default_factory=frozenset)
+    low_confidence_action: str = "script"
 
     def get(self, scenario_id: str) -> ScenarioDef | None:
         return self.scenarios.get(scenario_id)
@@ -288,6 +293,13 @@ def validate_config_payload(data: Any) -> list[str]:
     problems: list[str] = []
     if not isinstance(data, dict) or not isinstance(data.get("scenarios"), list):
         return ["config must be an object with a 'scenarios' list"]
+    settings = data.get("settings") or {}
+    if not isinstance(settings, dict):
+        return ["settings must be an object"]
+    if settings.get("low_confidence_action", "script") not in LOW_CONFIDENCE_ACTIONS:
+        problems.append(
+            "settings.low_confidence_action must be one of: " + ", ".join(LOW_CONFIDENCE_ACTIONS)
+        )
     items = data["scenarios"]
     if len(items) > MAX_SCENARIOS:
         problems.append(f"at most {MAX_SCENARIOS} scenarios are allowed")
@@ -360,7 +372,11 @@ def config_from_json(
         )
         if base is None:
             custom.add(sid)
-    return EngineConfig(scenarios, version_id, version, frozenset(custom))
+    raw_settings = data.get("settings") if isinstance(data, dict) else None
+    low_action = (raw_settings or {}).get("low_confidence_action", "script") if isinstance(raw_settings, dict) else "script"
+    if low_action not in LOW_CONFIDENCE_ACTIONS:
+        low_action = "script"
+    return EngineConfig(scenarios, version_id, version, frozenset(custom), low_action)
 
 
 def scenario_guidance(scenario: ScenarioDef | None) -> str:

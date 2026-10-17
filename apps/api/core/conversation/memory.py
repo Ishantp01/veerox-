@@ -28,6 +28,8 @@ KEY_SCOPE: dict[str, str] = {
     "name": "persistent",
     "business_type": "persistent",
     "pain_point": "persistent",
+    "team_size": "persistent",
+    "interest_level": "persistent",
     "preferred_channel": "persistent",
     "callback_time": "call",
 }

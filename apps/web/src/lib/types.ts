@@ -416,6 +416,7 @@ export interface ConfigVersion {
   published_at: string | null;
   scenario_count: number;
   scenarios: ScenarioConfig[] | null;
+  settings?: Partial<ConfigSettings>;
 }
 
 export interface ConfigOverview {
@@ -423,6 +424,7 @@ export interface ConfigOverview {
   draft: ConfigVersion | null;
   /** Complete scenario list a new draft starts from. */
   base: ScenarioConfig[];
+  base_settings?: Partial<ConfigSettings>;
 }
 
 export interface ConfigCheck {
@@ -809,4 +811,49 @@ export interface ReportsCampaignRow {
   status: CampaignStatus;
   counts: CampaignCounts;
   qualification_rate: number | null;
+}
+
+// --- Blueprint additions: low-confidence setting, template library, script suggestions ---
+
+export type LowConfidenceAction = "script" | "clarify" | "handoff";
+
+export interface ConfigSettings {
+  low_confidence_action: LowConfidenceAction;
+}
+
+export interface ScenarioTemplate {
+  scenario_id: string;
+  definition: ScenarioConfig;
+  updated_by: string;
+  updated_at: string;
+}
+
+export interface ScriptOption {
+  id: string;
+  name: string;
+  channel: string;
+  is_default: boolean;
+}
+
+export interface ScriptSection {
+  title: string;
+  kind: string;
+  text: string;
+}
+
+export interface KnowledgeSuggestion {
+  kind: KnowledgeKind;
+  title: string;
+  body: string;
+  keywords: string | null;
+}
+
+export interface ScriptSuggestions {
+  source: string;
+  characters: number;
+  sections: ScriptSection[];
+  knowledge: KnowledgeSuggestion[];
+  scenarios: ScenarioConfig[];
+  dropped: string[];
+  model_used: boolean;
 }

@@ -183,3 +183,22 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class ConversationScenarioTemplate(Base):
+    """A platform-wide scenario template, managed by platform admins (blueprint
+    section 12). Orgs copy a template into their own draft; later edits to the
+    template never change an org's existing scenarios or live versions."""
+
+    __tablename__ = "conversation_scenario_templates"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    scenario_id: Mapped[str] = mapped_column(String(31), nullable=False, unique=True)
+    definition: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )

@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Rocket, Save, Trash2, Undo2 } from "lucide-react";
+import { FileText, Library, Plus, Rocket, Save, Share2, Trash2, Undo2 } from "lucide-react";
 
+import { ScriptSuggestionsDialog } from "@/components/conversation-engine/script-suggestions-dialog";
+import { TemplateLibraryDialog } from "@/components/conversation-engine/template-library-dialog";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import {
   Badge,
@@ -28,8 +30,21 @@ import {
   useEngineConfig,
   usePublishEngineDraft,
   useSaveEngineDraft,
+  useUpsertScenarioTemplate,
 } from "@/lib/hooks";
-import type { ConfigCheck, ConversationMode, ScenarioConfig } from "@/lib/types";
+import { useAuth } from "@/lib/auth-context";
+import type {
+  ConfigCheck,
+  ConversationMode,
+  LowConfidenceAction,
+  ScenarioConfig,
+} from "@/lib/types";
+
+const LOW_CONFIDENCE_OPTIONS: { value: LowConfidenceAction; label: string; help: string }[] = [
+  { value: "script", label: "Hand over to my script (safest)", help: "Your script answers, exactly as before." },
+  { value: "clarify", label: "Ask one short clarifying question", help: "The AI asks the customer to say a little more, and does nothing else." },
+  { value: "handoff", label: "Pass to a team member", help: "The question is given to a person for follow-up." },
+];
 
 const ACTIONS: { id: string; label: string }[] = [
   { id: "request_callback", label: "Schedule a callback" },
@@ -123,12 +138,16 @@ function ScenarioForm({
   scenario,
   all,
   mode,
+  isPlatformAdmin,
+  onShare,
   onChange,
   onRemove,
 }: {
   scenario: ScenarioConfig;
   all: ScenarioConfig[];
   mode: ConversationMode | undefined;
+  isPlatformAdmin: boolean;
+  onShare: () => void;
   onChange: (next: ScenarioConfig) => void;
   onRemove: () => void;
 }) {
@@ -205,6 +224,12 @@ function ScenarioForm({
           >
             {scenario.enabled ? "Switch off" : "Switch on"}
           </Button>
+          {!builtin && isPlatformAdmin && (
+            <Button variant="outline" size="sm" onClick={onShare} aria-label="Share with all organizations">
+              <Share2 size={14} aria-hidden />
+              Share with all organizations
+            </Button>
+          )}
           {!builtin && (
             <Button variant="danger" size="sm" onClick={onRemove} aria-label="Delete scenario">
               <Trash2 size={14} aria-hidden />
@@ -513,7 +538,13 @@ export function ScenarioBuilder() {
   const publish = usePublishEngineDraft();
   const confirm = useConfirm();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const shareTemplate = useUpsertScenarioTemplate();
+  const isPlatformAdmin = Boolean(user?.is_superuser);
 
+  const [lowAction, setLowAction] = useState<LowConfidenceAction>("script");
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [scriptOpen, setScriptOpen] = useState(false);
   const [scenarios, setScenarios] = useState<ScenarioConfig[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -532,12 +563,15 @@ export function ScenarioBuilder() {
     const source = draftSource ?? base;
     if (!source) return;
     setScenarios(source.map((s) => ({ ...s })));
+    setLowAction(
+      (data.draft?.settings?.low_confidence_action ?? data.base_settings?.low_confidence_action ?? "script") as LowConfidenceAction,
+    );
     setSelectedId((current) => current ?? source[0]?.id ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, dirty]);
 
   const selected = scenarios?.find((s) => s.id === selectedId) ?? null;
-  const payload = scenarios ? { scenarios } : null;
+  const payload = scenarios ? { scenarios, settings: { low_confidence_action: lowAction } } : null;
   const hasDraft = data?.draft != null;
   const activeVersion = data?.active?.version ?? null;
 
@@ -616,6 +650,32 @@ export function ScenarioBuilder() {
     }
   }
 
+  function addScenarios(incoming: ScenarioConfig[]) {
+    setScenarios((list) => {
+      const have = new Set((list ?? []).map((s) => s.id));
+      const fresh = incoming.filter((s) => !have.has(s.id));
+      return [...(list ?? []), ...fresh];
+    });
+    setSelectedId(incoming[0]?.id ?? null);
+    setDirty(true);
+    setResult(null);
+  }
+
+  async function handleShare(scenario: ScenarioConfig) {
+    const ok = await confirm({
+      title: `Share "${scenario.name}" with every organization?`,
+      description:
+        "It is added to the template library. Organizations can copy it into their own draft; their copies stay independent of later edits here.",
+      confirmLabel: "Share",
+      variant: "primary",
+    });
+    if (!ok) return;
+    shareTemplate.mutate(scenario, {
+      onSuccess: () => toast({ title: "Added to the template library", variant: "success" }),
+      onError: (err) => toast({ title: "Could not share", description: err.message, variant: "error" }),
+    });
+  }
+
   async function handleRemove(id: string) {
     const target = scenarios?.find((s) => s.id === id);
     if (!target || target.builtin !== false) return; // built-in scenarios can only be switched off
@@ -673,6 +733,14 @@ export function ScenarioBuilder() {
                   <Plus size={14} aria-hidden />
                   New scenario
                 </Button>
+                <Button variant="outline" size="sm" onClick={() => setTemplatesOpen(true)}>
+                  <Library size={14} aria-hidden />
+                  Template library
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setScriptOpen(true)}>
+                  <FileText size={14} aria-hidden />
+                  Suggest from my script
+                </Button>
                 <Button variant="outline" size="sm" onClick={runCheck} loading={check.isPending}>
                   Check
                 </Button>
@@ -711,6 +779,29 @@ export function ScenarioBuilder() {
                   )}
                 </div>
               )}
+
+              <div className="flex flex-col gap-1 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                <Label htmlFor="sc-low-confidence">When the AI is not sure what the customer means</Label>
+                <Select
+                  id="sc-low-confidence"
+                  value={lowAction}
+                  onChange={(value) => {
+                    setLowAction(value as LowConfidenceAction);
+                    setDirty(true);
+                    setResult(null);
+                  }}
+                >
+                  {LOW_CONFIDENCE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </Select>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {LOW_CONFIDENCE_OPTIONS.find((o) => o.value === lowAction)?.help} Part of the published
+                  version, so it can be rolled back. Smart Script always uses your script.
+                </p>
+              </div>
 
               <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
                 <nav aria-label="Scenarios" className="flex max-h-[34rem] flex-col gap-1 overflow-y-auto pr-1">
@@ -764,6 +855,8 @@ export function ScenarioBuilder() {
                       scenario={selected}
                       all={scenarios}
                       mode={status.data?.conversation_mode}
+                      isPlatformAdmin={isPlatformAdmin}
+                      onShare={() => handleShare(selected)}
                       onChange={update}
                       onRemove={() => handleRemove(selected.id)}
                     />
@@ -777,6 +870,26 @@ export function ScenarioBuilder() {
         </QueryBoundary>
       </CardContent>
 
+      <TemplateLibraryDialog
+        open={templatesOpen}
+        onClose={() => setTemplatesOpen(false)}
+        existingIds={scenarios?.map((s) => s.id) ?? []}
+        isPlatformAdmin={isPlatformAdmin}
+        onAdd={(scenario) => {
+          addScenarios([scenario]);
+          setTemplatesOpen(false);
+          toast({
+            title: `"${scenario.name}" added to your draft`,
+            description: "Review it, then Save draft and Publish.",
+            variant: "success",
+          });
+        }}
+      />
+      <ScriptSuggestionsDialog
+        open={scriptOpen}
+        onClose={() => setScriptOpen(false)}
+        onAddScenarios={addScenarios}
+      />
       <NewScenarioDialog
         open={newOpen}
         onClose={() => setNewOpen(false)}

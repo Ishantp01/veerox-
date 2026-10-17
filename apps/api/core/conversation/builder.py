@@ -152,7 +152,10 @@ async def get_version(
 
 def full_config_json(config: EngineConfig) -> dict[str, Any]:
     """The complete scenario list (built-ins included) as stored JSON."""
-    return {"scenarios": [s.to_json() for s in config.scenarios.values()]}
+    return {
+        "scenarios": [s.to_json() for s in config.scenarios.values()],
+        "settings": {"low_confidence_action": config.low_confidence_action},
+    }
 
 
 async def starting_config(db: AsyncSession, org_id: UUID) -> dict[str, Any]:

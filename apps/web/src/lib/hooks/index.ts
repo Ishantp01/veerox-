@@ -199,6 +199,7 @@ export {
 export {
   useCheckEngineConfig,
   useConfigVersions,
+  useDeleteScenarioTemplate,
   useDiscardEngineDraft,
   useEngineAudit,
   useEngineConfig,
@@ -207,7 +208,11 @@ export {
   useReviewTurn,
   useRollbackEngineConfig,
   useSaveEngineDraft,
+  useEngineScripts,
+  useScenarioTemplates,
   useSetConversationMode,
   useSimulateTurn,
+  useStructureScript,
+  useUpsertScenarioTemplate,
   type DraftInput,
 } from "./useConversationEngineBuilder";

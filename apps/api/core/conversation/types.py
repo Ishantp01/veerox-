@@ -46,7 +46,15 @@ ALLOWED_ACTIONS = frozenset(
 )
 
 # Structured memory keys the engine may store (quotation §2.1).
-MEMORY_KEYS = ("name", "business_type", "pain_point", "preferred_channel", "callback_time")
+MEMORY_KEYS = (
+    "name",
+    "business_type",
+    "pain_point",
+    "team_size",
+    "interest_level",
+    "preferred_channel",
+    "callback_time",
+)
 
 # Conversation states, stored on each ConversationTurn.
 STATE_NEW = "new"

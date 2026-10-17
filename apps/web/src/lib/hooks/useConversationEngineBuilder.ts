@@ -5,6 +5,7 @@ import { queryKeys } from "@/lib/query";
 import type {
   ConfigCheck,
   ConfigOverview,
+  ConfigSettings,
   ConfigVersion,
   ConversationEngineStatus,
   ConversationMode,
@@ -12,6 +13,9 @@ import type {
   EngineAuditEvent,
   EngineMetrics,
   ScenarioConfig,
+  ScenarioTemplate,
+  ScriptOption,
+  ScriptSuggestions,
   SimulateInput,
   SimulateResult,
 } from "@/lib/types";
@@ -46,6 +50,7 @@ export function useConfigVersions() {
 
 export interface DraftInput {
   scenarios: ScenarioConfig[];
+  settings?: Partial<ConfigSettings>;
   note?: string | null;
 }
 
@@ -170,5 +175,70 @@ export function useSetConversationMode() {
       queryClient.invalidateQueries({ queryKey: queryKeys.conversationEngineStatus() });
       queryClient.invalidateQueries({ queryKey: queryKeys.conversationEngineAudit() });
     },
+  });
+}
+
+// --- Platform template library (blueprint section 12) -------------------------------
+
+/** GET /conversation-engine/templates — platform-wide scenario templates any org can copy. */
+export function useScenarioTemplates() {
+  return useQuery<ScenarioTemplate[]>({
+    queryKey: queryKeys.conversationEngineTemplates(),
+    queryFn: () => apiFetch<ScenarioTemplate[]>("/conversation-engine/templates"),
+  });
+}
+
+/** PUT /conversation-engine/templates/{id} — platform admins only. */
+export function useUpsertScenarioTemplate() {
+  const queryClient = useQueryClient();
+  return useMutation<ScenarioTemplate, Error, ScenarioConfig>({
+    mutationFn: (scenario) => {
+      const { builtin: _builtin, ...definition } = scenario;
+      return apiFetch<ScenarioTemplate>(`/conversation-engine/templates/${scenario.id}`, {
+        method: "PUT",
+        body: JSON.stringify(definition),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.conversationEngineTemplates() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.conversationEngineAudit() });
+    },
+  });
+}
+
+/** DELETE /conversation-engine/templates/{id} — platform admins only. */
+export function useDeleteScenarioTemplate() {
+  const queryClient = useQueryClient();
+  return useMutation<unknown, Error, string>({
+    mutationFn: (id) => apiFetch(`/conversation-engine/templates/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.conversationEngineTemplates() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.conversationEngineAudit() });
+    },
+  });
+}
+
+// --- Script -> structured suggestions (blueprint section 13) --------------------------
+
+/** GET /conversation-engine/scripts — this org's scripts, to pick one to analyse. */
+export function useEngineScripts() {
+  return useQuery<ScriptOption[]>({
+    queryKey: queryKeys.conversationEngineScripts(),
+    queryFn: () => apiFetch<ScriptOption[]>("/conversation-engine/scripts"),
+  });
+}
+
+/** POST /conversation-engine/script/structure — read-only suggestions; the script is never edited. */
+export function useStructureScript() {
+  return useMutation<
+    ScriptSuggestions,
+    Error,
+    { script_id?: string; text?: string; use_llm?: boolean }
+  >({
+    mutationFn: (body) =>
+      apiFetch<ScriptSuggestions>("/conversation-engine/script/structure", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
   });
 }

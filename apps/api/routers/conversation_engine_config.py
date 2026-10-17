@@ -23,12 +23,20 @@ from apps.api.core.conversation.config import (
     default_config,
     load_active_config,
     load_version_config,
+    validate_config_payload,
 )
 from apps.api.core.conversation.metrics import compute_metrics
+from apps.api.core.conversation.script_import import suggest_from_script
 from apps.api.core.conversation.simulate import simulate_turn
+from apps.api.core.llm import chat_completion
 from apps.api.core.org_openai_key import resolve_openai_api_key
-from apps.api.db.models.conversation_engine import AuditEvent, ConversationConfigVersion
+from apps.api.db.models.conversation_engine import (
+    AuditEvent,
+    ConversationConfigVersion,
+    ConversationScenarioTemplate,
+)
 from apps.api.db.models.org import Org
+from apps.api.db.models.script import Script
 from apps.api.deps import (
     DbDep,
     MemberScopeDep,
@@ -37,6 +45,7 @@ from apps.api.deps import (
     get_current_user,
     require_feature,
     verify_admin_or_session,
+    verify_platform_admin,
 )
 
 
@@ -97,8 +106,14 @@ class ScenarioIn(BaseModel):
     reply_example: str = Field(default="", max_length=500)
 
 
+class ConfigSettingsIn(BaseModel):
+    # What the AI does when it is not sure what the customer meant (blueprint section 8).
+    low_confidence_action: Literal["script", "clarify", "handoff"] = "script"
+
+
 class DraftIn(BaseModel):
     scenarios: list[ScenarioIn] = Field(max_length=60)
+    settings: ConfigSettingsIn = Field(default_factory=ConfigSettingsIn)
     note: str | None = Field(default=None, max_length=300)
 
 
@@ -123,6 +138,7 @@ class ConfigVersionOut(BaseModel):
     published_at: datetime | None
     scenario_count: int
     scenarios: list[dict[str, Any]] | None = None
+    settings: dict[str, str] = Field(default_factory=dict)
 
 
 def _version_out(row: ConversationConfigVersion, *, with_scenarios: bool) -> ConfigVersionOut:
@@ -139,6 +155,7 @@ def _version_out(row: ConversationConfigVersion, *, with_scenarios: bool) -> Con
         published_at=row.published_at,
         scenario_count=len(config.scenarios),
         scenarios=[s.to_json() for s in config.scenarios.values()] if with_scenarios else None,
+        settings={"low_confidence_action": config.low_confidence_action},
     )
 
 
@@ -147,6 +164,7 @@ class ConfigOverviewOut(BaseModel):
     draft: ConfigVersionOut | None
     # Complete scenario list a new draft starts from (active version or built-ins).
     base: list[dict[str, Any]]
+    base_settings: dict[str, str] = Field(default_factory=dict)
 
 
 @router.get("/scenarios/library", response_model=list[dict[str, Any]])
@@ -164,6 +182,7 @@ async def get_config(db: DbDep, org_id: RequestOrgDep) -> ConfigOverviewOut:
         active=_version_out(active, with_scenarios=True) if active else None,
         draft=_version_out(draft, with_scenarios=True) if draft else None,
         base=base["scenarios"],
+        base_settings=base["settings"],
     )
 
 
@@ -206,7 +225,10 @@ class CheckOut(BaseModel):
 async def check_config(payload: DraftIn) -> CheckOut:
     """Validate a configuration without saving it, so the builder can show
     every problem next to the form before an admin saves or publishes."""
-    data = {"scenarios": [s.model_dump() for s in payload.scenarios]}
+    data = {
+        "scenarios": [s.model_dump() for s in payload.scenarios],
+        "settings": payload.settings.model_dump(),
+    }
     problems = builder.validate_config_payload(data)
     regression = [] if problems else builder.regression_problems(config_from_json(data))
     return CheckOut(valid=not problems, problems=problems, regression=regression)
@@ -221,7 +243,10 @@ async def save_config_draft(
             db,
             org_id,
             actor,
-            {"scenarios": [s.model_dump() for s in payload.scenarios]},
+            {
+                "scenarios": [s.model_dump() for s in payload.scenarios],
+                "settings": payload.settings.model_dump(),
+            },
             payload.note,
         )
     except builder.BuilderError as exc:
@@ -367,3 +392,147 @@ async def engine_metrics(
     channel: Annotated[Literal["whatsapp", "voice"] | None, Query()] = None,
 ) -> dict[str, Any]:
     return await compute_metrics(db, org_id, days=days, channel=channel)
+
+
+# ---------------------------------------------------------------------------
+# Script -> structured suggestions (blueprint section 13). Read-only: nothing
+# is saved here and the original script is never touched.
+# ---------------------------------------------------------------------------
+
+
+class ScriptOptionOut(BaseModel):
+    id: UUID
+    name: str
+    channel: str
+    is_default: bool
+
+    model_config = {"from_attributes": True}
+
+
+class ScriptStructureIn(BaseModel):
+    script_id: UUID | None = None
+    text: str | None = Field(default=None, max_length=20_000)
+    use_llm: bool = True
+
+
+@router.get("/scripts", response_model=list[ScriptOptionOut])
+async def list_scripts(db: DbDep, org_id: RequestOrgDep) -> list[Script]:
+    rows = await db.execute(
+        select(Script).where(Script.org_id == org_id).order_by(Script.channel, Script.name)
+    )
+    return list(rows.scalars().all())
+
+
+@router.post("/script/structure")
+async def structure_script(
+    payload: ScriptStructureIn, db: DbDep, org_id: RequestOrgDep
+) -> dict[str, Any]:
+    """Suggest approved knowledge and scenarios from an existing script."""
+    if payload.script_id is not None:
+        script = await db.get(Script, payload.script_id)
+        if script is None or script.org_id != org_id:
+            raise HTTPException(status_code=404, detail="Script not found")
+        text = script.content
+        source = script.name
+    elif payload.text and payload.text.strip():
+        text = payload.text
+        source = "pasted text"
+    else:
+        raise HTTPException(status_code=422, detail="Pick a script or paste its text")
+
+    llm = None
+    if payload.use_llm:
+        org = await db.get(Org, org_id)
+        api_key = resolve_openai_api_key(org)
+
+        async def llm(messages: list[dict[str, Any]]):  # type: ignore[misc]
+            return await chat_completion(messages, temperature=0.0, max_tokens=2500, api_key=api_key)
+
+    active = await load_active_config(db, org_id)
+    suggestions = await suggest_from_script(
+        text, existing_scenario_ids=set(active.ids()), llm=llm
+    )
+    return {"source": source, "characters": len(text), **suggestions.to_json()}
+
+
+# ---------------------------------------------------------------------------
+# Platform-wide scenario templates (blueprint section 12). Any org admin can read
+# the library and copy a template into their own draft; only platform admins can
+# change it. Copies are independent: editing a template never alters an org.
+# ---------------------------------------------------------------------------
+
+
+class TemplateOut(BaseModel):
+    scenario_id: str
+    definition: dict[str, Any]
+    updated_by: str
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/templates", response_model=list[TemplateOut])
+async def list_templates(db: DbDep) -> list[ConversationScenarioTemplate]:
+    rows = await db.execute(
+        select(ConversationScenarioTemplate).order_by(ConversationScenarioTemplate.scenario_id)
+    )
+    return list(rows.scalars().all())
+
+
+@router.put(
+    "/templates/{scenario_id}",
+    response_model=TemplateOut,
+    dependencies=[Depends(verify_platform_admin)],
+)
+async def upsert_template(
+    scenario_id: str, payload: ScenarioIn, db: DbDep, org_id: RequestOrgDep, actor: ActorDep
+) -> ConversationScenarioTemplate:
+    if payload.id != scenario_id:
+        raise HTTPException(status_code=422, detail="The scenario id in the body must match the URL")
+    if scenario_id in {s.id for s in DEFAULT_SCENARIOS}:
+        raise HTTPException(status_code=422, detail="Built-in scenarios cannot be templates")
+    definition = payload.model_dump()
+    problems = validate_config_payload({"scenarios": [definition]})
+    if problems:
+        raise HTTPException(status_code=422, detail="; ".join(problems))
+    row = (
+        await db.execute(
+            select(ConversationScenarioTemplate).where(
+                ConversationScenarioTemplate.scenario_id == scenario_id
+            )
+        )
+    ).scalar_one_or_none()
+    created = row is None
+    if row is None:
+        row = ConversationScenarioTemplate(scenario_id=scenario_id, definition=definition, updated_by=actor[:120])
+        db.add(row)
+    else:
+        row.definition = definition
+        row.updated_by = actor[:120]
+    builder.add_audit(
+        db, org_id, actor, "template.created" if created else "template.updated",
+        "template", scenario_id, {"name": payload.name},
+    )
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+@router.delete(
+    "/templates/{scenario_id}",
+    status_code=204,
+    dependencies=[Depends(verify_platform_admin)],
+)
+async def delete_template(scenario_id: str, db: DbDep, org_id: RequestOrgDep, actor: ActorDep) -> None:
+    row = (
+        await db.execute(
+            select(ConversationScenarioTemplate).where(
+                ConversationScenarioTemplate.scenario_id == scenario_id
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    builder.add_audit(db, org_id, actor, "template.deleted", "template", scenario_id)
+    await db.delete(row)
+    await db.commit()

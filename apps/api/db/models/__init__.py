@@ -9,6 +9,7 @@ from apps.api.db.models.conversation_engine import (
     AuditEvent,
     ConversationConfigVersion,
     ConversationMemory,
+    ConversationScenarioTemplate,
     ConversationTurn,
     KnowledgeItem,
 )
@@ -38,6 +39,7 @@ from apps.api.db.models.whatsapp_asset import WhatsAppAsset
 __all__ = [
     "AuditEvent",
     "ConversationConfigVersion",
+    "ConversationScenarioTemplate",
     "AccountUser",
     "Appointment",
     "AwsCostPool",

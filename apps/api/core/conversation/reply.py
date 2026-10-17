@@ -121,6 +121,11 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "hinglish": "Dhanyavaad{who}! Aapka din shubh ho.",
         "hi": "धन्यवाद{who}! आपका दिन शुभ हो।",
     },
+    "clarify": {
+        "en": "Sorry, I want to be sure I understood. Could you tell me a little more about what you need?",
+        "hinglish": "Maaf kijiye, main sahi se samajhna chahta hoon. Aap thoda aur bata sakte hain ki aapko kya chahiye?",
+        "hi": "क्षमा करें, मैं सही से समझना चाहता हूँ। क्या आप थोड़ा और बता सकते हैं कि आपको क्या चाहिए?",
+    },
     "guided": {
         "en": "I understand. Let me help you with that.",
         "hinglish": "Main samajh gaya. Main isme aapki madad karta hoon.",

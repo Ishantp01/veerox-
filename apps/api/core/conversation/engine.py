@@ -24,7 +24,7 @@ from apps.api.core.conversation.config import (
     resolve_config,
     scenario_guidance,
 )
-from apps.api.core.conversation.decide import decide, validate_action
+from apps.api.core.conversation.decide import decide, low_confidence_decision, validate_action
 from apps.api.core.conversation.knowledge import find_knowledge
 from apps.api.core.conversation.memory import load_memory, save_facts
 from apps.api.core.conversation.reply import build_reply
@@ -236,8 +236,15 @@ async def run_engine(
             and understanding.proposed_action not in ALLOWED_ACTIONS
         ):
             return await fall_back("invalid_action", state=state)
+        forced: Decision | None = None
         if understanding.confidence < settings.conversation_min_confidence:
-            return await fall_back("low_confidence", state=state)
+            # Smart Script never improvises when unsure: the org's script answers.
+            if not smart_script:
+                forced = low_confidence_decision(
+                    config.low_confidence_action, text=text, state=state
+                )
+            if forced is None:
+                return await fall_back("low_confidence", state=state)
 
         if smart_script and understanding.scenario not in SMART_SCRIPT_ENGINE_SCENARIOS:
             # Smart Script: the org's script answers, steered by the scenario.
@@ -254,9 +261,9 @@ async def run_engine(
             return EngineResult(None, "smart_script", tokens_in, tokens_out, guidance or None)
 
         knowledge: list[Any] = []
-        if wants_knowledge(understanding.scenario, config):
+        if forced is None and wants_knowledge(understanding.scenario, config):
             knowledge = await find_knowledge(db, org_id, text, understanding.language)
-        decision = decide(
+        decision = forced or decide(
             understanding,
             text=text,
             memory=memory,

@@ -149,6 +149,21 @@ def _custom_decision(
     return Decision("none", {}, "guided", knowledge=knowledge, next_state=STATE_ENGAGED)
 
 
+def low_confidence_decision(mode: str, *, text: str, state: str | None) -> Decision | None:
+    """What to do when the AI is not sure what the customer meant, if the org chose
+    something other than handing the turn to its script (blueprint section 8)."""
+    if mode == "clarify":
+        return Decision("none", {}, "clarify", next_state=state or STATE_ENGAGED)
+    if mode == "handoff":
+        return Decision(
+            "transfer_to_human",
+            {"reason": f"The AI was not sure what the customer meant: {text.strip()[:_MAX_REASON_LEN]}", "urgency": "low"},
+            "unknown_followup",
+            next_state=STATE_HANDED_OFF,
+        )
+    return None
+
+
 def decide(
     understanding: Understanding,
     *,

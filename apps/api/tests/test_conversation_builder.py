@@ -3,6 +3,7 @@ silence handling and the scenario-library additions (quotation 2.1 - 2.6)."""
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import date
@@ -29,7 +30,7 @@ from apps.api.core.conversation.silence import SilenceMonitor
 from apps.api.core.conversation.types import Decision, Understanding
 from apps.api.core.conversation.understand import classify_with_rules
 from apps.api.core.llm import ChatResult
-from apps.api.db.models import Conversation, Org, User
+from apps.api.db.models import Appointment, Conversation, Org, User
 from apps.api.db.models.conversation_engine import (
     ConversationConfigVersion,
     ConversationTurn,
@@ -1015,3 +1016,290 @@ def test_words_that_only_look_like_tomorrow_do_not_move_the_date(text: str) -> N
     result = classify_with_rules(text, state=None, today=TODAY, config=default_config())
     assert result is not None
     assert result.facts.get("callback_date", "2026-10-15") == "2026-10-15"
+
+
+async def test_low_confidence_setting_is_versioned_and_validated(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed(db_session)
+    scenarios = [s.to_json() for s in DEFAULT_SCENARIOS]
+    bad = await client.put(
+        "/conversation-engine/config/draft",
+        headers=ADMIN_HEADERS,
+        json={"scenarios": scenarios, "settings": {"low_confidence_action": "explode"}},
+    )
+    assert bad.status_code == 422
+    ok = await client.put(
+        "/conversation-engine/config/draft",
+        headers=ADMIN_HEADERS,
+        json={"scenarios": scenarios, "settings": {"low_confidence_action": "clarify"}},
+    )
+    assert ok.status_code == 200 and ok.json()["settings"] == {"low_confidence_action": "clarify"}
+    await client.post("/conversation-engine/config/draft/publish", headers=ADMIN_HEADERS, json={})
+    live = (await client.get("/conversation-engine/config", headers=ADMIN_HEADERS)).json()
+    assert live["active"]["settings"]["low_confidence_action"] == "clarify"
+    # A later version can change it back; the earlier version keeps its own value.
+    await client.put(
+        "/conversation-engine/config/draft",
+        headers=ADMIN_HEADERS,
+        json={"scenarios": scenarios, "settings": {"low_confidence_action": "handoff"}},
+    )
+    await client.post("/conversation-engine/config/draft/publish", headers=ADMIN_HEADERS, json={})
+    v1 = (await client.get("/conversation-engine/config/versions/1", headers=ADMIN_HEADERS)).json()
+    v2 = (await client.get("/conversation-engine/config/versions/2", headers=ADMIN_HEADERS)).json()
+    assert v1["settings"]["low_confidence_action"] == "clarify"
+    assert v2["settings"]["low_confidence_action"] == "handoff"
+
+
+# --- blueprint section 22: POST /internal/conversation/turn -----------------------------------------------
+
+TURN_FIELDS = {
+    "conversation_id", "agent_version_id", "agent_version", "response_text", "scenario", "state",
+    "intent", "confidence", "memory_updates", "actions", "fallback_required", "fallback_reason",
+}
+
+
+async def _conv(db_session: AsyncSession) -> Conversation:
+    from sqlalchemy import select as _select
+
+    return (await db_session.execute(_select(Conversation))).scalars().first()
+
+
+async def test_s22_turn_contract_returns_response_and_structured_actions(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed(db_session)
+    conversation = await _conv(db_session)
+    before = await db_session.scalar(select(func.count()).select_from(Appointment))
+    response = await client.post(
+        "/internal/conversation/turn",
+        headers=ADMIN_HEADERS,
+        json={
+            "conversation_id": str(conversation.id),
+            "customer_transcript": "I am busy, call me tomorrow at 5 pm",
+            "call_context": {"channel": "voice"},
+            "timestamp": "2026-10-16T10:00:00Z",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == TURN_FIELDS
+    assert body["scenario"] == "busy_callback" and body["state"] == "callback_set"
+    assert body["fallback_required"] is False and body["response_text"]
+    assert body["actions"][0]["id"] == "request_callback"
+    assert body["actions"][0]["args"]["time"] == "17:00"
+    assert body["memory_updates"]["callback_time"].endswith("17:00")
+    assert body["confidence"] > 0.5 and body["intent"]
+    # The orchestrator decides; it does not execute: no callback was booked by this call.
+    after = await db_session.scalar(select(func.count()).select_from(Appointment))
+    assert after == before
+    # Memory and the turn log were persisted, so the decision is traceable.
+    turn = (await db_session.execute(select(ConversationTurn))).scalars().one()
+    assert turn.mode == "api" and turn.channel == "voice" and turn.scenario == "busy_callback"
+
+
+async def test_s22_turn_carries_state_between_calls(client: AsyncClient, db_session: AsyncSession) -> None:
+    await _seed(db_session)
+    conversation = await _conv(db_session)
+
+    async def turn(text: str) -> dict[str, Any]:
+        r = await client.post(
+            "/internal/conversation/turn", headers=ADMIN_HEADERS,
+            json={"conversation_id": str(conversation.id), "customer_transcript": text},
+        )
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    first = await turn("Haan bataiye, lekin main abhi thoda busy hoon.")
+    assert first["state"] == "awaiting_callback_time" and first["actions"] == []
+    second = await turn("Shaam ko 6 baje.")
+    assert second["actions"][0]["id"] == "request_callback"
+    assert second["actions"][0]["args"]["time"] == "18:00"  # the blueprint's section 29 example
+
+
+async def test_s22_turn_asks_for_the_script_when_the_engine_is_off(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed(db_session, mode="strict_script")
+    conversation = await _conv(db_session)
+    body = (
+        await client.post(
+            "/internal/conversation/turn", headers=ADMIN_HEADERS,
+            json={"conversation_id": str(conversation.id), "customer_transcript": "hello"},
+        )
+    ).json()
+    assert body["fallback_required"] is True and body["response_text"] is None
+    assert body["fallback_reason"] == "engine_off"
+
+
+async def test_s22_turn_is_tenant_scoped_and_validates_versions(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed(db_session)
+    other_user = uuid.uuid4()
+    db_session.add(User(id=other_user, org_id=OTHER_ORG_ID, phone="+910000000077", name="O"))
+    await db_session.commit()
+    foreign = Conversation(org_id=OTHER_ORG_ID, user_id=other_user, channel="whatsapp")
+    db_session.add(foreign)
+    await db_session.commit()
+    denied = await client.post(
+        "/internal/conversation/turn", headers=ADMIN_HEADERS,
+        json={"conversation_id": str(foreign.id), "customer_transcript": "hello"},
+    )
+    assert denied.status_code == 404  # another tenant's conversation is invisible
+    mine = await _conv(db_session)
+    bad_version = await client.post(
+        "/internal/conversation/turn", headers=ADMIN_HEADERS,
+        json={"conversation_id": str(mine.id), "agent_version_id": str(uuid.uuid4()), "customer_transcript": "hello"},
+    )
+    assert bad_version.status_code == 404
+    assert (await client.post("/internal/conversation/turn", json={})).status_code in (401, 403, 422)
+
+
+async def test_s22_turn_can_be_pinned_to_a_published_version(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed(db_session)
+    conversation = await _conv(db_session)
+    scenarios = [s.to_json() for s in DEFAULT_SCENARIOS]
+    await client.put("/conversation-engine/config/draft", headers=ADMIN_HEADERS, json={"scenarios": scenarios})
+    published = (
+        await client.post("/conversation-engine/config/draft/publish", headers=ADMIN_HEADERS, json={})
+    ).json()
+    body = (
+        await client.post(
+            "/internal/conversation/turn", headers=ADMIN_HEADERS,
+            json={"conversation_id": str(conversation.id), "agent_version_id": published["id"],
+                  "customer_transcript": "hello"},
+        )
+    ).json()
+    assert body["agent_version_id"] == published["id"] and body["agent_version"] == 1
+
+
+async def test_s13_structure_endpoint_is_read_only_and_org_scoped(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from apps.api.db.models.script import Script
+    from apps.api.routers import conversation_engine_config as router_module
+
+    await _seed(db_session)
+    mine = Script(org_id=ORG_ID, name="Main script", content="PRICING\nStarter is Rs 999 per month.", channel="whatsapp")
+    theirs = Script(org_id=OTHER_ORG_ID, name="Their script", content="SECRET\nTheir plan is Rs 1.", channel="voice")
+    db_session.add_all([mine, theirs])
+    await db_session.commit()
+
+    async def fake_chat(messages: list[dict[str, Any]], **kwargs: Any) -> ChatResult:
+        body = json.dumps({"knowledge": [{"kind": "pricing", "title": "Starter", "body": "Starter is Rs 999 per month.", "keywords": "price"}],
+                           "scenarios": []})
+        return ChatResult(content=body, tokens_in=1, tokens_out=1)
+
+    monkeypatch.setattr(router_module, "chat_completion", fake_chat)
+
+    listed = (await client.get("/conversation-engine/scripts", headers=ADMIN_HEADERS)).json()
+    assert [s["name"] for s in listed] == ["Main script"]  # the other org's script is invisible
+
+    result = await client.post("/conversation-engine/script/structure", headers=ADMIN_HEADERS, json={"script_id": str(mine.id)})
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["source"] == "Main script" and body["model_used"] is True, body["dropped"]
+    assert [k["title"] for k in body["knowledge"]] == ["Starter"] and body["sections"][0]["title"] == "PRICING"
+
+    assert (
+        await client.post("/conversation-engine/script/structure", headers=ADMIN_HEADERS, json={"script_id": str(theirs.id)})
+    ).status_code == 404
+    assert (await client.post("/conversation-engine/script/structure", headers=ADMIN_HEADERS, json={})).status_code == 422
+
+    # Pasted text without the model returns sections only.
+    plain = (
+        await client.post("/conversation-engine/script/structure", headers=ADMIN_HEADERS,
+                          json={"text": "OPENING\nHello there", "use_llm": False})
+    ).json()
+    assert plain["model_used"] is False and plain["sections"][0]["kind"] == "opening"
+
+    # Read-only: nothing was saved and the script is untouched.
+    from apps.api.db.models.conversation_engine import KnowledgeItem as _K
+
+    assert await db_session.scalar(select(func.count()).select_from(_K)) == 0
+    await db_session.refresh(mine)
+    assert mine.content == "PRICING\nStarter is Rs 999 per month."
+
+
+# --- platform scenario templates: library management and independent copies -----------------------------
+
+
+async def test_template_library_crud_and_validation(client: AsyncClient, db_session: AsyncSession) -> None:
+    await _seed(db_session)
+    template = _scenario(id="returns_policy", name="Returns policy", examples=["can I return it", "return kaise karun"],
+                         goal="Explain returns using approved facts")
+    assert (await client.get("/conversation-engine/templates", headers=ADMIN_HEADERS)).json() == []
+
+    created = await client.put("/conversation-engine/templates/returns_policy", headers=ADMIN_HEADERS, json=template)
+    assert created.status_code == 200, created.text
+    assert created.json()["scenario_id"] == "returns_policy"
+    listed = (await client.get("/conversation-engine/templates", headers=ADMIN_HEADERS)).json()
+    assert [t["scenario_id"] for t in listed] == ["returns_policy"]
+
+    renamed = await client.put(
+        "/conversation-engine/templates/returns_policy", headers=ADMIN_HEADERS, json={**template, "name": "Returns"}
+    )
+    assert renamed.status_code == 200 and renamed.json()["definition"]["name"] == "Returns"
+    assert len((await client.get("/conversation-engine/templates", headers=ADMIN_HEADERS)).json()) == 1  # updated in place
+
+    # Guard rails.
+    mismatch = await client.put("/conversation-engine/templates/other_id", headers=ADMIN_HEADERS, json=template)
+    assert mismatch.status_code == 422
+    builtin = _scenario(id="greeting", name="Greeting")
+    assert (await client.put("/conversation-engine/templates/greeting", headers=ADMIN_HEADERS, json=builtin)).status_code == 422
+    no_examples = _scenario(id="empty_one", name="Empty", examples=[])
+    assert (await client.put("/conversation-engine/templates/empty_one", headers=ADMIN_HEADERS, json=no_examples)).status_code == 422
+    assert (await client.put("/conversation-engine/templates/returns_policy", json=template)).status_code in (401, 403)
+
+    audit = [e["action"] for e in (await client.get("/conversation-engine/audit", headers=ADMIN_HEADERS)).json()]
+    assert "template.created" in audit and "template.updated" in audit
+
+    assert (await client.delete("/conversation-engine/templates/returns_policy", headers=ADMIN_HEADERS)).status_code == 204
+    assert (await client.delete("/conversation-engine/templates/returns_policy", headers=ADMIN_HEADERS)).status_code == 404
+    assert (await client.get("/conversation-engine/templates", headers=ADMIN_HEADERS)).json() == []
+
+
+async def test_template_copies_are_independent_of_later_template_edits(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed(db_session)
+    template = _scenario(id="returns_policy", name="Returns policy", examples=["can I return it"], goal="Explain returns")
+    await client.put("/conversation-engine/templates/returns_policy", headers=ADMIN_HEADERS, json=template)
+
+    # An org copies the template into its draft and publishes it.
+    copied = (await client.get("/conversation-engine/templates", headers=ADMIN_HEADERS)).json()[0]["definition"]
+    await client.put(
+        "/conversation-engine/config/draft", headers=ADMIN_HEADERS,
+        json=_payload({k: v for k, v in copied.items() if k != "builtin"}),
+    )
+    assert (
+        await client.post("/conversation-engine/config/draft/publish", headers=ADMIN_HEADERS, json={})
+    ).status_code == 200
+
+    # The platform admin later edits and then deletes the template.
+    await client.put(
+        "/conversation-engine/templates/returns_policy", headers=ADMIN_HEADERS,
+        json={**template, "goal": "A completely different goal"},
+    )
+    await client.delete("/conversation-engine/templates/returns_policy", headers=ADMIN_HEADERS)
+
+    live = (await client.get("/conversation-engine/config", headers=ADMIN_HEADERS)).json()["active"]
+    mine = next(s for s in live["scenarios"] if s["id"] == "returns_policy")
+    assert mine["goal"] == "Explain returns"  # the org's live copy did not change
+
+
+def test_template_migration_is_a_single_additive_head() -> None:
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    root = Path(__file__).resolve().parents[3]
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    script = ScriptDirectory.from_config(config)
+    assert script.get_heads() == ["d0f6b4c8e2a5"]  # one head: the deploy's `alembic upgrade head` is unambiguous
+    assert script.get_revision("d0f6b4c8e2a5").down_revision == "c9e5a3b7d1f4"

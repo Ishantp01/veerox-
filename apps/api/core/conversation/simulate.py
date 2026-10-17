@@ -20,7 +20,7 @@ from apps.api.core.conversation.config import (
     EngineConfig,
     scenario_guidance,
 )
-from apps.api.core.conversation.decide import decide, validate_action
+from apps.api.core.conversation.decide import decide, low_confidence_decision, validate_action
 from apps.api.core.conversation.engine import _default_llm, wants_knowledge
 from apps.api.core.conversation.knowledge import find_knowledge
 from apps.api.core.conversation.reply import build_reply
@@ -100,9 +100,13 @@ async def simulate_turn(
     if understanding.proposed_action is not None and understanding.proposed_action not in ALLOWED_ACTIONS:
         result.update(fallback_reason="invalid_action", handled_by="script")
         return finish()
+    forced = None
     if understanding.confidence < settings.conversation_min_confidence:
-        result.update(fallback_reason="low_confidence", handled_by="script")
-        return finish()
+        if not smart_script:
+            forced = low_confidence_decision(config.low_confidence_action, text=text, state=state)
+        if forced is None:
+            result.update(fallback_reason="low_confidence", handled_by="script")
+            return finish()
 
     memory_after = dict(memory)
     memory_after.update({k: v for k, v in understanding.facts.items() if k in MEMORY_KEYS})
@@ -117,9 +121,9 @@ async def simulate_turn(
         return finish()
 
     knowledge: list[Any] = []
-    if wants_knowledge(understanding.scenario, config):
+    if forced is None and wants_knowledge(understanding.scenario, config):
         knowledge = await find_knowledge(db, org_id, text, understanding.language)
-    decision = decide(
+    decision = forced or decide(
         understanding, text=text, memory=memory, knowledge=knowledge, channel=channel, config=config
     )
     if not validate_action(decision.action_id, decision.args):

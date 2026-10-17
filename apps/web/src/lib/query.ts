@@ -78,6 +78,8 @@ export const queryKeys = {
   conversationEngineConfig: () => ["conversation-engine", "config"] as const,
   conversationEngineVersions: () => ["conversation-engine", "versions"] as const,
   conversationEngineAudit: () => ["conversation-engine", "audit"] as const,
+  conversationEngineTemplates: () => ["conversation-engine", "templates"] as const,
+  conversationEngineScripts: () => ["conversation-engine", "scripts"] as const,
   conversationEngineMetrics: (filters: object) =>
     ["conversation-engine", "metrics", filters] as const,
   platformSettings: () => ["platform-settings"] as const,

@@ -37,7 +37,7 @@ from apps.api.core.conversation.config import (
     resolve_config,
     scenario_guidance,
 )
-from apps.api.core.conversation.decide import decide, validate_action
+from apps.api.core.conversation.decide import decide, low_confidence_decision, validate_action
 from apps.api.core.conversation.engine import (
     _default_llm,
     _last_state,
@@ -173,6 +173,7 @@ async def compute_voice_plan(
             config = await resolve_config(db, org_id, conversation_id)
             understanding: Understanding | None = None
             fallback: str | None = None
+            forced: Decision | None = None
             try:
                 understanding = await understand(
                     text,
@@ -192,7 +193,14 @@ async def compute_voice_plan(
                 ):
                     fallback = "invalid_action"
                 elif understanding.confidence < settings.conversation_min_confidence:
-                    fallback = "low_confidence"
+                    # Not sure what the caller meant (often a garbled transcript). Unless the
+                    # org chose otherwise, or is on Smart Script, leave the call as it is.
+                    if not _smart_cache.get(org_id):
+                        forced = low_confidence_decision(
+                            config.low_confidence_action, text=text, state=state
+                        )
+                    if forced is None:
+                        fallback = "low_confidence"
             if fallback is not None:
                 await _log_turn(
                     db,
@@ -210,6 +218,8 @@ async def compute_voice_plan(
                 )
                 return None
             assert understanding is not None
+            if forced is not None:
+                return VoicePlan(understanding, forced, memory, state, started, "", config)
             if _smart_cache.get(org_id) and (
                 understanding.scenario not in SMART_SCRIPT_ENGINE_SCENARIOS
             ):
@@ -332,6 +342,12 @@ def build_instruction(plan: VoicePlan, *, action_result: dict[str, Any] | None) 
         body = (
             "Do not promise any discount or offer. Say the team can share the best offer and ask "
             "when a quick call would suit them."
+        )
+    elif kind == "clarify":
+        body = (
+            "You did not quite catch what the caller meant. Say politely that you want to be sure "
+            "you understood, and ask them to say a little more about what they need. Ask only that "
+            "one question and do not guess or pitch."
         )
     elif kind == "closing":
         body = "The caller is wrapping up. Thank them warmly and say goodbye. Do not pitch again."

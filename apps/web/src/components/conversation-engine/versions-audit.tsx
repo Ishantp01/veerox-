@@ -31,6 +31,9 @@ const ACTION_LABELS: Record<string, string> = {
   "knowledge.updated": "Edited knowledge",
   "knowledge.deleted": "Deleted knowledge",
   "org.conversation_mode_changed": "Changed AI mode",
+  "template.created": "Shared a template",
+  "template.updated": "Updated a template",
+  "template.deleted": "Removed a template",
   "org.conversation_voice_mode_changed": "Changed voice mode",
 };
 
