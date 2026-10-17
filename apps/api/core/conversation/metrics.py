@@ -23,6 +23,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.config import settings
 from apps.api.core.conversation.types import (
     STATE_APPOINTMENT_SET,
     STATE_CALLBACK_SET,
@@ -132,4 +133,150 @@ async def compute_metrics(
         "transfer_rate": _ratio(len(transferred), conversations),
         "by_channel": dict(Counter(r.channel for r in rows)),
         "by_mode": dict(Counter(r.mode for r in rows)),
+    }
+
+
+_SAMPLE_LIMIT = 10
+# Reasons that mean the engine could not understand the customer.
+_UNDERSTANDING_REASONS = frozenset({"low_confidence", "invalid_output", "timeout"})
+
+
+async def compute_tuning_report(
+    db: AsyncSession, org_id: UUID, *, days: int = 14, channel: str | None = None
+) -> dict[str, Any]:
+    """Phase 6 optimisation report, read from the turn log only.
+
+    Answers: where do model cost and latency come from, which scenarios are
+    weak, what do reviewers say we get wrong, and what do customers ask that
+    we cannot answer. Nothing here changes behaviour.
+    """
+    since = datetime.now(UTC) - timedelta(days=days)
+    stmt = (
+        select(
+            ConversationTurn.scenario,
+            ConversationTurn.source,
+            ConversationTurn.confidence,
+            ConversationTurn.fallback_reason,
+            ConversationTurn.latency_ms,
+            ConversationTurn.review_label,
+            ConversationTurn.review_scenario,
+            ConversationTurn.user_text,
+            ConversationTurn.knowledge_ids,
+        )
+        .where(ConversationTurn.org_id == org_id, ConversationTurn.created_at >= since)
+        .order_by(ConversationTurn.created_at.desc())
+        .limit(_MAX_ROWS)
+    )
+    if channel is not None:
+        stmt = stmt.where(ConversationTurn.channel == channel)
+    rows = (await db.execute(stmt)).all()
+    total = len(rows)
+
+    # Cost / latency: rules are free and instant; "llm" turns cost a model call.
+    latencies_by_source: dict[str, list[int]] = {}
+    counts_by_source: Counter[str] = Counter()
+    for r in rows:
+        name = r.source or "none"
+        counts_by_source[name] += 1
+        latencies_by_source.setdefault(name, [])
+        if r.latency_ms is not None:
+            latencies_by_source[name].append(r.latency_ms)
+    by_source = {
+        name: {
+            "turns": counts_by_source[name],
+            "share": _ratio(counts_by_source[name], total),
+            "p50_ms": _percentile(vals, 50),
+            "p95_ms": _percentile(vals, 95),
+        }
+        for name, vals in latencies_by_source.items()
+    }
+    llm_turns = counts_by_source.get("llm", 0)
+
+    # Per-scenario health.
+    stats: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        if not r.scenario:
+            continue
+        s = stats.setdefault(
+            r.scenario, {"turns": 0, "llm": 0, "fallbacks": 0, "conf": [], "reviewed": 0, "correct": 0}
+        )
+        s["turns"] += 1
+        s["llm"] += r.source == "llm"
+        s["fallbacks"] += bool(r.fallback_reason and r.fallback_reason not in _BY_DESIGN)
+        if r.confidence is not None:
+            s["conf"].append(r.confidence)
+        if r.review_label in ("correct", "incorrect"):
+            s["reviewed"] += 1
+            s["correct"] += r.review_label == "correct"
+    scenario_report = [
+        {
+            "scenario": name,
+            "turns": s["turns"],
+            "llm_share": _ratio(s["llm"], s["turns"]),
+            "fallback_rate": _ratio(s["fallbacks"], s["turns"]),
+            "avg_confidence": round(sum(s["conf"]) / len(s["conf"]), 3) if s["conf"] else None,
+            "accuracy": _ratio(s["correct"], s["reviewed"]),
+            "reviewed": s["reviewed"],
+        }
+        for name, s in stats.items()
+    ]
+    # Weakest first: highest fallback rate, then lowest confidence.
+    scenario_report.sort(key=lambda x: (-(x["fallback_rate"] or 0), x["avg_confidence"] or 1))
+
+    # Reviewer corrections: predicted -> should have been.
+    confusions = Counter(
+        (r.scenario, r.review_scenario)
+        for r in rows
+        if r.review_label == "incorrect" and r.review_scenario and r.scenario
+    )
+    # Phrases worth turning into scenario examples (engine did not understand).
+    not_understood = [
+        r.user_text[:200] for r in rows if r.fallback_reason in _UNDERSTANDING_REASONS and r.user_text
+    ][:_SAMPLE_LIMIT]
+    # Questions with no approved answer: knowledge gaps.
+    knowledge_gaps = [
+        r.user_text[:200]
+        for r in rows
+        if r.scenario == "unknown_question" and not r.knowledge_ids and r.user_text
+    ][:_SAMPLE_LIMIT]
+    # Fallbacks just under the confidence cut-off.
+    near_miss = sum(
+        1
+        for r in rows
+        if r.fallback_reason == "low_confidence"
+        and r.confidence is not None
+        and r.confidence >= settings.conversation_min_confidence - 0.1
+    )
+
+    suggestions: list[str] = []
+    if total and llm_turns / total > 0.4:
+        suggestions.append(
+            "More than 40% of turns need a model call: add example phrases to the busiest "
+            "scenarios so rules can decide them."
+        )
+    if near_miss >= 5:
+        suggestions.append(
+            f"{near_miss} turns fell back just under the confidence threshold "
+            f"({settings.conversation_min_confidence}); review them before lowering it."
+        )
+    if knowledge_gaps:
+        suggestions.append("Customers asked questions with no approved answer: add knowledge items.")
+    if confusions:
+        suggestions.append("Reviewers corrected scenarios: add examples for the corrected scenarios.")
+
+    return {
+        "days": days,
+        "channel": channel,
+        "turns": total,
+        "llm_turns": llm_turns,
+        "llm_share": _ratio(llm_turns, total),
+        "by_source": by_source,
+        "weakest_scenarios": scenario_report[:10],
+        "scenario_corrections": [
+            {"predicted": a, "should_be": b, "count": n} for (a, b), n in confusions.most_common(10)
+        ],
+        "not_understood_samples": not_understood,
+        "knowledge_gap_samples": knowledge_gaps,
+        "low_confidence_near_misses": near_miss,
+        "suggestions": suggestions,
     }

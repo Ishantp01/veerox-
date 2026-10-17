@@ -698,6 +698,52 @@ async def test_metrics_and_turn_review(client: AsyncClient, db_session: AsyncSes
     ).status_code == 404
 
 
+async def test_tuning_report(client: AsyncClient, db_session: AsyncSession) -> None:
+    conversation = await _seed(db_session)
+
+    def turn(**kw: Any) -> ConversationTurn:
+        base: dict[str, Any] = {
+            "org_id": ORG_ID, "user_id": USER_ID, "conversation_id": conversation.id,
+            "channel": "whatsapp", "mode": "live", "user_text": "x", "latency_ms": 100, "source": "rules",
+        }
+        base.update(kw)
+        return ConversationTurn(**base)
+
+    db_session.add_all(
+        [
+            turn(scenario="busy_callback", confidence=0.9),
+            turn(scenario="price_question", source="llm", confidence=0.5, latency_ms=800,
+                 fallback_reason="low_confidence", user_text="kitne ka padega"),
+            turn(scenario="unknown_question", source="llm", confidence=0.8, user_text="do you ship to Nepal"),
+            turn(scenario="price_question", review_label="incorrect", review_scenario="discount_request"),
+        ]
+    )
+    await db_session.commit()
+
+    report = (await client.get("/conversation-engine/metrics/tuning", headers=ADMIN_HEADERS)).json()
+    assert report["turns"] == 4 and report["llm_turns"] == 2 and report["llm_share"] == 0.5
+    assert report["by_source"]["llm"]["p95_ms"] == 800
+    assert report["weakest_scenarios"][0]["scenario"] == "price_question"
+    assert report["scenario_corrections"] == [
+        {"predicted": "price_question", "should_be": "discount_request", "count": 1}
+    ]
+    assert report["not_understood_samples"] == ["kitne ka padega"]
+    assert report["knowledge_gap_samples"] == ["do you ship to Nepal"]
+    assert report["low_confidence_near_misses"] == 1
+    assert any("model call" in s for s in report["suggestions"])
+    # Plain members cannot read it.
+    assert (await client.get("/conversation-engine/metrics/tuning")).status_code in (401, 403)
+
+
+def test_default_mode_setting_is_a_valid_mode() -> None:
+    from apps.api.config import settings
+    from apps.api.db.models.org import CONVERSATION_MODES
+
+    # Phase 7 switch ships off: new orgs stay on Strict Script until it is changed.
+    assert settings.conversation_default_mode == "strict_script"
+    assert settings.conversation_default_mode in CONVERSATION_MODES
+
+
 # --- silence handling ---------------------------------------------------------------------------
 
 

@@ -99,6 +99,11 @@ class Settings(BaseSettings):
     conversation_silence_max_checks: int = 2
     conversation_llm_timeout_seconds: float = 6.0
     conversation_min_confidence: float = 0.6
+    # Phase 7: the mode NEW organizations start in (existing orgs are never
+    # touched). "strict_script" keeps today's behaviour; set
+    # CONVERSATION_DEFAULT_MODE=human_conversation (or smart_script) once the
+    # results justify it. Voice stays "shadow" unless changed per org.
+    conversation_default_mode: str = "strict_script"
     voice_live_transcribe_model: str = "gpt-live-transcribe"
     # gpt-live-transcribe streaming delay: minimal|low|medium|high|xhigh —
     # measured ~1s lower lag at "minimal" than the default.

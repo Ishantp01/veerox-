@@ -36,7 +36,7 @@ from apps.api.core.org_credentials import (
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import create_session, delete_session, invalidate_user_sessions
 from apps.api.db.models.account_user import AccountUser
-from apps.api.db.models.org import Org
+from apps.api.db.models.org import CONVERSATION_MODES, Org
 from apps.api.db.models.org_membership import OrgMembership
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.deps import CurrentOrgDep, CurrentUserDep, DbDep, RedisDep, verify_platform_admin
@@ -143,6 +143,8 @@ async def provision_org(
         enabled_features=payload.enabled_features,
         max_team_members=payload.max_team_members,
     )
+    if settings.conversation_default_mode in CONVERSATION_MODES:
+        org.conversation_mode = settings.conversation_default_mode
     if payload.plivo_auth_id and payload.plivo_auth_token:
         org.plivo_auth_id = payload.plivo_auth_id.strip()
         org.plivo_auth_token_encrypted = encrypt_secret(payload.plivo_auth_token.strip())

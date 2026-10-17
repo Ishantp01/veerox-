@@ -25,7 +25,7 @@ from apps.api.core.conversation.config import (
     load_version_config,
     validate_config_payload,
 )
-from apps.api.core.conversation.metrics import compute_metrics
+from apps.api.core.conversation.metrics import compute_metrics, compute_tuning_report
 from apps.api.core.conversation.script_import import suggest_from_script
 from apps.api.core.conversation.simulate import simulate_turn
 from apps.api.core.llm import chat_completion
@@ -392,6 +392,17 @@ async def engine_metrics(
     channel: Annotated[Literal["whatsapp", "voice"] | None, Query()] = None,
 ) -> dict[str, Any]:
     return await compute_metrics(db, org_id, days=days, channel=channel)
+
+
+@router.get("/metrics/tuning")
+async def engine_tuning_report(
+    db: DbDep,
+    org_id: RequestOrgDep,
+    days: int = Query(14, ge=1, le=90),
+    channel: Annotated[Literal["whatsapp", "voice"] | None, Query()] = None,
+) -> dict[str, Any]:
+    """Phase 6: cost, latency and coverage tuning report from the turn log."""
+    return await compute_tuning_report(db, org_id, days=days, channel=channel)
 
 
 # ---------------------------------------------------------------------------
