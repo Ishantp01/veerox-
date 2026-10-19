@@ -122,6 +122,85 @@ class Settings(BaseSettings):
     # unfinished ("haan, mera matlab..."). Off by default — it adds a second of
     # latency whenever a sentence happens to end on a connective word.
     voice_endpoint_hold: bool = False
+    # Phase 1 voice-pipeline switches (channels/voice/). Instrumentation is
+    # log-only and on by default; the two behaviour changes below are OFF so
+    # existing calls run exactly as before until each is validated.
+    voice_latency_tracking: bool = True
+    # Open the next ElevenLabs socket when OpenAI starts a response, instead of
+    # when its first text token arrives, so the connect overlaps the model's own
+    # first-token time. A socket is never reused across turns.
+    voice_elevenlabs_prewarm: bool = False
+    # Finish an ElevenLabs turn (flush, drain audio, persist) in a tracked task
+    # instead of inside the OpenAI event handler, so a caller who speaks during
+    # the audio tail is processed immediately. False = the old inline await.
+    voice_nonblocking_tts_finish: bool = False
+    # Phase 3 interruption handling. Both OFF: calls cut and answer exactly as before.
+    # True sends response.cancel for the response a real interruption cuts off
+    # (instead of muting it and waiting for it to finish), drops every late event of a
+    # cancelled response by id, persists the interrupted turn, and guards the call with a
+    # watchdog + circuit breaker that fall back to mute-and-wait if the cancel misbehaves.
+    voice_safe_cancel: bool = False
+    # How long a cancel may go without its response.done before it counts as failed.
+    voice_cancel_timeout_seconds: float = 2.0
+    # True: corrections and non-speech noise are recognised when judging an overlap, an
+    # unfinished sentence waits briefly for its end (same hold as VOICE_ENDPOINT_HOLD), and
+    # the answer to an interruption is told to address it first without inventing facts.
+    voice_smart_turn_taking: bool = False
+
+    # Phase 5 - production reliability. Everything that changes what a call does is OFF until
+    # it has been validated on a live call. Numeric knobs are clamped where they are used
+    # (channels/voice/call_control.py::bounded), so a bad env value degrades to a safe default
+    # instead of crashing startup or removing a safety bound.
+    # Let the agent (or a caller's explicit request) end the call: wait, bounded, for the goodbye
+    # to finish playing, then hang up through the telephony provider's API.
+    voice_end_call_enabled: bool = False
+    voice_end_call_max_wait_seconds: float = 8.0
+    voice_end_call_grace_seconds: float = 0.8
+    # Recover from ElevenLabs failures (connect error, silence, rejected settings): retry once with
+    # safe settings, else play a pre-generated apology and end the call. Never silence.
+    voice_tts_recovery: bool = False
+    voice_tts_connect_timeout_seconds: float = 4.0
+    voice_tts_first_audio_timeout_seconds: float = 6.0
+    voice_tts_max_failures_per_call: int = 2
+    # After an OpenAI Realtime reconnect: replay a few recent turns, tell the model what was already
+    # done, never repeat a completed action, and end the call properly if reconnecting is hopeless.
+    voice_reconnect_recovery: bool = False
+    voice_reconnect_context_turns: int = 6
+    voice_reconnect_budget_seconds: float = 45.0
+    # Record measured provider usage (Realtime tokens, transcription seconds, TTS characters,
+    # decision-layer tokens, previews) as UsageEvents. Measured only; no prices are invented.
+    voice_metering_v2: bool = False
+    # Spoken brand for NEW organisations (Org.voice_brand is set at creation). Existing orgs keep
+    # voice_brand_name (their legacy brand) until someone sets their own.
+    voice_new_org_brand: str = "Veerox"
+    # Log hygiene: mask phone numbers and redact obvious sensitive values (OTPs, card/ID numbers,
+    # emails) in log lines; log_transcripts=False also stops what callers/agents say being logged.
+    log_privacy_enabled: bool = True
+    log_transcripts: bool = True
+    # Clear stored recording references past each org's configured retention (off until enabled).
+    voice_retention_worker_enabled: bool = False
+    # With the retention worker: also ask the telephony provider to delete the hosted audio, and clear
+    # our stored reference only once the provider confirms. Off: only the reference is cleared.
+    voice_retention_delete_provider_audio: bool = False
+    # After an interruption, remove the part of the agent's answer the caller never heard from the
+    # Realtime conversation (keeping only what was heard), so the model doesn't assume it said it.
+    voice_trim_interrupted_context: bool = False
+    # How often a call's measured usage is checkpointed to the ledger (seconds; clamped 15-600), so a
+    # crash loses at most one interval of a call's usage instead of all of it. Needs VOICE_METERING_V2.
+    voice_usage_checkpoint_seconds: float = 60.0
+    # Spoken brand in the default greeting and the voice prompt example.
+    voice_brand_name: str = "WorkAssign AI"
+    # Greetings must identify the agent as an AI. True makes the default
+    # greeting say so and rejects org greetings that don't; False restores the
+    # previous wording exactly.
+    voice_greeting_ai_disclosure: bool = True
+    # Opt-in: pre-synthesize an org's custom greeting with ElevenLabs and play
+    # the cached audio instead of generating it live (channels/voice/greeting.py).
+    voice_greeting_audio_cache: bool = False
+    # Voice-profile preview endpoint (POST /admin/settings/voice-profile/preview):
+    # max syntheses per org per minute, and the longest phrase accepted.
+    voice_preview_per_minute: int = 6
+    voice_preview_max_chars: int = 300
     elevenlabs_api_key: str | None = None
     elevenlabs_voice_id: str = "CwhRBWXzGAHq8TQ4Fs17"
     # Low-latency model — eleven_multilingual_v2 sounds better but is too

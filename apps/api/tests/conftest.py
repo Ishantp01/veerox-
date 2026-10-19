@@ -4,6 +4,7 @@ import os
 import time
 from collections.abc import AsyncGenerator
 
+import httpx
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -42,6 +43,12 @@ def _no_platform_channel_credentials_leak(monkeypatch: pytest.MonkeyPatch) -> No
         "meta_verify_token",
     ):
         monkeypatch.setattr(settings, attr, None)
+
+
+# Building an SSL context loads the CA bundle (~0.7 s on Windows). This autouse fixture used to do
+# that four times before EVERY test, which dominated the suite's run time; one shared context, built
+# once, has the same verification behaviour (tests never make real HTTPS calls).
+_SHARED_SSL_CONTEXT = httpx.create_ssl_context()
 
 
 class FakeRedis:
@@ -178,7 +185,7 @@ async def _reset_shared_http_clients() -> AsyncGenerator[None, None]:
 
     modules = [brevo_client, plivo_client, twilio_client, wa_client]
     for mod in modules:
-        mod._http = AsyncClient(timeout=10.0)
+        mod._http = AsyncClient(timeout=10.0, verify=_SHARED_SSL_CONTEXT)
     yield
     for mod in modules:
         try:

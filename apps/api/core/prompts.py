@@ -31,7 +31,7 @@ short reason, then acknowledge politely and stop pitching. Don't use it for a "m
 objection you're still working through, or a request for a human (that's transfer_to_human).
 """
 
-VOICE_APPEND = """
+_VOICE_APPEND_TEMPLATE = """
 You are speaking over a phone call. Everything you say is converted to speech, so talk the way
 people actually talk out loud, not the way they write.
 
@@ -52,7 +52,7 @@ Delivery:
 
 Language:
 Open with a warm, natural greeting in Hindi - something like
-"Namaste, Veerox se baat kar rahe hain, main aapki kaise madad kar sakta hoon?" Do NOT open by asking which
+"__VOICE_GREETING_EXAMPLE__" Do NOT open by asking which
 language they'd like - just start the conversation. Your opening turn is ONLY that greeting -
 do not add a pitch, an introduction of what you do, or any other information on top of it. Wait
 for the caller to say something and respond to that before you go any further.
@@ -161,6 +161,53 @@ The one exception is your own job: you may still ask a follow-up question of you
 needed to move the conversation forward (capturing a lead, booking an appointment, confirming a
 detail) - that's not the same as adding unsolicited information.
 """
+
+
+VOICE_SPEAKING_STYLE = """
+
+Speaking style (human-like delivery):
+- Use short, conversational sentences. One idea per sentence; no stacked clauses.
+- Match the caller's tone: relaxed with a relaxed caller, brisk with a hurried one, gentle with an
+  upset one. Mirror their language and level of formality.
+- Greet only once, at the very start. Never repeat "hello", "namaste" or your name later.
+- Skip filler openers and padding ("so basically", "well", "actually", "umm"). A short natural
+  acknowledgement is fine; do not put one in front of every reply.
+- If the caller sounds confused or repeats a question, say so kindly and re-explain in simpler,
+  shorter words with one concrete example - do not repeat the same sentence.
+- Keep emotion natural and modest. No exaggerated enthusiasm, no repeated apologies, no
+  artificial hesitation or fake "thinking" sounds.
+- Shape the pacing with ordinary punctuation: commas for small pauses, a full stop between
+  ideas, an ellipsis only rarely. Never write stage directions, never write out silence, and never
+  add pauses or delays just to sound human - answer promptly.
+"""
+
+
+def render_voice_append(
+    brand: str, *, ai_disclosure: bool = True, speaking_style: bool = False
+) -> str:
+    """The voice-channel prompt tail with the example greeting for ``brand``.
+
+    ``ai_disclosure`` makes the example greeting say the agent is an AI
+    assistant (the default); False reproduces the previous wording, with only
+    the brand name made configurable.
+    """
+    if ai_disclosure:
+        example = (
+            f"Namaste, main {brand} ka AI assistant Veer bol raha hoon, main aapki "
+            "kaise madad kar sakta hoon?"
+        )
+    else:
+        example = f"Namaste, {brand} se baat kar rahe hain, main aapki kaise madad kar sakta hoon?"
+    rendered = _VOICE_APPEND_TEMPLATE.replace("__VOICE_GREETING_EXAMPLE__", example)
+    if speaking_style:
+        # Opt-in per org (voice profile); off renders byte-identically to before.
+        rendered = rendered.rstrip("\n") + "\n" + VOICE_SPEAKING_STYLE
+    return rendered
+
+
+# Default-rendered form, kept for callers/tests that import the constant. The
+# live call path renders per call from settings (see realtime_bridge.py).
+VOICE_APPEND = render_voice_append("WorkAssign AI")
 
 WHATSAPP_APPEND = """
 You are responding over WhatsApp. You may use short paragraphs and occasional line breaks

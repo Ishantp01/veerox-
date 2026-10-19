@@ -109,6 +109,9 @@ class ScenarioIn(BaseModel):
 class ConfigSettingsIn(BaseModel):
     # What the AI does when it is not sure what the customer meant (blueprint section 8).
     low_confidence_action: Literal["script", "clarify", "handoff"] = "script"
+    # Opt in to the context-aware dialogue policy (hesitation, corrections, no pushing for
+    # a meeting the customer isn't ready for...). Off keeps today's behaviour.
+    enhanced_dialogue: bool = False
 
 
 class DraftIn(BaseModel):
@@ -138,7 +141,7 @@ class ConfigVersionOut(BaseModel):
     published_at: datetime | None
     scenario_count: int
     scenarios: list[dict[str, Any]] | None = None
-    settings: dict[str, str] = Field(default_factory=dict)
+    settings: dict[str, Any] = Field(default_factory=dict)
 
 
 def _version_out(row: ConversationConfigVersion, *, with_scenarios: bool) -> ConfigVersionOut:
@@ -155,7 +158,10 @@ def _version_out(row: ConversationConfigVersion, *, with_scenarios: bool) -> Con
         published_at=row.published_at,
         scenario_count=len(config.scenarios),
         scenarios=[s.to_json() for s in config.scenarios.values()] if with_scenarios else None,
-        settings={"low_confidence_action": config.low_confidence_action},
+        settings={
+            "low_confidence_action": config.low_confidence_action,
+            **({"enhanced_dialogue": True} if config.enhanced_dialogue else {}),
+        },
     )
 
 
@@ -164,7 +170,7 @@ class ConfigOverviewOut(BaseModel):
     draft: ConfigVersionOut | None
     # Complete scenario list a new draft starts from (active version or built-ins).
     base: list[dict[str, Any]]
-    base_settings: dict[str, str] = Field(default_factory=dict)
+    base_settings: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.get("/scenarios/library", response_model=list[dict[str, Any]])

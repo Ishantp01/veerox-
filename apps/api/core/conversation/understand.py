@@ -18,6 +18,7 @@ from typing import Any
 
 import structlog
 
+from apps.api.core.conversation import dialogue
 from apps.api.core.conversation.config import EngineConfig
 from apps.api.core.conversation.types import (
     ALLOWED_ACTIONS,
@@ -746,9 +747,16 @@ async def understand(
     config: EngineConfig | None = None,
 ) -> Understanding:
     ruled = classify_with_rules(text, state=state, today=today, config=config)
+    enhanced = config is not None and config.enhanced_dialogue
+    if enhanced:
+        # Context-aware signals (hesitation, corrections, unavailability...). They can settle a
+        # message the base rules left to the model, which saves that call.
+        ruled = dialogue.enhance_understanding(
+            ruled, text, memory=memory, today=today or date.today(), language=detect_language(text)
+        )
     if ruled is not None:
         return ruled
-    return await classify_with_llm(
+    result = await classify_with_llm(
         text,
         history=history,
         state=state,
@@ -758,3 +766,8 @@ async def understand(
         today=today,
         config=config,
     )
+    if enhanced:
+        result = dialogue.enhance_understanding(
+            result, text, memory=memory, today=today or date.today(), language=result.language
+        ) or result
+    return result

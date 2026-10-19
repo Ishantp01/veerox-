@@ -163,6 +163,22 @@ class Org(Base):
     # dispatcher) via `initiate_call`'s `preferred_provider` kwarg — see
     # routers/admin.py's PUT /admin/settings/calling.
     preferred_voice_provider: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Org-authored opening line for voice calls (channels/voice/greeting.py).
+    # NULL (every existing org) keeps the model-generated default greeting.
+    # When set it is spoken verbatim and must identify the agent as an AI.
+    voice_greeting: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Spoken brand name for this org's calls. NULL (every org that existed before this column)
+    # = the legacy platform brand (settings.voice_brand_name); new orgs get settings.
+    # voice_new_org_brand at creation. See channels/voice/greeting.py::effective_brand.
+    voice_brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Recording notice / consent / retention policy (channels/voice/compliance.py). NULL = the
+    # legacy behaviour: record every call, no spoken notice.
+    voice_compliance: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Per-org voice profile (channels/voice/voice_profile.py): ElevenLabs
+    # voice/model/settings, speech normalization, pronunciations and the
+    # speaking-style prompt option. NULL (every existing org) = the platform
+    # voice and the unchanged call behaviour.
+    voice_profile: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Dialing prefix (e.g. "+91") set when the org is created. Any phone
     # number a user types/uploads without an international prefix gets this
     # prepended — see core/phone.py::normalize_phone.

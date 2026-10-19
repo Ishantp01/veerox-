@@ -1,0 +1,479 @@
+{
+ "version": 1,
+ "note": "Every scenario needs explicit approval before a real call. Nothing here has been run.",
+ "scenarios": [
+  {
+   "id": "S01",
+   "title": "Inbound call, English",
+   "direction": "inbound",
+   "language": "en",
+   "flags_required": [],
+   "tester_script": [
+    "Call the test number from a test phone.",
+    "Ask about the service and its price.",
+    "Say goodbye and hang up yourself."
+   ],
+   "expected": [
+    "Greeting plays within the latency limit.",
+    "Answers are relevant and short."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "greeting_disclosure",
+    "usage_recorded"
+   ],
+   "manual_checks": [
+    "amounts_dates_times"
+   ],
+   "params": {}
+  },
+  {
+   "id": "S02",
+   "title": "Outbound call, Hindi",
+   "direction": "outbound",
+   "language": "hi",
+   "flags_required": [],
+   "tester_script": [
+    "Trigger one outbound call to a test phone you hold.",
+    "Answer in Hindi; ask what the service costs."
+   ],
+   "expected": [
+    "Greeting names the AI; Hindi sounds natural."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "greeting_disclosure",
+    "usage_recorded"
+   ],
+   "manual_checks": [
+    "hindi_naturalness",
+    "indian_names"
+   ],
+   "params": {}
+  },
+  {
+   "id": "S03",
+   "title": "Hinglish mixed conversation",
+   "direction": "inbound",
+   "language": "hinglish",
+   "flags_required": [],
+   "tester_script": [
+    "Mix Hindi and English in the same sentence several times."
+   ],
+   "expected": [
+    "Agent replies in the same mix without switching to formal Hindi."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency"
+   ],
+   "manual_checks": [
+    "hindi_naturalness",
+    "language_switch"
+   ],
+   "params": {}
+  },
+  {
+   "id": "S04",
+   "title": "Single interruption",
+   "direction": "inbound",
+   "language": "en",
+   "flags_required": [
+    "VOICE_SAFE_CANCEL"
+   ],
+   "tester_script": [
+    "Let the agent start a long answer.",
+    "Interrupt after about two seconds with a short question."
+   ],
+   "expected": [
+    "Agent stops promptly and answers the interruption; no words of the old answer afterwards."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "interruptions",
+    "cancel_ok",
+    "no_session_close"
+   ],
+   "manual_checks": [
+    "interruption_feel",
+    "no_stale_audio"
+   ],
+   "params": {
+    "max_detect_to_clear_ms": 1500
+   }
+  },
+  {
+   "id": "S05",
+   "title": "Rapid repeated interruptions",
+   "direction": "inbound",
+   "language": "en",
+   "flags_required": [
+    "VOICE_SAFE_CANCEL"
+   ],
+   "tester_script": [
+    "Interrupt the agent five times in a row within 20 seconds, including 'haan' and 'hmm' backchannels."
+   ],
+   "expected": [
+    "No crash, no stuck silence, no duplicated answers; backchannels do not cut the agent off."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "interruptions",
+    "cancel_ok",
+    "no_session_close"
+   ],
+   "manual_checks": [
+    "interruption_feel",
+    "no_stale_audio"
+   ],
+   "params": {}
+  },
+  {
+   "id": "S06",
+   "title": "Safe cancel keeps the session open",
+   "direction": "inbound",
+   "language": "en",
+   "flags_required": [
+    "VOICE_SAFE_CANCEL"
+   ],
+   "tester_script": [
+    "Interrupt twice, then keep talking for a minute."
+   ],
+   "expected": [
+    "The call is still alive after both cancels (the open question about response.cancel on this model)."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "cancel_ok",
+    "no_session_close"
+   ],
+   "manual_checks": [],
+   "params": {}
+  },
+  {
+   "id": "S07",
+   "title": "Prewarm and non-blocking finish",
+   "direction": "inbound",
+   "language": "en",
+   "flags_required": [
+    "VOICE_ELEVENLABS_PREWARM",
+    "VOICE_NONBLOCKING_TTS_FINISH"
+   ],
+   "tester_script": [
+    "Hold a ten-turn conversation."
+   ],
+   "expected": [
+    "First-audio latency is no worse than with the flags off (compare with S01); no audio lost at the end of answers."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "no_duplicate_actions"
+   ],
+   "manual_checks": [
+    "no_stale_audio"
+   ],
+   "params": {}
+  },
+  {
+   "id": "S08",
+   "title": "AI disclosure and greeting cache",
+   "direction": "outbound",
+   "language": "hinglish",
+   "flags_required": [
+    "VOICE_GREETING_AI_DISCLOSURE",
+    "VOICE_GREETING_AUDIO_CACHE"
+   ],
+   "tester_script": [
+    "Place two outbound calls to your test phone, one after the other, from the same org."
+   ],
+   "expected": [
+    "Both greetings disclose the AI. The second plays from cache and starts faster. In consent mode the cache is not used."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "greeting_disclosure",
+    "first_audio_latency"
+   ],
+   "manual_checks": [
+    "hindi_naturalness"
+   ],
+   "params": {}
+  },
+  {
+   "id": "S09",
+   "title": "Voice profile and spoken-text normalisation",
+   "direction": "inbound",
+   "language": "hi",
+   "flags_required": [],
+   "tester_script": [
+    "Ask for the price, a date, a time slot and a phone number to be repeated back."
+   ],
+   "expected": [
+    "Amounts, dates, times and digits are spoken correctly in the chosen voice profile."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency"
+   ],
+   "manual_checks": [
+    "amounts_dates_times",
+    "indian_names",
+    "hindi_naturalness"
+   ],
+   "params": {}
+  },
+  {
+   "id": "S10",
+   "title": "Objection handling",
+   "direction": "outbound",
+   "language": "hinglish",
+   "flags_required": [],
+   "tester_script": [
+    "Say 'abhi nahi', 'bahut mehnga hai', then ask a question in the middle of a pitch."
+   ],
+   "expected": [
+    "Agent answers the question first, does not pressure, offers a lighter next step."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency"
+   ],
+   "manual_checks": [
+    "objection_handling"
+   ],
+   "params": {}
+  },
+  {
+   "id": "S11",
+   "title": "Correction of a fact",
+   "direction": "inbound",
+   "language": "hinglish",
+   "flags_required": [],
+   "tester_script": [
+    "Give a date, then say 'nahi nahi, 25 tareekh'."
+   ],
+   "expected": [
+    "Agent confirms the new date once and does not use the old one."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "appointment_truthful",
+    "no_duplicate_actions"
+   ],
+   "manual_checks": [
+    "corrections_handled"
+   ],
+   "params": {}
+  },
+  {
+   "id": "S12",
+   "title": "Appointment confirmation",
+   "direction": "inbound",
+   "language": "en",
+   "flags_required": [
+    "VOICE_RECONNECT_RECOVERY"
+   ],
+   "tester_script": [
+    "Ask to book a specific slot and confirm it."
+   ],
+   "expected": [
+    "Exactly one appointment exists; the agent confirmed it aloud only after it existed."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "appointment_truthful",
+    "no_duplicate_actions"
+   ],
+   "manual_checks": [
+    "amounts_dates_times"
+   ],
+   "params": {}
+  },
+  {
+   "id": "S13",
+   "title": "Agent ends the call",
+   "direction": "inbound",
+   "language": "en",
+   "flags_required": [
+    "VOICE_END_CALL_ENABLED"
+   ],
+   "tester_script": [
+    "Finish the task, say 'ok thanks, bye'."
+   ],
+   "expected": [
+    "Agent says goodbye, then the line is actually closed by the provider; outcome tag recorded."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "call_ended_cleanly",
+    "goodbye_before_hangup"
+   ],
+   "manual_checks": [],
+   "params": {}
+  },
+  {
+   "id": "S14",
+   "title": "Words that must NOT end the call",
+   "direction": "inbound",
+   "language": "hinglish",
+   "flags_required": [
+    "VOICE_END_CALL_ENABLED"
+   ],
+   "tester_script": [
+    "Say 'ab bas thoda time chahiye', 'that's all fine but what about the margin', 'bye the way...'"
+   ],
+   "expected": [
+    "The call continues after each."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "call_ended_cleanly"
+   ],
+   "manual_checks": [],
+   "params": {}
+  },
+  {
+   "id": "S15",
+   "title": "TTS provider failure and recovery",
+   "direction": "inbound",
+   "language": "en",
+   "flags_required": [
+    "VOICE_TTS_RECOVERY"
+   ],
+   "tester_script": [
+    "Staging only: invalidate the ElevenLabs key for this org mid-call, or block its host, then speak."
+   ],
+   "expected": [
+    "Agent recovers or apologises and ends the call; the caller is never left in silence."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "tts_recovery",
+    "no_errors"
+   ],
+   "manual_checks": [],
+   "params": {}
+  },
+  {
+   "id": "S16",
+   "title": "Realtime reconnection",
+   "direction": "inbound",
+   "language": "en",
+   "flags_required": [
+    "VOICE_RECONNECT_RECOVERY"
+   ],
+   "tester_script": [
+    "Staging only: drop the Realtime socket mid-call (kill the connection from the host)."
+   ],
+   "expected": [
+    "Call resumes; no duplicated booking or message; recovery time logged."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "no_duplicate_actions",
+    "appointment_truthful"
+   ],
+   "manual_checks": [],
+   "params": {}
+  },
+  {
+   "id": "S17a",
+   "title": "Recording consent mode",
+   "direction": "inbound",
+   "language": "hinglish",
+   "flags_required": [],
+   "tester_script": [
+    "Org set to recording_mode=consent. Answer 'haan' to the consent question in one call and 'nahi' in another."
+   ],
+   "expected": [
+    "Granted: recording present. Declined or unanswered: none; tags recorded."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "recording_policy"
+   ],
+   "manual_checks": [],
+   "params": {
+    "expect_recording": true
+   }
+  },
+  {
+   "id": "S17b",
+   "title": "Recording off and retention",
+   "direction": "inbound",
+   "language": "en",
+   "flags_required": [],
+   "tester_script": [
+    "Org set to recording_mode=off, then to retention_days=1 with the worker on."
+   ],
+   "expected": [
+    "No recording stored; after the retention run the reference is cleared and, with the delete flag on, the provider's copy returns 404."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "recording_policy"
+   ],
+   "manual_checks": [],
+   "params": {
+    "expect_recording": false
+   }
+  },
+  {
+   "id": "S17c",
+   "title": "Accurate metering",
+   "direction": "inbound",
+   "language": "en",
+   "flags_required": [
+    "VOICE_METERING_V2"
+   ],
+   "tester_script": [
+    "Hold a call of about three minutes; hang up; repeat once and kill the API process mid-call on a staging copy."
+   ],
+   "expected": [
+    "voice_seconds is within ten seconds of the call duration; a crash loses at most one checkpoint interval; no duplicate ids; nothing priced."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "usage_recorded",
+    "privacy_logs"
+   ],
+   "manual_checks": [],
+   "params": {}
+  }
+ ]
+}

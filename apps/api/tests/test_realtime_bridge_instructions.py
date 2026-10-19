@@ -163,3 +163,45 @@ async def test_non_campaign_call_falls_back_to_platform_default_with_no_script(
     instructions = await bridge_module._system_instructions(None, ORG_ID)
 
     assert OUTBOUND_CALL_PROMPT.strip() in instructions
+
+
+async def test_voice_instructions_use_one_brand_and_disclose_the_ai(
+    reuse_db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The prompt's example greeting used to say "Veerox" while the call's
+    opening instruction said "WorkAssign AI". Both now come from
+    settings.voice_brand_name, and the example tells callers it's an AI."""
+    from apps.api.config import settings
+
+    monkeypatch.setattr(settings, "voice_brand_name", "Acme Realty")
+    monkeypatch.setattr(settings, "voice_greeting_ai_disclosure", True)
+    reuse_db.add(Org(id=ORG_ID, name="Test Org"))
+    await reuse_db.commit()
+
+    instructions = await bridge_module._system_instructions(None, ORG_ID)
+
+    assert "Acme Realty ka AI assistant" in instructions
+    assert "Veerox se baat kar rahe hain" not in instructions
+
+
+async def test_org_greeting_lookup_defaults_to_none_and_survives_errors(
+    reuse_db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reuse_db.add(Org(id=ORG_ID, name="Test Org"))
+    await reuse_db.commit()
+    assert await bridge_module._load_org_greeting(ORG_ID) is None  # existing orgs: default greeting
+
+    org = await reuse_db.get(Org, ORG_ID)
+    org.voice_greeting = "Namaste, main Acme ka AI assistant hoon."
+    await reuse_db.commit()
+    assert await bridge_module._load_org_greeting(ORG_ID) == "Namaste, main Acme ka AI assistant hoon."
+
+    class _Boom:
+        async def __aenter__(self) -> None:
+            raise RuntimeError("db down")
+
+        async def __aexit__(self, *_: Any) -> None:
+            return None
+
+    monkeypatch.setattr(bridge_module, "AsyncSessionLocal", lambda: _Boom())
+    assert await bridge_module._load_org_greeting(ORG_ID) is None  # a lookup failure never fails the call

@@ -142,22 +142,47 @@ async def start_recording(creds: PlivoCredentials, call_uuid: str, callback_url:
         logger.warning("plivo_recording_start_failed", call_uuid=call_uuid, error=str(exc))
 
 
-async def hangup_call(creds: PlivoCredentials, call_uuid: str) -> None:
+async def hangup_call(creds: PlivoCredentials, call_uuid: str) -> str:
     """Force-terminate a live call via ``DELETE /Call/{call_uuid}/``.
 
     The answer XML's ``<Stream keepCallAlive="true">`` (see
     ``channels/voice/webhook.py``) means closing our side of the WebSocket
-    does NOT end the call — this Call-API hangup is the only way to actually
-    disconnect the caller (used when a plan's usage limit is hit mid-call).
-    Best-effort: never raises, mirroring ``start_recording``.
+    does NOT end the call - this Call-API hangup is the only way to actually
+    disconnect the caller (used when a plan's usage limit is hit mid-call, and
+    by ``channels/voice/call_control.py``). Best-effort: never raises.
+
+    Returns ``"ok"`` (hangup accepted), ``"already_ended"`` (Plivo no longer has
+    the call: it was hung up already, by the caller or an earlier request, so a
+    repeat is harmless) or ``"failed"``.
     """
     url = f"{_PLIVO_BASE}/Account/{creds.auth_id}/Call/{call_uuid}/"
     try:
         r = await _http.delete(url, auth=_auth(creds))
+        if r.status_code in (404, 410):
+            logger.info("plivo_call_already_ended", call_uuid=call_uuid)
+            return "already_ended"
         r.raise_for_status()
         logger.info("plivo_call_hungup", call_uuid=call_uuid)
+        return "ok"
     except httpx.HTTPError as exc:
         logger.warning("plivo_hangup_failed", call_uuid=call_uuid, error=str(exc))
+        return "failed"
+
+
+async def delete_recording(creds: PlivoCredentials, recording_id: str) -> str:
+    """Delete a provider-hosted recording via ``DELETE /Recording/{id}/``. ``"ok"``, ``"already_gone"``
+    (404/410) or ``"failed"``. Best-effort, never raises. UNVERIFIED against a live Plivo account."""
+    url = f"{_PLIVO_BASE}/Account/{creds.auth_id}/Recording/{recording_id}/"
+    try:
+        r = await _http.delete(url, auth=_auth(creds))
+        if r.status_code in (404, 410):
+            return "already_gone"
+        r.raise_for_status()
+        logger.info("plivo_recording_deleted", recording_id=recording_id)
+        return "ok"
+    except httpx.HTTPError as exc:
+        logger.warning("plivo_recording_delete_failed", recording_id=recording_id, error=str(exc))
+        return "failed"
 
 
 async def send_sms(creds: PlivoCredentials, to_e164: str, text: str, from_number: str) -> dict[str, Any]:

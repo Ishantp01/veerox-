@@ -145,6 +145,8 @@ async def provision_org(
     )
     if settings.conversation_default_mode in CONVERSATION_MODES:
         org.conversation_mode = settings.conversation_default_mode
+    # New orgs speak the platform's current brand; orgs created before this existed keep theirs (NULL).
+    org.voice_brand = settings.voice_new_org_brand or None
     if payload.plivo_auth_id and payload.plivo_auth_token:
         org.plivo_auth_id = payload.plivo_auth_id.strip()
         org.plivo_auth_token_encrypted = encrypt_secret(payload.plivo_auth_token.strip())

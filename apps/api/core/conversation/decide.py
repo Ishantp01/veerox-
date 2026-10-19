@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from apps.api.core.conversation import dialogue
 from apps.api.core.conversation.config import EngineConfig, ScenarioDef
 from apps.api.core.conversation.types import (
     ALLOWED_ACTIONS,
@@ -176,6 +177,12 @@ def decide(
     decision = _decide(
         understanding, text=text, memory=memory, knowledge=knowledge, channel=channel, config=config
     )
+    if config is not None and config.enhanced_dialogue:
+        defined = config.get(understanding.scenario)
+        if defined is None or defined.builtin:  # a business-defined scenario keeps its own logic
+            decision = dialogue.enhance_decision(
+                decision, understanding, text=text, memory=memory, knowledge=knowledge
+            )
     if config is not None:
         decision = apply_scenario_actions(decision, config.get(understanding.scenario))
     return decision

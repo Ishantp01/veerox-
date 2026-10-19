@@ -1,0 +1,22 @@
+{
+  "_comment": "Representative phrases for voice preview and scripts/voice_compare.py. Data only - edit freely; ids must be unique.",
+  "phrases": [
+    {"id": "hi_greeting", "category": "hindi", "text": "नमस्ते, मैं आपकी क्या मदद कर सकता हूँ?"},
+    {"id": "hi_confirm", "category": "hindi", "text": "जी बिल्कुल, मैं अभी आपकी अपॉइंटमेंट बुक कर देता हूँ।"},
+    {"id": "en_greeting", "category": "english", "text": "Hello, this is the assistant from Sharma Interiors. How can I help you today?"},
+    {"id": "en_confirm", "category": "english", "text": "Sure, I have booked that for you. You will get a confirmation message shortly."},
+    {"id": "hinglish_greeting", "category": "hinglish", "text": "Namaste, main aapki kaise madad kar sakta hoon?"},
+    {"id": "hinglish_mixed", "category": "hinglish", "text": "Aapka appointment confirm ho gaya hai, main WhatsApp par details bhej deta hoon."},
+    {"id": "names", "category": "indian_names", "text": "Namaste Rajeshwari ji, main Venkatesh Subramaniam ke office se bol raha hoon."},
+    {"id": "names_2", "category": "indian_names", "text": "Kya main Abhishek Chaturvedi ya Gurpreet Singh Bhatia se baat kar sakta hoon?"},
+    {"id": "amount_1", "category": "rupee_amounts", "text": "Aapka total bill Rs. 1500 hai, aur advance ₹25,000 pehle dena hoga."},
+    {"id": "amount_2", "category": "rupee_amounts", "text": "Is plan ki kimat ₹1,50,000 hai, yaani 1.5 lakh rupees, par 15% discount milega."},
+    {"id": "datetime_1", "category": "dates_times", "text": "Aapki meeting 25/03/2026 ko 2:30 PM par rakhi hai."},
+    {"id": "datetime_2", "category": "dates_times", "text": "Hum 5 April ko subah 10:15 AM par site visit kar sakte hain."},
+    {"id": "phone", "category": "numbers", "text": "Aap mujhe 9876543210 par call kar sakte hain, ya OTP 482913 batayein."},
+    {"id": "question_1", "category": "questions", "text": "Kya aap kal shaam 5 baje free hain?"},
+    {"id": "question_2", "category": "questions", "text": "Would you like me to send the brochure on WhatsApp?"},
+    {"id": "conv_1", "category": "conversational", "text": "Haan, samajh gaya. Thoda aur batayiye, aapko kitne BHK ka ghar chahiye?"},
+    {"id": "conv_2", "category": "conversational", "text": "Koi baat nahi, main phir se samjha deta hoon. Pehle aap apna budget bata dijiye."}
+  ]
+}

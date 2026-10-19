@@ -258,6 +258,9 @@ class EngineConfig:
     version: int = 0  # 0 = the built-in defaults
     custom_ids: frozenset[str] = field(default_factory=frozenset)
     low_confidence_action: str = "script"
+    # Opt-in per org (Scenario Builder setting): the context-aware dialogue policy in
+    # dialogue.py. False = the engine behaves exactly as it always has.
+    enhanced_dialogue: bool = False
 
     def get(self, scenario_id: str) -> ScenarioDef | None:
         return self.scenarios.get(scenario_id)
@@ -300,6 +303,8 @@ def validate_config_payload(data: Any) -> list[str]:
         problems.append(
             "settings.low_confidence_action must be one of: " + ", ".join(LOW_CONFIDENCE_ACTIONS)
         )
+    if "enhanced_dialogue" in settings and not isinstance(settings["enhanced_dialogue"], bool):
+        problems.append("settings.enhanced_dialogue must be true or false")
     items = data["scenarios"]
     if len(items) > MAX_SCENARIOS:
         problems.append(f"at most {MAX_SCENARIOS} scenarios are allowed")
@@ -376,7 +381,10 @@ def config_from_json(
     low_action = (raw_settings or {}).get("low_confidence_action", "script") if isinstance(raw_settings, dict) else "script"
     if low_action not in LOW_CONFIDENCE_ACTIONS:
         low_action = "script"
-    return EngineConfig(scenarios, version_id, version, frozenset(custom), low_action)
+    enhanced = isinstance(raw_settings, dict) and raw_settings.get("enhanced_dialogue") is True
+    return EngineConfig(
+        scenarios, version_id, version, frozenset(custom), low_action, enhanced_dialogue=enhanced
+    )
 
 
 def scenario_guidance(scenario: ScenarioDef | None) -> str:

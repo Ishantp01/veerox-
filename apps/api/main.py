@@ -48,6 +48,7 @@ from apps.api.workers.follow_up_dispatcher import run_follow_up_dispatcher
 from apps.api.workers.license_expiry_worker import run_license_expiry_worker
 from apps.api.workers.usage_daily_aggregator import run_usage_daily_aggregator
 from apps.api.workers.usage_monthly_aggregator import run_usage_monthly_aggregator
+from apps.api.workers.voice_retention_worker import run_voice_retention_worker
 from apps.api.workers.whatsapp_dispatcher import run_whatsapp_dispatcher
 
 
@@ -56,6 +57,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging()
     init_sentry()
     await ensure_env_seed_data_on_startup()
+    try:
+        import structlog
+
+        from apps.api.channels.voice.config_check import check_voice_config
+
+        for issue in check_voice_config():
+            if issue.level != "info":
+                structlog.get_logger("voice_config").warning("voice_config_issue", level=issue.level, code=issue.code, detail=issue.message)
+    except Exception:  # noqa: BLE001 - a diagnostic must never block startup
+        pass
 
     async def _register_all_org_plivo_numbers() -> None:
         try:
@@ -74,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     usage_monthly_task = asyncio.create_task(run_usage_monthly_aggregator())
     aws_cost_import_task = asyncio.create_task(run_aws_cost_importer())
     late_event_sweep_task = asyncio.create_task(run_late_event_adjustment_sweep())
+    voice_retention_task = asyncio.create_task(run_voice_retention_worker())
     background_tasks = (
         plivo_registration_task,
         dialer_task,
@@ -84,6 +96,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         usage_monthly_task,
         aws_cost_import_task,
         late_event_sweep_task,
+        voice_retention_task,
     )
     try:
         yield

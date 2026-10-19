@@ -33,6 +33,9 @@ USAGE_TYPES = (
     "ai_input_tokens",
     "ai_output_tokens",
     "ai_request_count",
+    # Phase 5 voice metering (measured provider usage; see channels/voice/metering.py).
+    "tts_characters",
+    "transcribe_seconds",
     "worker_job_seconds",
     "cpu_ms",
     "memory_mb_ms",

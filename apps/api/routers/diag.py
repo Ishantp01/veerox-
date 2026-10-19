@@ -74,6 +74,46 @@ async def latency_probe(x_admin_token: str | None = Header(None)) -> dict:
     return {"ok": True, "timings": timings, "recent_turns": recent_turns}
 
 
+@router.get("/voice-latency")
+async def voice_latency(x_admin_token: str | None = Header(None)) -> dict:
+    """Rolling per-turn voice latency percentiles for THIS process, in ms.
+
+    Fed by channels/voice/latency.py (``first_audio_sent`` is when audio was
+    handed to the telephony provider, not when the caller heard it). Resets on
+    restart and covers only the last ~1000 samples per metric, so read ``n``
+    before trusting a percentile; for history run
+    scripts/voice_latency_report.py over the JSON logs.
+    """
+    if x_admin_token != settings.admin_token:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from apps.api.channels.voice.latency import STATS
+
+    from apps.api.core.conversation import runtime_stats
+
+    return {
+        "ok": True,
+        "unit": "ms",
+        "metrics": STATS.snapshot(),
+        # Decision layer: how long decisions took and how often they fell back, by reason.
+        "decisions": runtime_stats.snapshot(),
+    }
+
+
+@router.get("/voice-config")
+async def voice_config(x_admin_token: str | None = Header(None)) -> dict:
+    """Which voice flags are on in THIS process and any combination that cannot work as intended."""
+    if x_admin_token != settings.admin_token:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from apps.api.channels.voice.config_check import check_voice_config, flag_snapshot
+
+    return {
+        "ok": True,
+        "tts_provider": settings.voice_tts_provider,
+        "flags": flag_snapshot(),
+        "issues": [{"level": i.level, "code": i.code, "message": i.message} for i in check_voice_config()],
+    }
+
+
 @router.get("/openai-realtime")
 async def openai_realtime_probe(x_admin_token: str | None = Header(None)) -> dict:
     """Reproduce the exact outbound WSS the voice bridge does.

@@ -35,14 +35,22 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from apps.api.channels.voice import adapter as voice_adapter
-from apps.api.channels.voice import turn_controller
+from apps.api.channels.voice import call_control, compliance, metering, recovery, turn_controller
+from apps.api.channels.voice.compliance import RecordingPolicy, resolve_recording_policy
+from apps.api.channels.voice.greeting import effective_brand, greeting_cache, greeting_instruction
+from apps.api.channels.voice.latency import LatencyTracker
+from apps.api.channels.voice.voice_profile import (
+    ResolvedVoice,
+    resolve_profile,
+    speaking_style_enabled,
+)
 from apps.api.channels.voice.turn_controller import LiveTranscriber
 from apps.api.config import settings
 from apps.api.core.prompts import (
     OUTBOUND_CALL_PROMPT,
-    VOICE_APPEND,
     campaign_qualification_append,
     current_datetime_block,
+    render_voice_append,
 )
 from apps.api.core.org_openai_key import resolve_openai_api_key
 from apps.api.core.org_social_links import social_links_prompt_block
@@ -69,6 +77,34 @@ _OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 # key, OpenAI down) doesn't loop forever billing/holding a live phone call —
 # see the reconnect loop in voice_stream below.
 _MAX_OAI_RECONNECTS = 8
+
+
+async def _usage_checkpoint_loop(
+    state: "voice_adapter.CallState", org_id: UUID, call_uuid: str, provider: str, started: float
+) -> None:
+    """Write the call's measured usage to the ledger every VOICE_USAGE_CHECKPOINT_SECONDS, so a crash costs
+    at most one interval of it. Idempotent deltas (see metering.py); never raises into the call."""
+    interval = call_control.bounded(settings.voice_usage_checkpoint_seconds, 15.0, 600.0, 60.0)
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            await metering.checkpoint_call_usage(
+                AsyncSessionLocal, org_id=org_id, call_uuid=call_uuid, provider=provider,
+                usage=state.usage, call_seconds=time.monotonic() - started,
+            )
+    except asyncio.CancelledError:
+        raise
+
+
+def reconnect_exhausted(attempts: int, episode_age_s: float) -> bool:
+    """Stop trying to reconnect the Realtime session? Always after ``_MAX_OAI_RECONNECTS`` attempts; with
+    VOICE_RECONNECT_RECOVERY also once the current outage has lasted longer than its (clamped) time budget,
+    so a caller is never kept waiting through many slow attempts."""
+    if attempts > _MAX_OAI_RECONNECTS:
+        return True
+    if settings.voice_reconnect_recovery:
+        return episode_age_s > call_control.bounded(settings.voice_reconnect_budget_seconds, 5.0, 300.0, 45.0)
+    return False
 
 
 async def _connect_to_openai(org_id: UUID | None = None) -> Any:
@@ -107,10 +143,16 @@ async def _connect_to_openai(org_id: UUID | None = None) -> Any:
 # moment later — see start_precall_connect/claim_precall_connect below.
 _PRECALL_TIMEOUT_SECS = 20
 _pending_precalls: dict[str, asyncio.Task[Any]] = {}
+# The org each pre-connected session was prepared for (its script, key and tools). A session is only
+# ever handed to a call that resolves to the SAME org; a mismatch is discarded, never reused.
+_pending_precall_orgs: dict[str, UUID] = {}
 
 
 def start_precall_connect(
-    call_uuid: str, campaign_target_id: UUID | None, org_id: UUID | None
+    call_uuid: str,
+    campaign_target_id: UUID | None,
+    org_id: UUID | None,
+    remote_number: str | None = None,
 ) -> None:
     """Kick off the OpenAI connect + session.update while Plivo/Twilio is
     still setting up the call (webhook.py's ``answer``), well before the
@@ -145,19 +187,34 @@ def start_precall_connect(
 
     async def _prepare() -> tuple[Any, str]:
         resolved_org_id = org_id or UUID(settings.default_org_id)
-        instructions = await _system_instructions(campaign_target_id, resolved_org_id)
+        instructions = await _system_instructions(
+            campaign_target_id, resolved_org_id, remote_number=remote_number
+        )
         oai = await _connect_to_openai(resolved_org_id)
-        await oai.send(json.dumps(_session_update_event(instructions)))
+        _brand, policy = await _call_context(resolved_org_id, remote_number)
+        await oai.send(
+            json.dumps(_session_update_event(instructions, consent_tool=policy.mode == "consent"))
+        )
+        if settings.voice_greeting_audio_cache:
+            # Warm the greeting audio while the phone is still ringing so the
+            # first cached call after a deploy is already a hit.
+            greeting = await _load_org_greeting(resolved_org_id)
+            if greeting:
+                greeting_cache.ensure_in_background(
+                    resolved_org_id, greeting, await _load_org_voice(resolved_org_id)
+                )
         return oai, instructions
 
     task: asyncio.Task[Any] = asyncio.create_task(_prepare())
     _pending_precalls[call_uuid] = task
+    _pending_precall_orgs[call_uuid] = org_id or UUID(settings.default_org_id)
 
     async def _expire() -> None:
         await asyncio.sleep(_PRECALL_TIMEOUT_SECS)
         if _pending_precalls.get(call_uuid) is not task:
             return  # already claimed (and popped) or superseded
         _pending_precalls.pop(call_uuid, None)
+        _pending_precall_orgs.pop(call_uuid, None)
         if task.done() and not task.cancelled() and task.exception() is None:
             oai, _instructions = task.result()
             await oai.close()
@@ -167,7 +224,9 @@ def start_precall_connect(
     asyncio.create_task(_expire())
 
 
-async def claim_precall_connect(call_uuid: str) -> tuple[Any, str] | None:
+async def claim_precall_connect(
+    call_uuid: str, expected_org_id: UUID | None = None
+) -> tuple[Any, str] | None:
     """Pop and await the pre-started OpenAI connection for this call, if
     ``start_precall_connect`` was called for it. Returns ``None`` if there
     isn't one (not a campaign/admin-placed call, already expired, or a
@@ -175,12 +234,63 @@ async def claim_precall_connect(call_uuid: str) -> tuple[Any, str] | None:
     if not call_uuid:
         return None
     task = _pending_precalls.pop(call_uuid, None)
+    prepared_for = _pending_precall_orgs.pop(call_uuid, None)
     if task is None:
         return None
     try:
-        return await task
+        claimed = await task
     except Exception:  # noqa: BLE001
         return None
+    if expected_org_id is not None and prepared_for is not None and prepared_for != expected_org_id:
+        # Prepared for another org (its script, its key): never reuse it for this call.
+        logger.warning("voice_precall_org_mismatch_discarded", call_uuid=call_uuid)
+        try:
+            await claimed[0].close()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+    return claimed
+
+
+async def _load_org_greeting(org_id: UUID) -> str | None:
+    """The org's custom opening line (``Org.voice_greeting``), or None for the
+    default greeting. A lookup failure means the default greeting, never a
+    failed call."""
+    try:
+        async with AsyncSessionLocal() as db:
+            org = await db.get(Org, org_id)
+        return (org.voice_greeting or None) if org is not None else None
+    except Exception:  # noqa: BLE001
+        logger.warning("voice_greeting_lookup_failed", org_id=str(org_id), exc_info=True)
+        return None
+
+
+async def _load_org_voice(org_id: UUID) -> ResolvedVoice | None:
+    """This org's voice profile merged over the platform settings, or None
+    (NULL profile = the unchanged platform voice). Resolved per call from the
+    call's own org; a lookup failure means no profile, never a failed call."""
+    try:
+        async with AsyncSessionLocal() as db:
+            org = await db.get(Org, org_id)
+        return resolve_profile(org.voice_profile) if org is not None else None
+    except Exception:  # noqa: BLE001
+        logger.warning("voice_profile_lookup_failed", org_id=str(org_id), exc_info=True)
+        return None
+
+
+async def _call_context(org_id: UUID | None, remote_number: str | None) -> tuple[str, RecordingPolicy]:
+    """(spoken brand, recording policy) for this org and the person on the other end. A lookup failure
+    means the legacy brand and the legacy policy, never a failed call."""
+    org = None
+    try:
+        if org_id is not None:
+            async with AsyncSessionLocal() as db:
+                org = await db.get(Org, org_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("voice_call_context_lookup_failed", org_id=str(org_id), exc_info=True)
+    return effective_brand(org), resolve_recording_policy(
+        org.voice_compliance if org is not None else None, remote_number
+    )
 
 
 async def _resolve_org_id(campaign_target_id: UUID | None, raw_org_id: str | None) -> UUID | None:
@@ -203,7 +313,9 @@ async def _resolve_org_id(campaign_target_id: UUID | None, raw_org_id: str | Non
     return UUID(raw_org_id) if raw_org_id else None
 
 
-async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | None) -> str:
+async def _system_instructions(
+    campaign_target_id: UUID | None, org_id: UUID | None, remote_number: str | None = None
+) -> str:
     """Base script, in order: the campaign's own pinned script (Script via
     CallCampaign.script_id), else the org's default script (Script with
     is_default=True), else the fixed appointment-booking script used by the
@@ -243,14 +355,26 @@ async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | N
             await wa_template_catalog_prompt_block(db, org_id) if org_id is not None else ""
         )
         social_links = await social_links_prompt_block(db)
+        org_row = await db.get(Org, org_id) if org_id is not None else None
+        speaking_style = bool(org_row is not None and speaking_style_enabled(org_row.voice_profile))
 
-    tail = f"{current_datetime_block()}\n\n{VOICE_APPEND.strip()}"
+    policy = resolve_recording_policy(
+        org_row.voice_compliance if org_row is not None else None, remote_number
+    )
+    voice_append = render_voice_append(
+        effective_brand(org_row),
+        ai_disclosure=settings.voice_greeting_ai_disclosure,
+        speaking_style=speaking_style,
+    )
+    tail = f"{current_datetime_block()}\n\n{voice_append.strip()}"
     if catalog:
         tail = f"{tail}\n\n{catalog}"
     if template_catalog:
         tail = f"{tail}\n\n{template_catalog}"
     if social_links:
         tail = f"{tail}\n\n{social_links}"
+    if policy.mode == "consent":
+        tail = f"{tail}\n\n{compliance.CONSENT_PROMPT}"
 
     if campaign is not None:
         return (
@@ -262,7 +386,7 @@ async def _system_instructions(campaign_target_id: UUID | None, org_id: UUID | N
     return f"{base.strip()}\n\n{tail}"
 
 
-def _session_update_event(instructions: str) -> dict[str, Any]:
+def _session_update_event(instructions: str, *, consent_tool: bool = False) -> dict[str, Any]:
     """Initial session config: mu-law I/O, semantic VAD, shared tool schemas.
 
     GA Realtime API shape (the beta shape — flat input_audio_format /
@@ -336,7 +460,7 @@ def _session_update_event(instructions: str) -> dict[str, Any]:
                 "voice": settings.openai_realtime_voice,
             },
         },
-        "tools": voice_adapter.realtime_tools(),
+        "tools": voice_adapter.realtime_tools(consent=consent_tool),
         "tool_choice": "auto",
     }
     if settings.voice_tts_provider == "elevenlabs":
@@ -405,7 +529,15 @@ async def voice_stream(ws: WebSocket) -> None:
     # Only works here for Plivo, which preserves the query string (Twilio
     # doesn't; its call_uuid isn't known until the handshake loop below, so
     # it gets a second claim attempt there instead).
-    precall = await claim_precall_connect(call_uuid) if call_uuid else None
+    expected_org: UUID | None = None
+    if call_uuid:
+        try:
+            expected_org = await _resolve_org_id(
+                UUID(raw_campaign_target_id) if raw_campaign_target_id else None, raw_org_id
+            ) or UUID(settings.default_org_id)
+        except Exception:  # noqa: BLE001 - claim without the check rather than lose the head start
+            expected_org = None
+    precall = await claim_precall_connect(call_uuid, expected_org) if call_uuid else None
 
     # Fallback: nothing pre-connected (not a campaign/admin call, Twilio,
     # already expired, or a connect failure) — start fresh now, still
@@ -471,7 +603,15 @@ async def voice_stream(ws: WebSocket) -> None:
         # customParameters above, unavailable at the top for Twilio since
         # it drops the query string) is known. A no-op for Plivo, which
         # already succeeded above if there was anything to claim.
-        precall = await claim_precall_connect(call_uuid)
+        precall = await claim_precall_connect(
+            call_uuid,
+            (
+                await _resolve_org_id(
+                    UUID(raw_campaign_target_id) if raw_campaign_target_id else None, raw_org_id
+                )
+                or UUID(settings.default_org_id)
+            ),
+        )
         if precall is not None and oai_connect_task is not None:
             oai_connect_task.cancel()
             oai_connect_task = None
@@ -495,6 +635,8 @@ async def voice_stream(ws: WebSocket) -> None:
     resolved_org_id = org_id or UUID(settings.default_org_id)
 
     conversation_id: Any = None
+    call_state: Any = None  # for the usage flush in the outer finally
+    usage_task: Any = None
     try:
         user_id, conversation_id = await voice_adapter.open_voice_conversation(
             caller, call_uuid, org_id=org_id
@@ -509,6 +651,21 @@ async def voice_stream(ws: WebSocket) -> None:
         )
         if stream_id:
             state.stream_id = stream_id
+        state.call_uuid = call_uuid or None
+        state.call_ws = ws
+        call_state = state
+        if settings.voice_metering_v2 and call_uuid:
+            usage_task = asyncio.create_task(
+                _usage_checkpoint_loop(state, resolved_org_id, call_uuid, provider, call_started)
+            )
+        brand, policy = await _call_context(resolved_org_id, caller)
+        state.consent_tool = policy.mode == "consent"
+        state.latency = LatencyTracker(
+            org_id=resolved_org_id, call_uuid=call_uuid or None, provider=provider
+        )
+        # Fetched alongside the OpenAI setup, awaited only when the greeting is sent.
+        greeting_task = asyncio.create_task(_load_org_greeting(resolved_org_id))
+        voice_task = asyncio.create_task(_load_org_voice(resolved_org_id))
         live_start_task = (
             asyncio.create_task(_start_live_transcriber(state, resolved_org_id, ws, log))
             if settings.voice_live_turn_detection
@@ -527,7 +684,9 @@ async def voice_stream(ws: WebSocket) -> None:
             # us after answering, not just the DB/org-resolution work above.
             oai, instructions = precall
         else:
-            instructions = await _system_instructions(campaign_target_id, resolved_org_id)
+            instructions = await _system_instructions(
+                campaign_target_id, resolved_org_id, remote_number=caller
+            )
             # Usually already connected by now regardless — the handshake
             # ran concurrently with the work above instead of after it.
             oai = await oai_connect_task
@@ -535,39 +694,72 @@ async def voice_stream(ws: WebSocket) -> None:
         state.oai_ws = oai
 
         try:
-            if precall is None:
-                await oai.send(json.dumps(_session_update_event(instructions)))
+            session_update_needed = precall is None
+            if precall is not None and state.consent_tool and compliance.CONSENT_PROMPT not in instructions:
+                # The pre-connected session was prepared before this caller's region was known; this
+                # call needs the consent question and tool, so refresh the session.
+                instructions = f"{instructions}\n\n{compliance.CONSENT_PROMPT}"
+                state.base_instructions = instructions
+                session_update_needed = True
+            if session_update_needed:
+                await oai.send(
+                    json.dumps(_session_update_event(instructions, consent_tool=state.consent_tool))
+                )
             # Make the agent greet first instead of waiting for the caller.
             # Protect this greeting from being wiped by the callee's
-            # reflexive "hello?" on an outbound call — adapter.handle_openai_
+            # reflexive "hello?" on an outbound call - adapter.handle_openai_
             # event suppresses barge-in until this deadline (or until the
             # greeting's response.done arrives, whichever comes first).
-            state.greeting_guard_until = time.monotonic() + 10.0
-            await oai.send(
-                json.dumps(
-                    {
-                        "type": "response.create",
-                        "response": {
-                            # Spelled out explicitly (not just "as your instructions
-                            # describe") because this is the call's very first
-                            # response — there's no conversation history yet for the
-                            # model to fall back on, so a per-response instructions
-                            # override that only gestures at the session instructions
-                            # was leaving the model with nothing concrete to open
-                            # with, and it defaulted to a generic English greeting
-                            # regardless of what the org's script said.
-                            "instructions": (
-                                "Begin the call now: open with a short, warm, natural "
-                                "greeting in Hindi - something like 'Namaste, "
-                                "WorkAssign AI se Veer bol raha hoon. Main aapki kya "
-                                "madad kar sakta hoon?' - adapted to match your "
-                                "persona and script. Do not ask which language they "
-                                "want - just start the conversation in Hindi."
-                            ),
-                        },
-                    }
+            org_greeting = await greeting_task
+            state.voice = await voice_task
+            played_cached = False
+            notice = policy.spoken_notice
+            if (
+                org_greeting
+                and not notice  # cached audio is fixed: it cannot carry a per-region notice
+                and policy.mode != "consent"  # nor can it ask for consent; the model must speak first
+                and settings.voice_greeting_audio_cache
+                and state.tts_provider == "elevenlabs"
+            ):
+                cached = greeting_cache.get(resolved_org_id, org_greeting, state.voice)
+                if cached is None:
+                    greeting_cache.ensure_in_background(resolved_org_id, org_greeting, state.voice)
+                else:
+                    try:
+                        await voice_adapter.play_cached_greeting(
+                            ws, oai, state, cached.text, cached.chunks, log
+                        )
+                        played_cached = True
+                    except Exception:  # noqa: BLE001
+                        log.warning("voice_greeting_cached_failed", exc_info=True)
+                        # Anything already sent can't be taken back: only fall
+                        # back to the spoken greeting if the caller heard nothing.
+                        played_cached = state.playback_end > 0
+            if not played_cached:
+                state.greeting_guard_until = time.monotonic() + 10.0
+                state.latency.begin_turn(kind="greeting")
+                state.latency.mark("response_requested")
+                await oai.send(
+                    json.dumps(
+                        {
+                            "type": "response.create",
+                            "response": {
+                                # Spelled out explicitly (not just "as your instructions
+                                # describe") because this is the call's very first
+                                # response - there's no conversation history yet for the
+                                # model to fall back on. An org's own greeting is spoken
+                                # verbatim; otherwise the default wording (see
+                                # channels/voice/greeting.py).
+                                "instructions": greeting_instruction(
+                                    org_greeting,
+                                    brand,
+                                    settings.voice_greeting_ai_disclosure,
+                                    notice=notice,
+                                ),
+                            },
+                        }
+                    )
                 )
-            )
             log.info("openai_realtime_connected")
 
             async def pump_call_to_openai() -> None:
@@ -581,6 +773,8 @@ async def voice_stream(ws: WebSocket) -> None:
                             if payload:
                                 if state.live is not None:
                                     state.live.feed(payload)
+                                    if state.live.healthy:
+                                        state.usage.transcribe_bytes += len(payload) * 3 // 4
                                 await oai.send(
                                     json.dumps(
                                         {
@@ -608,6 +802,7 @@ async def voice_stream(ws: WebSocket) -> None:
                             pass
                         elif event == "stop":
                             log.info("call_stream_stop")
+                            state.call_ended = True
                             break
                 except WebSocketDisconnect:
                     log.info(
@@ -621,6 +816,7 @@ async def voice_stream(ws: WebSocket) -> None:
                         call_duration_s=round(time.monotonic() - call_started, 1),
                     )
                 finally:
+                    state.call_ended = True  # the caller's side is gone, however it ended
                     await oai.close()
 
             async def pump_openai_to_call() -> None:
@@ -657,6 +853,9 @@ async def voice_stream(ws: WebSocket) -> None:
                     # voice-call-drop investigation. close_code/close_reason
                     # are OpenAI's own WS close frame — the actual reason it
                     # dropped the session, not just that it happened.
+                    # A close shortly after we sent response.cancel is the suspected
+                    # failure mode: stop cancelling for the rest of this call.
+                    voice_adapter.note_openai_closed(state, log)
                     log.info(
                         "openai_ws_closed",
                         call_duration_s=round(time.monotonic() - call_started, 1),
@@ -680,6 +879,8 @@ async def voice_stream(ws: WebSocket) -> None:
             # ends the call.
             call_task = asyncio.create_task(pump_call_to_openai())
             oai_reconnects = 0
+            episode_started = 0.0  # when the current run of failed reconnects began
+            last_connected = time.monotonic()
             try:
                 while True:
                     oai_task = asyncio.create_task(pump_openai_to_call())
@@ -690,13 +891,37 @@ async def voice_stream(ws: WebSocket) -> None:
                         oai_task.cancel()
                         await asyncio.gather(oai_task, return_exceptions=True)
                         break
+                    dropped_at = time.monotonic()  # the Realtime session just went away
+                    if settings.voice_reconnect_recovery and time.monotonic() - last_connected > 30.0:
+                        # The last session stayed healthy for a while: this is a fresh incident, not
+                        # the same outage, so it gets its own retry allowance and time budget.
+                        oai_reconnects = 0
+                        episode_started = 0.0
                     oai_reconnects += 1
-                    if oai_reconnects > _MAX_OAI_RECONNECTS:
+                    if not episode_started:
+                        episode_started = time.monotonic()
+                    if reconnect_exhausted(oai_reconnects, time.monotonic() - episode_started):
                         log.warning(
                             "openai_ws_reconnect_exhausted",
                             attempts=oai_reconnects,
                             call_duration_s=round(time.monotonic() - call_started, 1),
                         )
+                        if settings.voice_reconnect_recovery:
+                            # Without this the caller is left on an open, silent line (keepCallAlive).
+                            await voice_adapter.play_fallback_apology(state, log)
+                            try:
+                                await voice_adapter._dispatch_deduped(
+                                    state, "transfer_to_human",
+                                    json.dumps({"reason": recovery.FOLLOW_UP_REASON, "urgency": "high"}), log,
+                                )
+                            except Exception:  # noqa: BLE001
+                                log.warning("voice_reconnect_follow_up_failed", exc_info=True)
+                            ending = call_control.request_hangup(
+                                state, log, reason="realtime_unavailable",
+                                outcome="realtime_unavailable", abortable=False,
+                            )
+                            if ending is not None:
+                                await asyncio.wait({ending}, timeout=30)
                         call_task.cancel()
                         await asyncio.gather(call_task, return_exceptions=True)
                         break
@@ -706,9 +931,14 @@ async def voice_stream(ws: WebSocket) -> None:
                         call_duration_s=round(time.monotonic() - call_started, 1),
                     )
                     await voice_adapter.cancel_pending_tasks(state)
+                    voice_adapter.reset_after_reconnect(state)
                     try:
                         oai = await _connect_to_openai(resolved_org_id)
-                        await oai.send(json.dumps(_session_update_event(state.base_instructions)))
+                        await oai.send(
+                            json.dumps(
+                                _session_update_event(state.base_instructions, consent_tool=state.consent_tool)
+                            )
+                        )
                     except Exception as exc:  # noqa: BLE001
                         log.warning("openai_ws_reconnect_failed", error=str(exc))
                         await asyncio.sleep(min(2**oai_reconnects, 8))
@@ -720,6 +950,11 @@ async def voice_stream(ws: WebSocket) -> None:
                     # using the new connection — no restart of call_task
                     # needed.
                     state.oai_ws = oai
+                    last_connected = time.monotonic()
+                    state.usage.reconnects += 1
+                    state.latency.metric(
+                        "reconnect_recovery_ms", (last_connected - dropped_at) * 1000, attempt=oai_reconnects
+                    )
                     state.response_active = False
                     state.ack_stage = None
                     state.suppress_response_audio = False
@@ -732,6 +967,29 @@ async def voice_stream(ws: WebSocket) -> None:
                     # up to the gap and hand the turn back rather than
                     # guessing at content it no longer has.
                     try:
+                        if settings.voice_reconnect_recovery:
+                            # Give the new session the last few turns (text only, sensitive digits masked,
+                            # no tool calls) and tell it what is already done, instead of making the
+                            # caller repeat themselves.
+                            try:
+                                for item in await voice_adapter.build_reconnect_items(state):
+                                    await oai.send(json.dumps(item))
+                            except Exception:  # noqa: BLE001 - no context beats no reply
+                                log.warning("voice_reconnect_context_failed", exc_info=True)
+                            await oai.send(
+                                json.dumps(
+                                    {
+                                        "type": "response.create",
+                                        "response": {
+                                            "instructions": (
+                                                f"{state.base_instructions}\n\n"
+                                                f"{voice_adapter.reconnect_resume_instruction(state)}"
+                                            )
+                                        },
+                                    }
+                                )
+                            )
+                            continue
                         await oai.send(
                             json.dumps(
                                 {
@@ -754,6 +1012,16 @@ async def voice_stream(ws: WebSocket) -> None:
                     call_task.cancel()
                 await asyncio.gather(call_task, return_exceptions=True)
         finally:
+            if not greeting_task.done():
+                greeting_task.cancel()
+            # Close anything this call left open: an ElevenLabs socket or
+            # prewarm, a pending TTS finish, the silence / reply / live tasks.
+            # Before this they simply outlived the call.
+            try:
+                call_control.cancel_pending_hangup(state)
+                await voice_adapter.cancel_pending_tasks(state)
+            except Exception:  # noqa: BLE001
+                log.warning("voice_call_cleanup_failed", exc_info=True)
             await _stop_live_transcriber(state, live_start_task)
             # pump_call_to_openai already closes oai in its own finally on
             # the normal path — this is a safety net for the (unusual) case
@@ -791,23 +1059,36 @@ async def voice_stream(ws: WebSocket) -> None:
 
         # Usage metering (req §6): connected voice seconds, keyed to this
         # call's own id so a reconnect/retry of the same call_uuid never
-        # double-counts. Never raises past this point — a metering failure
+        # double-counts. Never raises past this point - a metering failure
         # must not mask (or re-trigger) call teardown.
+        if usage_task is not None and not usage_task.done():
+            usage_task.cancel()
+            await asyncio.gather(usage_task, return_exceptions=True)
         if call_uuid:
             try:
                 async with AsyncSessionLocal() as usage_db:
-                    await record_usage(
-                        usage_db,
-                        organization_id=resolved_org_id,
-                        event_id=deterministic_event_id("voice_call_ended", call_uuid),
-                        service="voice",
-                        usage_type="voice_seconds",
-                        quantity=call_duration_s,
-                        unit="seconds",
-                        provider=provider,
-                        source="realtime_bridge",
-                        request_id=call_uuid,
-                    )
-                    await usage_db.commit()
+                    if settings.voice_metering_v2 and call_state is not None:
+                        # Checkpointed scheme: whatever the periodic checkpoints did not cover (including
+                        # the rest of the call's seconds) is written now, as the final delta.
+                        await metering.flush_call_usage(
+                            usage_db, org_id=resolved_org_id, call_uuid=call_uuid, provider=provider,
+                            usage=call_state.usage, call_seconds=call_duration_s,
+                        )
+                        await usage_db.commit()
+                        call_state.usage.confirm()
+                    else:
+                        await record_usage(
+                            usage_db,
+                            organization_id=resolved_org_id,
+                            event_id=deterministic_event_id("voice_call_ended", call_uuid),
+                            service="voice",
+                            usage_type="voice_seconds",
+                            quantity=call_duration_s,
+                            unit="seconds",
+                            provider=provider,
+                            source="realtime_bridge",
+                            request_id=call_uuid,
+                        )
+                        await usage_db.commit()
             except Exception:  # noqa: BLE001
                 log.warning("usage_metering_failed", call_uuid=call_uuid)

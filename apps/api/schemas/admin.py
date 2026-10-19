@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from apps.api.channels.voice.voice_profile import VoiceProfile
 from apps.api.core.phone import validate_country_code
 from apps.api.schemas.org_numbers import OrgPhoneNumberIn, OrgPhoneNumberOut
 from apps.api.schemas.whatsapp_common import TemplateButtonSendParam  # re-exported for existing importers
@@ -218,6 +219,68 @@ class CallingSettingsIn(BaseModel):
             "(single admin call, AI callback, campaign dialer, follow-up dispatcher). "
             "Omit/null to go back to automatic ordering."
         ),
+    )
+
+
+class VoiceGreetingSettingsOut(BaseModel):
+    # None = the default model-generated greeting (every existing org).
+    greeting: str | None = None
+    # The brand the default greeting speaks, and whether a saved greeting must
+    # identify the agent as an AI — shown so the settings page can explain a
+    # rejected save.
+    brand_name: str
+    ai_disclosure_required: bool
+    max_chars: int
+
+
+class VoiceComplianceSettingsOut(BaseModel):
+    # What is stored; None = not configured (the legacy behaviour: record every call, no notice).
+    compliance: dict[str, Any] | None = None
+    is_default: bool
+    default_recording_mode: str
+
+
+class VoiceComplianceSettingsIn(BaseModel):
+    compliance: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "recording_mode (always|notice|consent|off), optional recording_notice, optional regions "
+            "keyed by calling code, optional retention_days. null clears back to the default."
+        ),
+    )
+
+
+class VoiceGreetingSettingsIn(BaseModel):
+    greeting: str | None = Field(
+        None,
+        description=(
+            "Exact opening line spoken on every call. Must say the agent is an AI "
+            "assistant when disclosure is required. Omit/null/blank to go back to "
+            "the default greeting."
+        ),
+    )
+
+
+class VoiceProfileSettingsOut(BaseModel):
+    # Exactly what this org saved; None = no profile (platform voice, unchanged).
+    profile: dict | None = None
+    # What a call would actually use right now (profile merged over platform).
+    effective: dict
+    allowed_models: dict[str, str]
+    style_models: list[str]
+    speed_range: tuple[float, float]
+
+
+class VoiceProfileSettingsIn(BaseModel):
+    # null clears the profile (back to the platform voice).
+    profile: VoiceProfile | None = None
+
+
+class VoicePreviewIn(BaseModel):
+    text: str | None = Field(None, description="Phrase to speak (capped).")
+    phrase_id: str | None = Field(None, description="id from GET .../voice-profile/phrases.")
+    profile: VoiceProfile | None = Field(
+        None, description="Candidate profile to try; omit to use the org's saved one."
     )
 
 

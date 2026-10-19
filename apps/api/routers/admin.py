@@ -24,6 +24,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from fastapi.responses import Response as RawResponse
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy import String, case, cast, func, or_, select, update
@@ -31,6 +32,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from apps.api.channels.voice import elevenlabs_client
+from apps.api.channels.voice import compliance as voice_compliance
+from apps.api.channels.voice import greeting as voice_greeting
+from apps.api.channels.voice import voice_preview
+from apps.api.channels.voice import voice_profile as voice_profile_mod
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.voice.org_numbers import (
@@ -52,7 +58,7 @@ from apps.api.core.org_credentials import (
     resolve_plivo_credentials,
     resolve_twilio_credentials,
 )
-from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, VOICE_APPEND, WHATSAPP_APPEND
+from apps.api.core.prompts import OUTBOUND_CALL_PROMPT, WHATSAPP_APPEND, render_voice_append
 from apps.api.core.tools import (
     TOOL_DEFINITIONS,
     _get_or_create_user_by_phone,
@@ -105,6 +111,13 @@ from apps.api.rate_limit import limiter
 from apps.api.redis_client import ERROR_COUNTER_KEY_FMT
 from apps.api.schemas.admin import (
     CallingSettingsIn,
+    VoicePreviewIn,
+    VoiceProfileSettingsIn,
+    VoiceProfileSettingsOut,
+    VoiceComplianceSettingsIn,
+    VoiceComplianceSettingsOut,
+    VoiceGreetingSettingsIn,
+    VoiceGreetingSettingsOut,
     CallingSettingsOut,
     CountryCodeSettingsIn,
     CountryCodeSettingsOut,
@@ -2775,6 +2788,267 @@ async def update_calling_settings(
     )
 
 
+def _voice_greeting_out(record: Org | None) -> VoiceGreetingSettingsOut:
+    return VoiceGreetingSettingsOut(
+        greeting=record.voice_greeting if record else None,
+        brand_name=voice_greeting.effective_brand(record),
+        ai_disclosure_required=settings.voice_greeting_ai_disclosure,
+        max_chars=voice_greeting.MAX_GREETING_CHARS,
+    )
+
+
+@router.get("/settings/voice-greeting", response_model=VoiceGreetingSettingsOut)
+async def get_voice_greeting_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> VoiceGreetingSettingsOut:
+    """This org's custom opening line for voice calls (None = the default
+    greeting). Org-admin-only, like the calling-provider setting."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can view voice greeting settings")
+    return _voice_greeting_out(await db.get(Org, org))
+
+
+@router.put("/settings/voice-greeting", response_model=VoiceGreetingSettingsOut)
+async def update_voice_greeting_settings(
+    body: VoiceGreetingSettingsIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> VoiceGreetingSettingsOut:
+    """Set (or, with a null/blank greeting, clear) this org's opening line.
+    Takes effect on the org's next call; calls already in progress are
+    untouched. Rejected with 422 if it is too long or doesn't identify the
+    agent as an AI (see channels/voice/greeting.py::validate_greeting)."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change voice greeting settings")
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    try:
+        record.voice_greeting = voice_greeting.validate_greeting(body.greeting)
+    except voice_greeting.GreetingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await db.commit()
+    return _voice_greeting_out(record)
+
+
+def _voice_profile_out(record: Org | None) -> VoiceProfileSettingsOut:
+    stored = record.voice_profile if record else None
+    resolved = voice_profile_mod.resolve_profile(stored)
+    if resolved is None:
+        effective: dict = {
+            "voice_id": settings.elevenlabs_voice_id,
+            "model_id": settings.elevenlabs_model_id,
+            "voice_settings": dict(voice_profile_mod.LEGACY_VOICE_SETTINGS),
+            "normalize_speech": False,
+            "speaking_style": False,
+            "pronunciations": {},
+            "preferred_language": None,
+        }
+    else:
+        effective = {
+            "voice_id": resolved.voice_id,
+            "model_id": resolved.model_id,
+            "voice_settings": dict(resolved.voice_settings),
+            "normalize_speech": resolved.normalize,
+            "speaking_style": resolved.speaking_style,
+            "pronunciations": dict(resolved.pronunciations),
+            "preferred_language": resolved.language,
+        }
+    return VoiceProfileSettingsOut(
+        profile=stored,
+        effective=effective,
+        allowed_models=dict(voice_profile_mod.ALLOWED_MODELS),
+        style_models=sorted(voice_profile_mod.STYLE_MODELS),
+        speed_range=voice_profile_mod.SPEED_RANGE,
+    )
+
+
+@router.get("/settings/voice-profile", response_model=VoiceProfileSettingsOut)
+async def get_voice_profile_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> VoiceProfileSettingsOut:
+    """This org's voice profile (None = the platform voice, unchanged) and
+    what a call would use. Org-admin-only."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can view voice profile settings")
+    return _voice_profile_out(await db.get(Org, org))
+
+
+@router.put("/settings/voice-profile", response_model=VoiceProfileSettingsOut)
+async def update_voice_profile_settings(
+    body: VoiceProfileSettingsIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> VoiceProfileSettingsOut:
+    """Save (or, with a null profile, clear) this org's voice profile. Applies
+    from the org's next call. Unknown fields, out-of-range values, unknown
+    models and malformed voice ids are rejected with 422."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change voice profile settings")
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    stored: dict | None = None
+    if body.profile is not None:
+        try:
+            body.profile.check_cross_fields()
+        except voice_profile_mod.VoiceProfileError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        stored = body.profile.model_dump(exclude_unset=True, exclude_none=True) or None
+    record.voice_profile = stored
+    await db.commit()
+    return _voice_profile_out(record)
+
+
+@router.get("/settings/voice-profile/phrases")
+async def list_voice_preview_phrases(
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> dict:
+    """The representative phrase set shared by preview and scripts/voice_compare.py."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can use voice preview")
+    return {"phrases": voice_preview.load_phrases(), "max_chars": settings.voice_preview_max_chars}
+
+
+@router.post("/settings/voice-profile/preview")
+async def preview_voice_profile(
+    body: VoicePreviewIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> RawResponse:
+    """Synthesize one short phrase with this org's saved profile (or the
+    candidate ``profile`` in the body) and return it as a WAV. Never saves
+    anything. Org-admin-only, length-capped and rate-limited per org."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can use voice preview")
+    text = body.text
+    if body.phrase_id:
+        text = voice_preview.phrase_text(body.phrase_id)
+        if text is None:
+            raise HTTPException(status_code=422, detail=f"Unknown phrase_id {body.phrase_id!r}")
+    text = " ".join((text or "").split())
+    if not text:
+        raise HTTPException(status_code=422, detail="Provide text or a phrase_id")
+    if len(text) > settings.voice_preview_max_chars:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Preview text is too long ({len(text)} > {settings.voice_preview_max_chars} characters)",
+        )
+    if body.profile is not None:
+        try:
+            body.profile.check_cross_fields()
+        except voice_profile_mod.VoiceProfileError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raw = body.profile.model_dump(exclude_unset=True, exclude_none=True)
+    else:
+        record = await db.get(Org, org)
+        raw = record.voice_profile if record else None
+    voice = voice_profile_mod.resolve_profile(raw)
+    if not elevenlabs_client.is_configured():
+        raise HTTPException(
+            status_code=503, detail="Voice preview needs ElevenLabs, which is not configured on this server"
+        )
+    if not voice_preview.preview_limiter.allow(org, settings.voice_preview_per_minute):
+        raise HTTPException(status_code=429, detail="Too many previews; try again in a minute")
+    try:
+        result = await voice_preview.synthesize(text, voice)
+    except voice_preview.PreviewUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except voice_preview.PreviewFailed as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if settings.voice_metering_v2:
+        # Previews cost real TTS characters; measured = what was sent to the provider.
+        try:
+            await record_usage(
+                db,
+                organization_id=org,
+                event_id=deterministic_event_id("voice_preview", uuid4().hex),
+                service="ai",
+                usage_type="tts_characters",
+                quantity=len(text),
+                unit="characters",
+                provider="elevenlabs",
+                source="voice_preview",
+                metadata={"basis": "measured", "model": voice.model_id if voice else settings.elevenlabs_model_id},
+            )
+            await db.commit()
+        except Exception:  # noqa: BLE001 - metering must not fail a preview
+            logger.warning("voice_preview_metering_failed", exc_info=True)
+    return RawResponse(
+        content=voice_preview.ulaw_wav(result.audio),
+        media_type="audio/wav",
+        headers={"X-Voice-First-Audio-Ms": str(result.first_audio_ms)},
+    )
+
+
+def _voice_compliance_out(record: Org | None) -> VoiceComplianceSettingsOut:
+    stored = record.voice_compliance if record else None
+    policy = voice_compliance.resolve_recording_policy(stored, None)
+    return VoiceComplianceSettingsOut(
+        compliance=stored or None,
+        is_default=not stored,
+        default_recording_mode=policy.mode,
+    )
+
+
+@router.get("/settings/voice-compliance", response_model=VoiceComplianceSettingsOut)
+async def get_voice_compliance_settings(
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> VoiceComplianceSettingsOut:
+    """This org's call-recording notice / consent / retention policy. Not set (the default for every
+    existing org) means the long-standing behaviour: every call is recorded, with no spoken notice."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can view voice compliance settings")
+    return _voice_compliance_out(await db.get(Org, org))
+
+
+@router.put("/settings/voice-compliance", response_model=VoiceComplianceSettingsOut)
+async def update_voice_compliance_settings(
+    body: VoiceComplianceSettingsIn,
+    db: DbDep,
+    org: RequestOrgDep,
+    member_scope: MemberScopeDep,
+    x_admin_token: str | None = Header(None),
+) -> VoiceComplianceSettingsOut:
+    """Set (or, with ``compliance: null``, clear back to the default) the recording policy. Takes
+    effect on the org's next call. Whether a given mode is lawful where the org calls is the org's
+    decision; this only validates the shape."""
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change voice compliance settings")
+    record = await db.get(Org, org)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Org not found")
+    if body.compliance is None:
+        record.voice_compliance = None
+    else:
+        try:
+            parsed = voice_compliance.validate(body.compliance)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()),
+            ) from exc
+        record.voice_compliance = parsed.model_dump(mode="json", exclude_none=True)
+    await db.commit()
+    return _voice_compliance_out(record)
+
+
 @router.get("/settings/country-code", response_model=CountryCodeSettingsOut)
 async def get_country_code_settings(
     db: DbDep,
@@ -3126,7 +3400,9 @@ async def get_prompts(
     """Read-only view of the active system prompts."""
     return PromptsOut(
         base=OUTBOUND_CALL_PROMPT,
-        voice_append=VOICE_APPEND,
+        voice_append=render_voice_append(
+            settings.voice_brand_name, ai_disclosure=settings.voice_greeting_ai_disclosure
+        ),
         whatsapp_append=WHATSAPP_APPEND,
     )
 
@@ -4160,7 +4436,7 @@ async def outbound_call(
         # waiting for the callee to actually answer — see start_precall_
         # connect's docstring for why this id is trustworthy for Twilio and
         # a safe no-op-if-wrong bet for Plivo.
-        start_precall_connect(request_uuid, None, org_id)
+        start_precall_connect(request_uuid, None, org_id, remote_number=payload.to_phone)
     return OutboundCallOut(call_sid=call_sid, status="queued")
 
 

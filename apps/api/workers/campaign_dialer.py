@@ -447,7 +447,7 @@ async def _dial_one(
             # Warm up the OpenAI Realtime session for the whole ring
             # duration instead of waiting for the callee to answer — see
             # start_precall_connect's docstring.
-            start_precall_connect(request_uuid, UUID(target_id), org_id)
+            start_precall_connect(request_uuid, UUID(target_id), org_id, remote_number=phone)
     except (httpx.HTTPError, RuntimeError):
         logger.warning("campaign_dialer_initiate_call_failed", target_id=target_id)
         await _mark_target(target_id, "pending" if attempt_count < max_attempts else "failed")

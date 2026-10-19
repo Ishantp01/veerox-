@@ -27,7 +27,7 @@ import asyncio
 import json
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
@@ -80,6 +80,16 @@ QUESTION_CUES = frozenset(
     }
 )
 
+# Words that signal the caller is correcting themselves or the agent. Only consulted
+# with VOICE_SMART_TURN_TAKING: "nahi"/"no" are already in QUESTION_CUES.
+CORRECTION_CUES = frozenset(
+    {
+        "galat", "galti", "wrong", "incorrect", "sorry", "maaf", "meant",
+        "correction", "dobara", "repeat",
+        "गलत", "गलती", "माफ", "माफ़", "सॉरी", "दोबारा",
+    }
+)
+
 # Longer than this with anything beyond fillers is not a "haan haan, ok".
 # Lowered from 8 so more real interruptions resolve instantly off the cheap
 # rules instead of waiting on the (still fast, but non-zero) LLM check.
@@ -102,7 +112,20 @@ def is_backchannel(text: str, max_words: int = 4) -> bool:
     return len(words) <= max_words and all(w in BACKCHANNEL_WORDS for w in words)
 
 
-def classify_partial(text: str) -> Verdict:
+def is_noise(text: str) -> bool:
+    """Non-speech the transcriber emitted for background noise: only punctuation or
+    symbols, or one letter repeated ("aaaa", "mmmm"). Empty text is NOT noise (it
+    just means nothing has been transcribed yet)."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    words = _tokens(stripped)
+    if not words:
+        return True  # punctuation / symbols only
+    return all(len(w) >= 3 and len(set(w)) == 1 and w.isalpha() for w in words)
+
+
+def classify_partial(text: str, smart: bool = False) -> Verdict:
     """Cheap first-pass verdict on the (possibly partial, possibly garbled)
     transcript of what the caller is saying over the agent.
 
@@ -114,9 +137,13 @@ def classify_partial(text: str) -> Verdict:
     A "?" is deliberately NOT treated as proof of a question — the
     transcriber sprinkles them on fillers in some languages.
     """
+    if smart and is_noise(text):
+        return "filler"  # background noise is not a turn: keep talking
     words = _tokens(text)
     if not words:
         return "unsure"
+    if smart and any(w in CORRECTION_CUES for w in words):
+        return "real"  # "galat", "sorry, I meant...": stop and listen
     non_filler = [w for w in words if w not in BACKCHANNEL_WORDS]
     if not non_filler:
         return "filler" if len(words) <= _MAX_FILLER_WORDS else "real"
@@ -198,6 +225,9 @@ LLM_MIN_CONFIDENCE = 0.6
 class TurnJudgement:
     label: str
     confidence: float
+    # What the judging call cost (for usage metering); not part of the verdict's identity.
+    tokens_in: int = field(default=0, compare=False)
+    tokens_out: int = field(default=0, compare=False)
 
     @property
     def verdict(self) -> Literal["filler", "real", "wait", "unsure"]:
@@ -273,7 +303,10 @@ async def judge_turn(text: str, api_key: str | None, timeout: float = 0.8) -> Tu
     except Exception as exc:  # noqa: BLE001 — never let a classifier failure touch the call
         logger.warning("voice_live_llm_check_failed", error=str(exc))
         return None
-    return parse_judgement(result.content)
+    judged = parse_judgement(result.content)
+    if judged is None:
+        return None
+    return replace(judged, tokens_in=int(result.tokens_in or 0), tokens_out=int(result.tokens_out or 0))
 
 
 async def warm_up(api_key: str | None) -> None:

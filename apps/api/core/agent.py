@@ -28,7 +28,7 @@ from apps.api.core.memory import load_last_n, persist_turn
 from apps.api.core.prompts import (
     KNOWN_USER_HINT,
     OUTBOUND_CALL_PROMPT,
-    VOICE_APPEND,
+    render_voice_append,
     WHATSAPP_APPEND,
     current_datetime_block,
 )
@@ -163,7 +163,13 @@ async def _system_prompt_for(
     if base is None:
         org = await db.get(Org, org_id)
         base = org.script if org is not None and org.script else OUTBOUND_CALL_PROMPT
-    append = VOICE_APPEND if channel == "voice" else WHATSAPP_APPEND
+    append = (
+        render_voice_append(
+            settings.voice_brand_name, ai_disclosure=settings.voice_greeting_ai_disclosure
+        )
+        if channel == "voice"
+        else WHATSAPP_APPEND
+    )
     prompt = f"{base.strip()}\n\n{current_datetime_block()}\n\n{append.strip()}"
     catalog = await asset_catalog_prompt_block(db, org_id)
     if catalog:

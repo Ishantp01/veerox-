@@ -126,6 +126,56 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "hinglish": "Maaf kijiye, main sahi se samajhna chahta hoon. Aap thoda aur bata sakte hain ki aapko kya chahiye?",
         "hi": "क्षमा करें, मैं सही से समझना चाहता हूँ। क्या आप थोड़ा और बता सकते हैं कि आपको क्या चाहिए?",
     },
+    "reassure_no_pressure": {
+        "en": "Of course, there is no pressure at all. Take your time to decide, and ask me anything you would like to know.",
+        "hinglish": "Bilkul, koi pressure nahi hai. Aap apne hisaab se decide kijiye, aur jo poochna ho zaroor poochiye.",
+        "hi": "बिल्कुल, कोई दबाव नहीं है। आप अपने हिसाब से तय कीजिए, और जो पूछना हो ज़रूर पूछिए।",
+    },
+    "hesitation_support": {
+        "en": "I understand, it is a big decision and there is no hurry. Is there anything I can explain that would help?",
+        "hinglish": "Main samajh sakta hoon, yeh bada faisla hai aur koi jaldi nahi hai. Kya main kuch samjha sakta hoon jo madad kare?",
+        "hi": "मैं समझ सकता हूँ, यह बड़ा फ़ैसला है और कोई जल्दी नहीं है। क्या मैं कुछ समझा सकता हूँ जिससे मदद मिले?",
+    },
+    "confirm_correction": {
+        "en": "Sorry for the mix-up. Earlier I noted \"{old}\", and now it is \"{new}\". Is that right?",
+        "hinglish": "Maaf kijiye, gadbad ho gayi. Pehle maine \"{old}\" likha tha, ab \"{new}\" hai. Sahi hai na?",
+        "hi": "क्षमा करें, गड़बड़ हो गई। पहले मैंने \"{old}\" लिखा था, अब \"{new}\" है। सही है न?",
+    },
+    "clarify_conflict": {
+        "en": "Just to be sure: earlier I noted \"{old}\" and now you said \"{new}\". Which one is correct?",
+        "hinglish": "Bas confirm karna hai: pehle \"{old}\" noted tha aur ab aapne \"{new}\" bataya. Kaun sa sahi hai?",
+        "hi": "बस पुष्टि करनी है: पहले \"{old}\" नोट था और अब आपने \"{new}\" बताया। कौन सा सही है?",
+    },
+    "flexible_followup": {
+        "en": "No problem at all. Which other day or time would suit you better?",
+        "hinglish": "Koi baat nahi. Aapko kaunsa aur din ya time suit karega?",
+        "hi": "कोई बात नहीं। आपको कौन सा और दिन या समय ठीक रहेगा?",
+    },
+    "soft_next_step": {
+        "en": "Whenever you are ready, I can share more details or we can talk further. What would you like to know?",
+        "hinglish": "Jab aap ready hon, main aur details bata sakta hoon ya hum aage baat kar sakte hain. Aap kya jaanna chahenge?",
+        "hi": "जब आप तैयार हों, मैं और जानकारी दे सकता हूँ या हम आगे बात कर सकते हैं। आप क्या जानना चाहेंगे?",
+    },
+    "online_meeting_ok": {
+        "en": "Sure, an online meeting works fine. Let me know whenever you would like to plan it.",
+        "hinglish": "Ji bilkul, online meeting ho sakti hai. Jab aap plan karna chahein, bata dijiye.",
+        "hi": "जी बिल्कुल, ऑनलाइन मीटिंग हो सकती है। जब आप प्लान करना चाहें, बता दीजिए।",
+    },
+    "honest_unknown_repeat": {
+        "en": "I do not have a confirmed answer on that, and I have already passed your question to our team. Is there anything else I can help with?",
+        "hinglish": "Iska confirmed jawab mere paas nahi hai, aur aapka sawaal main hamari team ko pehle hi de chuka hoon. Kya main aur kuch madad kar sakta hoon?",
+        "hi": "इसका पक्का जवाब मेरे पास नहीं है, और आपका सवाल मैं हमारी टीम को पहले ही दे चुका हूँ। क्या मैं और कुछ मदद कर सकता हूँ?",
+    },
+    "repetition_apology": {
+        "en": "Sorry about that, you already told me. Let us move on: what would you like to know?",
+        "hinglish": "Maaf kijiye, aap pehle bata chuke hain. Aage badhte hain: aap kya jaanna chahenge?",
+        "hi": "क्षमा करें, आप पहले बता चुके हैं। आगे बढ़ते हैं: आप क्या जानना चाहेंगे?",
+    },
+    "identify_self": {
+        "en": "I am an AI assistant calling on behalf of the business you enquired with. Is this a good time to talk?",
+        "hinglish": "Main ek AI assistant hoon, us business ki taraf se call kar raha hoon jisse aapne baat ki thi. Kya abhi baat karne ka sahi time hai?",
+        "hi": "मैं एक AI असिस्टेंट हूँ, उस बिज़नेस की ओर से कॉल कर रहा हूँ जिससे आपने बात की थी। क्या अभी बात करने का सही समय है?",
+    },
     "guided": {
         "en": "I understand. Let me help you with that.",
         "hinglish": "Main samajh gaya. Main isme aapki madad karta hoon.",
@@ -150,8 +200,11 @@ def _template(kind: str, language: str, **fmt: str) -> str:
 
 
 def _who(memory: dict[str, str] | None) -> str:
-    """" Asha" when we remember the customer's name, else an empty string."""
+    """" Asha" when we remember the customer's name, else an empty string. Once a reply has
+    used the name (enhanced dialogue records that as ``name_used``) it is not repeated."""
     name = (memory or {}).get("name")
+    if (memory or {}).get("name_used"):
+        return ""
     return f" {name}" if name else ""
 
 
@@ -292,7 +345,7 @@ async def build_reply(
                 tokens_in, tokens_out = result.tokens_in, result.tokens_out
             except Exception:  # noqa: BLE001 — keep the extractive reply
                 logger.warning("conversation_phrase_failed", exc_info=True)
-        if understanding.scenario == "interested":
+        if understanding.scenario == "interested" and decision.push:
             reply += _NEXT_STEP.get(language, _NEXT_STEP["en"])
         return reply, tokens_in, tokens_out
 
@@ -302,4 +355,15 @@ async def build_reply(
     kind = decision.reply_kind
     if kind == "greeting" and _already_replied(history):
         kind = "greeting_again"  # the conversation is already under way
-    return _template(kind, language, when=when, who=_who(memory)), 0, 0
+    return (
+        _template(
+            kind,
+            language,
+            when=when,
+            who=_who(memory),
+            old=str(decision.args.get("old", "")),
+            new=str(decision.args.get("new", "")),
+        ),
+        0,
+        0,
+    )

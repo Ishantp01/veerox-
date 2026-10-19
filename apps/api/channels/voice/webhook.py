@@ -30,6 +30,7 @@ from fastapi.responses import Response
 from sqlalchemy import select
 
 from apps.api.channels.voice import adapter as voice_adapter
+from apps.api.channels.voice import compliance
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.voice import twilio_client as voice_twilio
 from apps.api.channels.voice.realtime_bridge import start_precall_connect
@@ -267,6 +268,7 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
         call_uuid,
         UUID(campaign_target_id) if campaign_target_id else None,
         UUID(org_id) if org_id else None,
+        remote_number=caller,
     )
 
     if is_twilio:
@@ -326,7 +328,14 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
         callback_url = f"{settings.public_base_url.rstrip('/')}/voice/recording-callback"
         async with AsyncSessionLocal() as db:
             org_record = await db.get(Org, UUID(org_id))
-        if is_twilio:
+        # The org's recording policy for this caller's region (NULL = the legacy behaviour: record
+        # every call). "consent" and "off" never start recording here; consent is asked on the call.
+        policy = compliance.resolve_recording_policy(
+            org_record.voice_compliance if org_record is not None else None, caller
+        )
+        if not policy.records_automatically:
+            logger.info("voice_recording_not_started", call_uuid=call_uuid, mode=policy.mode)
+        elif is_twilio:
             twilio_creds = resolve_twilio_credentials(org_record)
             if voice_twilio.is_configured(twilio_creds):
                 background.add_task(voice_twilio.start_recording, twilio_creds, call_uuid, callback_url)

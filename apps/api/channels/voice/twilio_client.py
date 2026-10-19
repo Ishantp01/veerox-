@@ -170,15 +170,40 @@ async def send_sms(creds: TwilioCredentials, to_e164: str, text: str, from_numbe
     return result
 
 
-async def hangup_call(creds: TwilioCredentials, call_sid: str) -> None:
+async def hangup_call(creds: TwilioCredentials, call_sid: str) -> str:
     """Force-terminate a live call via ``POST /Calls/{call_sid}.json`` with
-    ``Status=completed``. Best-effort: never raises, mirroring
-    ``plivo_client.hangup_call``.
+    ``Status=completed``. Best-effort: never raises. Returns ``"ok"``,
+    ``"already_ended"`` (Twilio has no such in-progress call: 404, or the
+    documented "call is not in-progress" 400 / error 21220) or ``"failed"``.
+    UNVERIFIED against a real Twilio account, like the rest of this module.
     """
     url = f"{_TWILIO_BASE}/Accounts/{creds.account_sid}/Calls/{call_sid}.json"
     try:
         r = await _http.post(url, data={"Status": "completed"}, auth=_auth(creds))
+        if r.status_code in (404, 410) or (
+            r.status_code == 400 and ("21220" in r.text or "not in-progress" in r.text.lower())
+        ):
+            logger.info("twilio_call_already_ended", call_sid=call_sid)
+            return "already_ended"
         r.raise_for_status()
         logger.info("twilio_call_hungup", call_sid=call_sid)
+        return "ok"
     except httpx.HTTPError as exc:
         logger.warning("twilio_hangup_failed", call_sid=call_sid, error=str(exc))
+        return "failed"
+
+
+async def delete_recording(creds: TwilioCredentials, recording_sid: str) -> str:
+    """Delete a provider-hosted recording via ``DELETE /Recordings/{sid}.json``. ``"ok"``, ``"already_gone"``
+    (404/410) or ``"failed"``. Best-effort, never raises. UNVERIFIED against a live Twilio account."""
+    url = f"{_TWILIO_BASE}/Accounts/{creds.account_sid}/Recordings/{recording_sid}.json"
+    try:
+        r = await _http.delete(url, auth=_auth(creds))
+        if r.status_code in (404, 410):
+            return "already_gone"
+        r.raise_for_status()
+        logger.info("twilio_recording_deleted", recording_sid=recording_sid)
+        return "ok"
+    except httpx.HTTPError as exc:
+        logger.warning("twilio_recording_delete_failed", recording_sid=recording_sid, error=str(exc))
+        return "failed"

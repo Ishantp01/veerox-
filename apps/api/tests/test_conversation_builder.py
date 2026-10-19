@@ -1347,5 +1347,7 @@ def test_template_migration_is_a_single_additive_head() -> None:
     config = Config(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "migrations"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["d0f6b4c8e2a5"]  # one head: the deploy's `alembic upgrade head` is unambiguous
+    # One head: the deploy's `alembic upgrade head` is unambiguous. (Not pinned to this
+    # migration's id: any later additive migration legitimately becomes the head.)
+    assert len(script.get_heads()) == 1
     assert script.get_revision("d0f6b4c8e2a5").down_revision == "c9e5a3b7d1f4"

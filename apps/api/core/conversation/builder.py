@@ -154,7 +154,11 @@ def full_config_json(config: EngineConfig) -> dict[str, Any]:
     """The complete scenario list (built-ins included) as stored JSON."""
     return {
         "scenarios": [s.to_json() for s in config.scenarios.values()],
-        "settings": {"low_confidence_action": config.low_confidence_action},
+        "settings": {
+            "low_confidence_action": config.low_confidence_action,
+            # Only present when switched on, so the stored shape is unchanged for every other org.
+            **({"enhanced_dialogue": True} if config.enhanced_dialogue else {}),
+        },
     }
 
 

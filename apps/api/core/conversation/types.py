@@ -90,6 +90,10 @@ class Understanding:
     proposed_action: str | None = None
     tokens_in: int = 0
     tokens_out: int = 0
+    # Enhanced dialogue (core/conversation/dialogue.py); all empty unless the org opted in.
+    signals: frozenset[str] = frozenset()
+    corrections: dict[str, str] = field(default_factory=dict)  # memory key -> earlier value
+    conflicts: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -104,6 +108,10 @@ class Decision:
     reply_kind: str
     knowledge: list[Any] = field(default_factory=list)
     next_state: str = STATE_ENGAGED
+    # Enhanced dialogue only: extra per-turn instructions for the speaking model, and whether
+    # the reply may nudge toward a call. Defaults leave every base reply unchanged.
+    directives: tuple[str, ...] = ()
+    push: bool = True
 
 
 @dataclass

@@ -2059,3 +2059,76 @@ async def test_member_outbound_call_claims_lead(
         await db_session.execute(select(Lead).where(Lead.phone == "+919000000051"))
     ).scalar_one()
     assert lead.claimed_by_account_user_id == member_id
+
+
+# --- voice greeting setting (channels/voice/greeting.py) ------------------------------------------------
+
+
+async def test_voice_greeting_defaults_to_none_and_reports_the_rules(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+
+    response = await client.get("/admin/settings/voice-greeting", headers=ADMIN_HEADERS)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["greeting"] is None  # every existing org keeps the default greeting
+    assert body["brand_name"] == settings.voice_brand_name
+    assert body["max_chars"] == 300
+
+
+async def test_voice_greeting_can_be_set_normalised_and_cleared(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "voice_greeting_ai_disclosure", True)
+    org = await _seed_org(db_session)
+
+    put = await client.put(
+        "/admin/settings/voice-greeting",
+        json={"greeting": "  Namaste,  main Acme ka AI assistant hoon.  "},
+        headers=ADMIN_HEADERS,
+    )
+    assert put.status_code == 200
+    assert put.json()["greeting"] == "Namaste, main Acme ka AI assistant hoon."
+    await db_session.refresh(org)
+    assert org.voice_greeting == "Namaste, main Acme ka AI assistant hoon."
+
+    cleared = await client.put(
+        "/admin/settings/voice-greeting", json={"greeting": None}, headers=ADMIN_HEADERS
+    )
+    assert cleared.json()["greeting"] is None
+    await db_session.refresh(org)
+    assert org.voice_greeting is None
+
+
+async def test_voice_greeting_without_ai_disclosure_is_rejected_and_not_saved(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "voice_greeting_ai_disclosure", True)
+    org = await _seed_org(db_session)
+
+    response = await client.put(
+        "/admin/settings/voice-greeting",
+        json={"greeting": "Namaste, Acme se baat kar rahe hain"},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert "AI assistant" in response.json()["detail"]
+    await db_session.refresh(org)
+    assert org.voice_greeting is None
+
+
+async def test_voice_greeting_over_the_length_limit_is_rejected(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+
+    response = await client.put(
+        "/admin/settings/voice-greeting",
+        json={"greeting": "AI assistant " + "x" * 400},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 422

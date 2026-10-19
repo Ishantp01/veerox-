@@ -24,13 +24,15 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from uuid import uuid4
 from typing import Any
 from uuid import UUID
 
 import structlog
 
 from apps.api.config import settings
+from apps.api.core.conversation import dialogue, runtime_stats
 from apps.api.core.conversation.config import (
     SMART_SCRIPT_ENGINE_SCENARIOS,
     EngineConfig,
@@ -45,7 +47,8 @@ from apps.api.core.conversation.engine import (
     wants_knowledge,
 )
 from apps.api.core.conversation.knowledge import find_knowledge
-from apps.api.core.conversation.memory import load_memory, save_facts
+from apps.api.core.conversation.memory import forget_facts, load_memory, save_facts
+from apps.api.core.conversation.outcome import record_disposition
 from apps.api.core.conversation.types import (
     ALLOWED_ACTIONS,
     MEMORY_KEYS,
@@ -72,6 +75,13 @@ _mode_cache: dict[UUID, tuple[float, str]] = {}
 # org id -> True while the org is on Smart Script (refreshed with _mode_cache).
 _smart_cache: dict[UUID, bool] = {}
 
+# Bookkeeping the enhanced dialogue keeps in memory: never shown to the speaking model as a fact
+# about the caller (and the *_pending values are unconfirmed by definition).
+_INTERNAL_MEMORY_KEYS = frozenset(
+    {"appointment_asks", "answered_topics", "handoff_requested", "pressure_concern", "name_used",
+     "property_info_pending", "investment_budget_pending"}
+)
+
 _LANGUAGE_NAME = {
     "en": "English",
     "hi": "Hindi",
@@ -91,6 +101,8 @@ class VoicePlan:
     # The scenario's goal / do / avoid, for guided replies and Smart Script.
     guidance: str = ""
     config: EngineConfig | None = None
+    # Identifies this decision in usage metering, so applying it more than once records it once.
+    plan_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 @dataclass
@@ -237,7 +249,7 @@ async def compute_voice_plan(
                     config,
                 )
             knowledge: list[Any] = []
-            if wants_knowledge(understanding.scenario, config):
+            if wants_knowledge(understanding.scenario, config, understanding):
                 knowledge = await find_knowledge(db, org_id, text, understanding.language)
             decision = decide(
                 understanding,
@@ -276,7 +288,38 @@ async def compute_voice_plan(
             )
     except Exception:  # noqa: BLE001 — a decision problem must never reach the caller
         logger.warning("voice_decision_failed", org_id=str(org_id), exc_info=True)
+        runtime_stats.record("voice", "error", (time.monotonic() - started) * 1000)
         return None
+
+
+async def _meter_decision(db: Any, org_id: UUID, conversation_id: UUID, plan: VoicePlan) -> None:
+    """Measured tokens the decision layer's own model call used (rules-settled turns used none)."""
+    from apps.api.core.usage import deterministic_event_id, record_usage
+
+    understanding = plan.understanding
+    try:
+        for kind, usage_type, tokens in (
+            ("in", "ai_input_tokens", understanding.tokens_in),
+            ("out", "ai_output_tokens", understanding.tokens_out),
+        ):
+            if tokens and tokens > 0:
+                await record_usage(
+                    db,
+                    organization_id=org_id,
+                    event_id=deterministic_event_id("voice_decision", kind, str(conversation_id), plan.plan_id),
+                    service="ai",
+                    usage_type=usage_type,
+                    quantity=tokens,
+                    unit="tokens",
+                    provider="openai",
+                    source="voice_decision",
+                    request_id=str(conversation_id),
+                    metadata={"basis": "measured"},
+                )
+        await db.commit()
+    except Exception:  # noqa: BLE001 - metering must never affect a call
+        logger.warning("voice_decision_metering_failed", exc_info=True)
+        await db.rollback()
 
 
 def build_instruction(plan: VoicePlan, *, action_result: dict[str, Any] | None) -> str:
@@ -370,6 +413,58 @@ def build_instruction(plan: VoicePlan, *, action_result: dict[str, Any] | None) 
         body = "The caller sounds interested. Offer a quick call or demo and ask when suits them."
     elif kind == "confused":
         body = "The caller is confused. Apologise briefly and ask what they would like to know."
+    elif kind == "identify_self":
+        body = (
+            "The caller asked who is calling. Say in one sentence that you are an AI assistant calling "
+            "for the business named in your instructions and why you called, using only what your "
+            "instructions say, then ask if now is a good time. Do not invent details."
+        )
+    elif kind == "repetition_apology":
+        body = (
+            "The caller feels you are repeating yourself. Apologise in a few words, do not repeat "
+            "anything already said or ask anything already answered, and continue from what you know."
+        )
+    elif kind == "reassure_no_pressure":
+        body = (
+            "The caller worries about being pressured. Reassure them there is no pressure and they "
+            "can decide in their own time, and invite any question. Do not ask for a meeting or a time."
+        )
+    elif kind == "hesitation_support":
+        body = (
+            "The caller is still deciding. Acknowledge that there is no hurry, and offer to share "
+            "information or answer a question. Do not ask for a meeting or a decision."
+        )
+    elif kind == "confirm_correction":
+        body = (
+            f"The caller corrected an earlier detail: before it was '{decision.args.get('old', '')}', now it is "
+            f"'{decision.args.get('new', '')}'. Apologise briefly for the mix-up, confirm the new detail back "
+            "in one short sentence and continue. Do not ask for it again."
+        )
+    elif kind == "clarify_conflict":
+        body = (
+            f"Earlier the caller said '{decision.args.get('old', '')}' and now '{decision.args.get('new', '')}'. "
+            "Ask politely which one is correct. Do not assume."
+        )
+    elif kind == "flexible_followup":
+        body = (
+            "That day or time does not work for the caller. Do not book or schedule it. Say that is fine "
+            "and ask which other day or time suits them."
+        )
+    elif kind == "soft_next_step":
+        body = (
+            "Do not push for a meeting. Offer to share more information or to talk when they are ready "
+            "and ask what they would like to know."
+        )
+    elif kind == "online_meeting_ok":
+        body = (
+            "The caller prefers an online meeting. Say that works, and do not fix any time unless they "
+            "give one."
+        )
+    elif kind == "honest_unknown_repeat":
+        body = (
+            "You have no approved answer to this and the team already has the question. Say so honestly "
+            "in one sentence, do not guess, and ask whether you can help with anything else."
+        )
     else:  # greeting and anything else
         body = "Greet the caller warmly and ask how you can help."
 
@@ -378,11 +473,13 @@ def build_instruction(plan: VoicePlan, *, action_result: dict[str, Any] | None) 
     # Continuity: what we already know about the caller, so the agent neither
     # asks for it again nor repeats itself.
     known = {**plan.memory, **{k: v for k, v in plan.understanding.facts.items() if k in MEMORY_KEYS}}
-    known = {k: v for k, v in known.items() if v}
+    known = {k: v for k, v in known.items() if v and k not in _INTERNAL_MEMORY_KEYS}
     if known:
         body += " Already known about the caller (do not ask for it again): " + "; ".join(
             f"{k}: {v}" for k, v in known.items()
         ) + "."
+    if decision.directives:
+        body += " " + " ".join(decision.directives)
     body += " Do not repeat information you have already given in this call."
     return f"DECISION FOR THIS TURN: {lead}{body}"
 
@@ -434,10 +531,21 @@ async def apply_voice_plan(
                 done_actions.add(key)
                 executed = True
         instruction = build_instruction(plan, action_result=action_result)
+        enhanced = plan.config is not None and plan.config.enhanced_dialogue
+        extra: dict[str, str] = {}
+        forget: list[str] = []
+        if enhanced:
+            extra, forget = dialogue.memory_updates(
+                plan.understanding, decision, dialogue.DialogueState.from_memory(plan.memory), plan.memory
+            )
         async with AsyncSessionLocal() as db:
             facts = {k: v for k, v in plan.understanding.facts.items() if k in MEMORY_KEYS}
+            facts.update(extra)
+            allowed = (*MEMORY_KEYS, *dialogue.ENHANCED_MEMORY_KEYS) if enhanced else MEMORY_KEYS
             try:
-                await save_facts(db, org_id, user_id, facts)
+                await save_facts(db, org_id, user_id, facts, allowed_keys=allowed)
+                if forget:
+                    await forget_facts(db, org_id, user_id, forget)
                 await db.commit()
             except Exception:  # noqa: BLE001 — memory is best effort
                 logger.warning("voice_memory_save_failed", exc_info=True)
@@ -459,6 +567,17 @@ async def apply_voice_plan(
                 reply=f"[voice instruction] {instruction}",
                 config=plan.config,
             )
+            if settings.voice_metering_v2:
+                await _meter_decision(db, org_id, conversation_id, plan)
+            if enhanced:
+                await record_disposition(
+                    db,
+                    org_id=org_id,
+                    user_id=user_id,
+                    understanding=plan.understanding,
+                    decision=decision,
+                    action_result=action_result,
+                )
         return VoiceReply(instruction=instruction, tool_choice_none=executed)
     except Exception:  # noqa: BLE001
         logger.warning("voice_decision_apply_failed", exc_info=True)

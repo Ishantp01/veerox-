@@ -25,12 +25,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from collections.abc import Callable
 from types import TracebackType
 from typing import Any, AsyncIterator
 
 import structlog
 import websockets
 
+from apps.api.channels.voice.tts_normalize import TTSNormalizer
+from apps.api.channels.voice.voice_profile import ResolvedVoice
 from apps.api.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -51,19 +55,53 @@ class ElevenLabsTTSSession:
         self,
         voice_id: str | None = None,
         model_id: str | None = None,
+        profile: ResolvedVoice | None = None,
     ) -> None:
-        self._voice_id = voice_id or settings.elevenlabs_voice_id
-        self._model_id = model_id or settings.elevenlabs_model_id
+        # ``profile`` is the call's org voice profile merged over the platform
+        # settings (voice_profile.resolve_profile). None = exactly the
+        # pre-profile behaviour: platform voice/model, stability 0.5 and
+        # similarity_boost 0.8, no text rewriting.
+        self._profile = profile
+        self._voice_id = voice_id or (profile.voice_id if profile else None) or settings.elevenlabs_voice_id
+        self._model_id = model_id or (profile.model_id if profile else None) or settings.elevenlabs_model_id
+        self._voice_settings: dict[str, Any] = (
+            dict(profile.voice_settings) if profile else {"stability": 0.5, "similarity_boost": 0.8}
+        )
+        # Spoken-form rewriting of the text sent to TTS (off unless the org's
+        # profile enables it); None means send text through untouched.
+        self._normalizer: TTSNormalizer | None = (
+            TTSNormalizer(
+                enabled=True, language=profile.language, pronunciations=profile.pronunciations
+            )
+            if profile is not None and profile.normalize
+            else None
+        )
         self._ws: Any = None
         self._audio_queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._reader_task: asyncio.Task[None] | None = None
+        # Milliseconds the WebSocket handshake took (None until connected);
+        # exposed for latency instrumentation only.
+        self.connect_ms: int | None = None
+        # Failure and usage facts the adapter reads (Phase 5). ``failed`` is set when the provider
+        # reports an error message or drops the socket before its final-audio marker; those arrive
+        # as data, not exceptions, so without this a broken turn is just silence.
+        self.failed = False
+        self.fail_reason: str | None = None
+        self.final_seen = False
+        self.audio_chunks_received = 0
+        self.chars_sent = 0
+        # Called once, with the characters sent, when the session closes.
+        self.on_close: Callable[[int], None] | None = None
+        self._closed_reported = False
 
     async def __aenter__(self) -> "ElevenLabsTTSSession":
         url = (
             _ELEVENLABS_WS_URL.format(voice_id=self._voice_id)
             + f"?model_id={self._model_id}&output_format=ulaw_8000"
         )
+        started = time.monotonic()
         self._ws = await websockets.connect(url)
+        self.connect_ms = round((time.monotonic() - started) * 1000)
         # Required first message on ElevenLabs' streaming-input endpoint —
         # a lone space primes the connection; the API key travels in the
         # body rather than a header since not every WS client can set
@@ -72,7 +110,7 @@ class ElevenLabsTTSSession:
             json.dumps(
                 {
                     "text": " ",
-                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.8},
+                    "voice_settings": self._voice_settings,
                     "xi_api_key": settings.elevenlabs_api_key,
                 }
             )
@@ -94,6 +132,12 @@ class ElevenLabsTTSSession:
                 pass
         if self._ws is not None:
             await self._ws.close()
+        if self.on_close is not None and not self._closed_reported:
+            self._closed_reported = True
+            try:
+                self.on_close(self.chars_sent)
+            except Exception:  # noqa: BLE001 - accounting must never affect the call
+                pass
 
     async def _read_audio(self) -> None:
         """Background task: forward each audio chunk ElevenLabs streams
@@ -111,14 +155,20 @@ class ElevenLabsTTSSession:
                         error=msg.get("error"),
                         message=msg.get("message"),
                     )
+                    self.failed = True
+                    self.fail_reason = str(msg.get("error") or msg.get("message"))[:200]
                     break
                 audio_b64 = msg.get("audio")
                 if audio_b64:
+                    self.audio_chunks_received += 1
                     await self._audio_queue.put(audio_b64)
                 if msg.get("isFinal"):
+                    self.final_seen = True
                     break
         except websockets.ConnectionClosed as exc:
             if exc.code != 1000:
+                self.failed = True
+                self.fail_reason = f"connection_closed:{exc.code}"
                 # 1000 = normal closure (we asked it to via `finish()`).
                 # Anything else means ElevenLabs rejected/dropped the
                 # connection — usually accompanies the error message above,
@@ -128,6 +178,8 @@ class ElevenLabsTTSSession:
                 )
         except Exception:  # noqa: BLE001
             logger.warning("elevenlabs_tts_reader_error", exc_info=True)
+            self.failed = True
+            self.fail_reason = "reader_error"
         finally:
             await self._audio_queue.put(None)
 
@@ -135,6 +187,11 @@ class ElevenLabsTTSSession:
         """Push one text chunk (e.g. one ``response.text.delta``) in."""
         if not text or self._ws is None:
             return
+        if self._normalizer is not None:
+            text = self._normalizer.feed(text)
+            if not text:
+                return  # buffered until a clause boundary
+        self.chars_sent += len(text)
         await self._ws.send(json.dumps({"text": text}))
 
     async def finish(self) -> None:
@@ -142,6 +199,11 @@ class ElevenLabsTTSSession:
         internal buffer so it generates audio for whatever's left."""
         if self._ws is None:
             return
+        if self._normalizer is not None:
+            tail = self._normalizer.flush()
+            if tail:
+                self.chars_sent += len(tail)
+                await self._ws.send(json.dumps({"text": tail}))
         await self._ws.send(json.dumps({"text": ""}))
 
     async def audio_chunks(self) -> AsyncIterator[str]:
