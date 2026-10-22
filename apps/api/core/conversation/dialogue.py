@@ -61,6 +61,9 @@ REPETITION = "repetition_complaint"
 END_CALL = "end_call"
 ASKS_IDENTITY = "asks_identity"
 DIRECT_QUESTION = "direct_question"
+DECLINES_MEETING = "declines_meeting"
+DATE_CORRECTION = "date_correction"
+ASKS_TIME = "asks_for_time"
 
 # Memory keys this module adds (kept out of MEMORY_KEYS so orgs that have not
 # opted in never store them; see memory.save_facts(allowed_keys=...)).
@@ -77,6 +80,9 @@ ENHANCED_MEMORY_KEYS = (
     "handoff_requested",
     "pressure_concern",
     "name_used",
+    "customer_city",
+    "meeting_declined",
+    "ack_last",
 )
 
 # Facts that, once given, are only replaced when the customer clearly corrects
@@ -86,7 +92,8 @@ _GUARDED_FACTS = ("property_info", "investment_budget")
 _PROTECTED_BASE_FACTS = ("name", "business_type", "team_size")
 
 _HEDGE_FLAGS = frozenset(
-    {HESITATION, PRESSURE, NO_COMMITMENT, UNAVAILABLE, DECLINES_TIME, CORRECTION, CONFLICT, REPETITION}
+    {HESITATION, PRESSURE, NO_COMMITMENT, UNAVAILABLE, DECLINES_TIME, CORRECTION, CONFLICT, REPETITION,
+     DECLINES_MEETING, ASKS_TIME}
 )
 
 # Reply kinds that push the customer toward a callback / appointment.
@@ -104,7 +111,7 @@ _ANSWERABLE_KINDS = frozenset(
 NEW_REPLY_KINDS = (
     "reassure_no_pressure", "hesitation_support", "confirm_correction", "clarify_conflict",
     "flexible_followup", "soft_next_step", "online_meeting_ok", "honest_unknown_repeat",
-    "repetition_apology", "identify_self",
+    "repetition_apology", "identify_self", "confirm_day_correction", "give_time",
 )
 # Kinds whose wording greets the customer by name.
 _NAMING_KINDS = frozenset(
@@ -139,6 +146,83 @@ _CORRECTION_STRONG_RE = re.compile(
     re.IGNORECASE,
 )
 _CORRECTION_WEAK_RE = re.compile(r"(\bactually\b|\brather\b|\bmatlab\b|असल में|दरअसल)", re.IGNORECASE)
+# Needing to talk it over with someone is hesitation, not a no.
+_CONSULT_RE = re.compile(
+    r"((family|ghar|parivar|wife|husband|partner|papa|mummy|bhai|dost|accountant|\bca\b)\b.{0,30}"
+    r"(discuss|baat|puch|consult|salah|sochna|sochenge)|"
+    r"(discuss|consult)\w*\b.{0,25}\b(family|ghar|parivar|wife|husband|partner)|"
+    r"घर.{0,20}(बात|चर्चा)|फैमिली.{0,20}(बात|डिस्कस))",
+    re.IGNORECASE | re.DOTALL,
+)
+# They do not want a meeting, or they are tired of being pushed toward one. "meeting nahi ho payegi" is a
+# time that does not work, not a refusal.
+_DECLINE_MEETING_RE = re.compile(
+    r"(\bmeeting\s+(?:nahi|nhi|nahin|mat)\b(?!\s+ho\s*(?:pa|sak))|\b(?:nahi|nhi|no)\s+meeting\b|"
+    r"\bmeeting\s+ki\s+(?:zaroorat|jarurat|zarurat)\s+(?:nahi|nhi)|"
+    r"\b(?:don'?t|do not)\s+(?:want|need)\s+(?:a\s+|any\s+)?(?:meeting|appointment)|"
+    r"\bno\s+need\s+(?:for|of)\s+(?:a\s+)?(?:meeting|appointment)|"
+    r"\b(?:meeting|appointment)\s+(?:karni|karna|karunga|karungi|chahiye)\s*(?:nahi|nhi)\b|"
+    r"मीटिंग\s+(?:नहीं|नही)|नहीं\s+चाहिए\s+मीटिंग)",
+    re.IGNORECASE,
+)
+_MEETING_PRESSURE_RE = re.compile(
+    r"((baar[- ]baar|bar[- ]bar|kitni baar|again and again|har baar|keep (?:asking|saying|pushing))"
+    r".{0,40}(meeting|appointment|milne|milna)|"
+    r"(meeting|appointment|milne|milna).{0,40}(baar[- ]baar|bar[- ]bar|kitni baar|again and again))",
+    re.IGNORECASE | re.DOTALL,
+)
+_DAYS = (
+    r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|somvar|mangalvar|budhvar|guruvar|"
+    r"shukravar|shanivar|ravivar|kal|parso|aaj|tomorrow|today)"
+)
+# "Nahi, Monday." / "I said Monday" / "not Tuesday, Monday": a correction of the day or time proposed.
+_DAY_CORRECTION_RE = re.compile(
+    rf"(^\W*(?:nahi|nhi|nahin|no|nope)\b[\s,.\-]*(?:\w+\s+){{0,2}}?{_DAYS}\b|"
+    rf"\b(?:i said|maine (?:bola|kaha|bataya)(?: tha)?)\W+{_DAYS}\b|"
+    rf"\bnot\s+{_DAYS}\W+(?:but\s+)?{_DAYS}\b)",
+    re.IGNORECASE,
+)
+# Hedged statements are a guess, not a fact to keep.
+_UNCERTAIN_RE = re.compile(
+    r"(shayad|\bmaybe\b|\bperhaps\b|i guess|\bguess\b|\bmight\b|pata nahi|not sure|andaz[ae]|ho sakta hai|"
+    r"शायद|पता नहीं)",
+    re.IGNORECASE,
+)
+# A city only from "I am from / main <City> se hoon / I live in <City>", never from a bare capitalised word.
+_CITY_WORD = r"(?-i:[A-Z][a-z]{2,19}(?:\s[A-Z][a-z]{2,19})?)"
+_CITY_RES = (
+    re.compile(
+        rf"\b(?:main|mai|mein)\s+(?P<c>{_CITY_WORD})\s+(?:se\s+(?:hoon|hun|hu)\b|(?:mein|me)\s+(?:rehta|rehti|rahta|rahti)\b)",
+        re.IGNORECASE,
+    ),
+    re.compile(rf"\b(?:i am|i'm|i live|i stay|based)\s+(?:from|in|at)\s+(?P<c>{_CITY_WORD})\b", re.IGNORECASE),
+    re.compile(rf"\b(?:mera|meri)\s+(?:shehar|sheher|city|town)\s+(?:hai\s+)?(?P<c>{_CITY_WORD})\b", re.IGNORECASE),
+)
+_NOT_PLACES = frozenset(
+    "office home ghar shop dukaan bank company india indian sir madam ji haan hello okay sure fine theek "
+    "thik accha achha baad abhi kal aaj phir thoda bahut india private limited pvt ltd store showroom".split()
+)
+# Words that follow "main" without being a name ("main baad mein call karunga" is not a person called Baad).
+_NOT_NAMES = frozenset(
+    "baad abhi kal aaj phir thoda bahut ek apne aapko aapse yahan wahan nahi nahin bilkul zaroor free busy "
+    "driving office home ghar shop dukaan bank company india indian sir madam ji haan hello okay ok sure "
+    "fine theek thik accha achha sahi bas kuch kabhi jab tab agar lekin magar kyunki isliye ab".split()
+)
+# A refusal of everything, as opposed to of a meeting.
+_GENERAL_NO_RE = re.compile(
+    r"(not interested|interested nahi|interest nahi|no interest|nahi lena|don'?t call|call mat|stop calling|"
+    r"no thanks|rehne do|band karo)",
+    re.IGNORECASE,
+)
+# "ek minute", "let me think", "ruko" at the END of a message: they asked for a moment, not for an answer.
+_ASKS_TIME_RE = re.compile(
+    r"(?:(?:ek|1)\s*(?:minute|min|second|sec|moment)|one\s+(?:minute|second|moment)|"
+    r"just\s+a\s+(?:minute|second|sec|moment)|hold\s+on|give\s+me\s+a\s+(?:minute|second|moment)|"
+    r"let\s+me\s+think|soch\s+(?:raha|rahi|rha|rhi)|sochne\s+do|ruko|ruk\s+jao|rukiye|"
+    r"एक\s+(?:मिनट|सेकंड)|रुको|रुकिए)"
+    r"[\s.,!…\-]*(?:ji|please|na|hai|hoon|ok|okay|sir|madam)?[\s.,!…\-]*$",
+    re.IGNORECASE,
+)
 _ONLINE_RE = re.compile(
     r"(\b(online|virtual|video|zoom|google meet|gmeet|teams|remote)\b.{0,30}"
     r"\b(meeting|meet|call|baat|discussion|demo|session|baithak|milna|karte|kar lo|kar lete|kar sakte|prefer)\b|"
@@ -266,6 +350,14 @@ _TOPIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "experience": re.compile(
         r"(experience|background|anubhav|qualification|degree|pharma)", re.IGNORECASE
     ),
+    # "How old is your company" is not a question about how long setting up takes.
+    "company": re.compile(
+        r"((company|firm|brand|organi[sz]ation|aapki|aapka|aap log)\b.{0,30}"
+        r"(kitne saal|kitni purani|kitna purana|purani|purana|established|founded|since when|history|"
+        r"kab (?:se|shuru|bani|start)|how old|how long (?:have|has)|years? (?:old|in business))|"
+        r"kab se (?:chal|kaam|business)|कंपनी.{0,20}(पुरानी|साल))",
+        re.IGNORECASE | re.DOTALL,
+    ),
 }
 # Questions on these must never be answered with a number the business has not approved.
 FIGURE_TOPICS = frozenset({"investment", "profit"})
@@ -309,12 +401,45 @@ class DialogueAnalysis:
     callback_facts: dict[str, str] = field(default_factory=dict)
 
 
+_BARE_AMOUNT_WORDS = frozenset(
+    "shayad maybe perhaps around approx about lagbhag hoga hogi hai tak ke aas paas ji haan nahi actually "
+    "rupaye rupees rs inr budget mera meri apna approximately lagana".split()
+)
+
+
+def _tokens_lower(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9ऀ-ॿ]+", text.lower())
+
+
 def _clauses(text: str) -> list[str]:
     return [c.strip() for c in _CLAUSE_SPLIT_RE.split(text) if c and c.strip()]
 
 
 def detect_topics(text: str) -> tuple[str, ...]:
-    return tuple(name for name, pattern in _TOPIC_PATTERNS.items() if pattern.search(text))
+    found = [name for name, pattern in _TOPIC_PATTERNS.items() if pattern.search(text)]
+    if "company" in found and "timeline" in found:
+        found.remove("timeline")  # "kitne saal" here is the company's age
+    return tuple(found)
+
+
+def _city_in(text: str) -> str | None:
+    for pattern in _CITY_RES:
+        match = pattern.search(text)
+        if match:
+            city = match.group("c").strip()
+            if not any(part.lower() in _NOT_PLACES for part in city.split()):
+                return city[:40]
+    return None
+
+
+def _drop_misread_name(understanding: Understanding | None) -> Understanding | None:
+    """The base rules read "main <word>" as a name: drop the ones that are plainly not names."""
+    if understanding is None:
+        return None
+    name = understanding.facts.get("name")
+    if name and name.strip().lower() in _NOT_NAMES:
+        return replace(understanding, facts={k: v for k, v in understanding.facts.items() if k != "name"})
+    return understanding
 
 
 def _norm(value: str) -> str:
@@ -341,8 +466,12 @@ def analyse(text: str, *, memory: dict[str, str], today: date) -> DialogueAnalys
     corrections: dict[str, str] = {}
     conflicts: dict[str, str] = {}
 
-    if _HESITATION_RE.search(text):
+    if _HESITATION_RE.search(text) or _CONSULT_RE.search(text):
         signals.add(HESITATION)
+    if _DECLINE_MEETING_RE.search(text) or _MEETING_PRESSURE_RE.search(text):
+        signals.add(DECLINES_MEETING)
+    if _ASKS_TIME_RE.search(text.strip()):
+        signals.add(ASKS_TIME)
     if _PRESSURE_RE.search(text):
         signals.add(PRESSURE)
     if _NO_COMMITMENT_RE.search(text):
@@ -365,6 +494,10 @@ def analyse(text: str, *, memory: dict[str, str], today: date) -> DialogueAnalys
     if asks and topics:
         signals.add(DIRECT_QUESTION)
         signals.update(f"topic:{t}" for t in topics)
+
+    city = _city_in(text)
+    if city:
+        facts["customer_city"] = city  # the latest statement wins: they may have moved or been misheard
 
     # --- facts the customer states -------------------------------------------------
     clauses = _clauses(text)
@@ -389,11 +522,37 @@ def analyse(text: str, *, memory: dict[str, str], today: date) -> DialogueAnalys
     # is a conflict and the verified old value stays until they confirm.
     strong = bool(_CORRECTION_STRONG_RE.search(text))
     weak = bool(_CORRECTION_WEAK_RE.search(text))
+    hedged = bool(_UNCERTAIN_RE.search(text))
+    if (strong or weak) and memory.get("investment_budget") and "investment_budget" not in candidates:
+        # "Nahi, actually 7 lakh": a correction carries its own context, so the amount alone is enough.
+        for clause in clauses:
+            amount = _BUDGET_RE.search(clause)
+            if amount:
+                candidates["investment_budget"] = amount.group(1).strip()[:_MAX_FACT_LEN]
+    if "investment_budget" not in candidates:
+        # A short reply that is only an amount ("Shayad 10 lakh.", "around 5 lakh") answers the budget question
+        # the agent just asked; it has no keyword of its own because the question was in the previous turn.
+        bare = _BUDGET_RE.search(text)
+        if bare and not (set(_tokens_lower(text)) - _BARE_AMOUNT_WORDS - set(_tokens_lower(bare.group(1)))):
+            candidates["investment_budget"] = bare.group(1).strip()[:_MAX_FACT_LEN]
+    pending_budget = memory.get("investment_budget_pending")
+    if pending_budget and "investment_budget" not in candidates:
+        # "Haan, 5 lakh hi hai": repeating the guess they gave earlier confirms it, context or not.
+        for clause in clauses:
+            amount = _BUDGET_RE.search(clause)
+            if amount and _norm(amount.group(1)) == _norm(pending_budget):
+                candidates["investment_budget"] = amount.group(1).strip()[:_MAX_FACT_LEN]
     for key, new in candidates.items():
         old = memory.get(key)
         pending = memory.get(f"{key}_pending")
+        if hedged and not (strong or weak) and not (old and _norm(old) == _norm(new)):
+            # "shayad 5 lakh": a guess is kept apart from what the customer has confirmed.
+            facts[f"{key}_pending"] = new
+            continue
         if not old or _norm(old) == _norm(new):
             facts[key] = new
+            if not old and (strong or weak) and pending and _norm(pending) != _norm(new):
+                corrections[key] = pending  # "Nahi, actually 7 lakh" to a guess of 10 lakh: the guess is dropped
         elif strong or weak or (pending and _norm(pending) == _norm(new)):
             facts[key] = new
             corrections[key] = old
@@ -402,6 +561,9 @@ def analyse(text: str, *, memory: dict[str, str], today: date) -> DialogueAnalys
             facts[f"{key}_pending"] = new
     if strong or corrections:
         signals.add(CORRECTION)
+    if _DAY_CORRECTION_RE.search(text):
+        signals.add(CORRECTION)
+        signals.add(DATE_CORRECTION)
     if conflicts:
         signals.add(CONFLICT)
 
@@ -449,13 +611,15 @@ def _synthesised_scenario(analysis: DialogueAnalysis) -> tuple[str, str] | None:
     sig = analysis.signals
     if END_CALL in sig:
         return "closing", "end_call"
+    if ASKS_TIME in sig:
+        return "objection", "asks_for_time"  # not a question for the team: no handoff, no model call
     if ASKS_IDENTITY in sig:
         return "confused", "asks_identity"
     if REPETITION in sig:
         return "confused", "repetition_complaint"
-    if PRESSURE in sig or NO_COMMITMENT in sig or HESITATION in sig:
+    if PRESSURE in sig or NO_COMMITMENT in sig or HESITATION in sig or DECLINES_MEETING in sig:
         return "objection", "undecided_or_pressure"
-    if analysis.corrections or analysis.conflicts:
+    if analysis.corrections or analysis.conflicts or DATE_CORRECTION in sig:
         return "discovery", "correction"
     if UNAVAILABLE in sig or DECLINES_TIME in sig:
         return "busy_callback", "unavailable"
@@ -489,6 +653,7 @@ def enhance_understanding(
 ) -> Understanding | None:
     """Attach signals and enhanced facts. ``None`` stays ``None`` (the model
     decides) unless the signals alone make the scenario unambiguous."""
+    understanding = _drop_misread_name(understanding)
     analysis = analyse(text, memory=memory, today=today)
     if not analysis.signals and not analysis.facts:
         return _protect_verified(understanding, memory, correcting=False)
@@ -513,6 +678,14 @@ def enhance_understanding(
         if "callback_date" in facts and "callback_time_hhmm" in facts:
             facts["callback_time"] = f"{facts['callback_date']} {facts['callback_time_hhmm']}"
     understanding = replace(understanding, facts=facts)
+    if (
+        understanding.scenario == "not_interested"
+        and DECLINES_MEETING in analysis.signals
+        and not _GENERAL_NO_RE.search(text)
+    ):
+        # "Mujhe meeting nahi chahiye" turns down the meeting, not the product: the lead must not be marked
+        # not interested, and the conversation carries on without the meeting.
+        understanding = replace(understanding, scenario="objection", intent="declines_meeting")
     understanding = _protect_verified(understanding, memory, correcting=CORRECTION in analysis.signals)
     facts = dict(understanding.facts)
     facts.update(analysis.facts)
@@ -539,6 +712,8 @@ class DialogueState:
     handoff_requested: bool = False
     undecided: bool = False
     name_used: bool = False
+    meeting_declined: bool = False
+    ack_last: bool = False
 
     @classmethod
     def from_memory(cls, memory: dict[str, str] | None) -> "DialogueState":
@@ -554,6 +729,8 @@ class DialogueState:
             handoff_requested=bool(memory.get("handoff_requested")),
             undecided=memory.get("interest_level") == "undecided" or bool(memory.get("pressure_concern")),
             name_used=bool(memory.get("name_used")),
+            meeting_declined=bool(memory.get("meeting_declined")),
+            ack_last=memory.get("ack_last") == "1",
         )
 
 
@@ -563,7 +740,7 @@ def appointment_ready(understanding: Understanding, state: DialogueState, memory
     unavailable, and have not already been asked once."""
     if understanding.signals & _HEDGE_FLAGS:
         return False
-    if state.appointment_asks >= 1 or state.undecided:
+    if state.appointment_asks >= 1 or state.undecided or state.meeting_declined:
         return False
     return (
         understanding.scenario in ("interested", "appointment_request")
@@ -614,6 +791,28 @@ _D_BACKGROUND = (
 )
 _D_SIMPLER = "Explain it differently and more simply, in one or two short sentences; do not repeat your earlier wording."
 _D_CLOSE = "Close naturally and warmly. Do not pitch or ask anything new."
+_D_MEETING_DECLINED = (
+    "They do not want a meeting, or feel pushed toward one: acknowledge that in a few words, say it is no "
+    "problem, and do not suggest a meeting, appointment or call again unless they bring it up. Carry on "
+    "helping with whatever they ask."
+)
+_D_DATE_CORRECTION = (
+    "They corrected the day or time you suggested. Say sorry once, in a few words, then use exactly the "
+    "day or time THEY said and confirm it back in one short sentence. Do not book or schedule anything "
+    "until they clearly agree to that confirmed slot."
+)
+_D_ACK_PREFIX = "Natural acknowledgement:"
+_D_ACK = (
+    f"{_D_ACK_PREFIX} at most ONE short opener (\"Ji.\", \"Achha.\", \"Samajh gaya/gayi\", \"Right.\", "
+    "\"Okay.\"), only if it fits; many replies need none. Never the same one twice in a row, never to fill a "
+    "pause, and add no \"umm\" or other filler."
+)
+_D_LENGTH = (
+    "Match the length to the question: a simple question gets one or two short sentences; a question about "
+    "how something works may use up to three short sentences (this replaces the usual one-or-two limit) and "
+    "then a check on whether they want the next part. Never talk for long without letting them reply."
+)
+_ECHO_LABELS = {"investment_budget": "budget", "customer_city": "city"}
 _D_STYLE = (
     "Keep it short and conversational, one clear question at most, and mix Hindi and English the way "
     "the caller does. Do not repeat explanations or acknowledgements you already gave, and use their "
@@ -659,7 +858,7 @@ def enhance_decision(
     # Two kinds of hedge: something that makes a booking premature (hesitation, a pressure
     # worry, a correction or conflict still to settle) and a day/time that does not work
     # (which only blocks scheduling when the customer gave no usable alternative).
-    blocking = bool(sig & {HESITATION, PRESSURE, NO_COMMITMENT, CORRECTION, CONFLICT, REPETITION})
+    blocking = bool(sig & {HESITATION, PRESSURE, NO_COMMITMENT, CORRECTION, CONFLICT, REPETITION, DECLINES_MEETING})
     # An "alternative" must be a different day from the one they said does not work.
     alternative = bool(
         facts.get("callback_date")
@@ -695,6 +894,7 @@ def enhance_decision(
     # 3. A direct question comes first, and is never answered with an invented figure.
     elif is_question and (kind in _ANSWERABLE_KINDS) and decision.action_id in ("none", "transfer_to_human"):
         directives.append(_D_ANSWER_FIRST)
+        directives.append(_D_LENGTH)
         if knowledge:
             result = Decision("none", {}, "answer", knowledge=list(knowledge), next_state=STATE_ENGAGED)
             if set(topics) <= state.answered_topics:
@@ -727,6 +927,12 @@ def enhance_decision(
             result = Decision(
                 "none", {"old": old, "new": facts.get(key, "")}, "confirm_correction", next_state=STATE_ENGAGED
             )
+        elif ASKS_TIME in sig and not (sig & {CORRECTION, CONFLICT, DECLINES_MEETING, PRESSURE, NO_COMMITMENT}):
+            result = Decision("none", {}, "give_time", next_state=STATE_ENGAGED)
+        elif DATE_CORRECTION in sig:
+            result = Decision("none", {}, "confirm_day_correction", next_state=STATE_ENGAGED)
+        elif DECLINES_MEETING in sig:
+            result = Decision("none", {}, "soft_next_step", next_state=STATE_ENGAGED)
         elif PRESSURE in sig or NO_COMMITMENT in sig:
             result = Decision("none", {}, "reassure_no_pressure", next_state=STATE_OBJECTION)
         elif HESITATION in sig:
@@ -780,6 +986,10 @@ def enhance_decision(
             "What they just said conflicts with an earlier detail: ask which one is right before "
             "continuing; do not assume."
         )
+    if DECLINES_MEETING in sig:
+        directives.append(_D_MEETING_DECLINED)
+    if DATE_CORRECTION in sig:
+        directives.append(_D_DATE_CORRECTION)
     if PRESSURE in sig or NO_COMMITMENT in sig:
         directives += [_D_REASSURE, _D_COMMITMENT]
     if HESITATION in sig:
@@ -791,12 +1001,64 @@ def enhance_decision(
     if "customer_background" in facts:
         directives.append(_D_BACKGROUND)
     pushes = result.reply_kind in PUSH_KINDS
-    if not pushes and (sig & _HEDGE_FLAGS or state.undecided or result.reply_kind == "soft_next_step"):
+    if not pushes and (
+        sig & _HEDGE_FLAGS or state.undecided or state.meeting_declined or result.reply_kind == "soft_next_step"
+    ):
         directives.append(_D_NO_PUSH)
+    if state.meeting_declined and DECLINES_MEETING not in sig:
+        directives.append(_D_MEETING_DECLINED)
+    if not state.ack_last and not (sig & {CORRECTION, CONFLICT}):
+        # Acknowledge, but not on every turn: the previous reply's use is remembered (ack_last).
+        directives.append(_D_ACK)
+        shared = [
+            f"{label} ({facts[key]})" for key, label in _ECHO_LABELS.items()
+            if facts.get(key) and key not in understanding.conflicts
+        ]
+        if shared:
+            directives.append(
+                "They just told you their " + " and ".join(shared) + ": echo it in two or three words (for example "
+                "\"Achha, " + str(facts.get("investment_budget") or facts.get("customer_city")) +
+                ".\") and carry on; never ask for it again."
+            )
     directives.append(_D_STYLE)
 
     deduped = tuple(dict.fromkeys(directives))
     return _with(result, directives=deduped, push=pushes)
+
+
+def tool_holds(understanding: Understanding, memory: dict[str, str]) -> dict[str, str]:
+    """Tools the model may NOT run on this turn, with the reason (``{}`` when nothing is held).
+
+    The prompt already tells the model not to book on a guess or against a refusal; this is the same rule in a
+    form the voice adapter can enforce when the model calls the tool anyway. Pure; only used for orgs on the
+    enhanced dialogue."""
+    sig, scenario = understanding.signals, understanding.scenario
+    holds: dict[str, str] = {}
+    declined_now = DECLINES_MEETING in sig
+    asked_for_booking = scenario == "appointment_request" and not (sig & {CORRECTION, CONFLICT, DECLINES_MEETING})
+    if declined_now or (memory.get("meeting_declined") and not asked_for_booking):
+        holds["book_appointment"] = "the caller has said they do not want a meeting"
+    elif sig & {CORRECTION, CONFLICT}:
+        holds["book_appointment"] = "the caller just corrected a detail: confirm the day and time with them first"
+    elif sig & {HESITATION, PRESSURE, NO_COMMITMENT, ASKS_TIME}:
+        holds["book_appointment"] = "the caller has not decided: do not book until they clearly agree"
+    if scenario != "not_interested" and (declined_now or memory.get("meeting_declined")):
+        holds["mark_not_interested"] = "they declined a meeting, not the offer: do not close the lead"
+    return holds
+
+
+def text_tool_holds(text: str, *, meeting_declined: bool, today: date) -> dict[str, str]:
+    """``tool_holds`` from the caller's words alone, for a turn whose decision plan did not arrive in time.
+
+    The plan is how the full rule layer reaches the voice adapter, but it can be late; without this the
+    guards would silently switch off exactly when the system is slow. Rules only (no model, no I/O), and the
+    adapter uses it only for an org it has already seen on the enhanced dialogue."""
+    analysis = analyse(text or "", memory={}, today=today)
+    understanding = Understanding(
+        scenario="unknown_question", intent="", emotion="neutral", language="en", confidence=0.0,
+        source="rules", signals=analysis.signals,
+    )
+    return tool_holds(understanding, {"meeting_declined": "1"} if meeting_declined else {})
 
 
 # --- memory and CRM outcome -----------------------------------------------------------------------------------------
@@ -821,6 +1083,9 @@ def memory_updates(
         if memory.get(f"{key}_pending"):
             forget.append(f"{key}_pending")
         updates.pop(f"{key}_pending", None)
+    for key in _GUARDED_FACTS:  # a confirmed value ends the guess it came from
+        if key in updates and memory.get(f"{key}_pending") and f"{key}_pending" not in forget:
+            forget.append(f"{key}_pending")
     if decision.reply_kind in PUSH_KINDS:
         updates["appointment_asks"] = str(state.appointment_asks + 1)
     topics = set(_topics_in(understanding))
@@ -830,6 +1095,9 @@ def memory_updates(
         updates["handoff_requested"] = "1"
     if PRESSURE in understanding.signals or NO_COMMITMENT in understanding.signals:
         updates["pressure_concern"] = "1"
+    if DECLINES_MEETING in understanding.signals:
+        updates["meeting_declined"] = "1"
+    updates["ack_last"] = "1" if any(d.startswith(_D_ACK_PREFIX) for d in decision.directives) else "0"
     if decision.reply_kind in _NAMING_KINDS and (memory.get("name") or understanding.facts.get("name")):
         updates["name_used"] = "1"
     return updates, forget

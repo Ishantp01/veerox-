@@ -382,6 +382,9 @@ def _cfg(**over: Any) -> SimpleNamespace:
         voice_tts_provider="elevenlabs", elevenlabs_api_key="k", public_base_url="https://app.test", openai_api_key="o",
         voice_interruption_mode="answer_now", voice_live_turn_detection=True, voice_usage_checkpoint_seconds=60,
         voice_tts_first_audio_timeout_seconds=6.0, voice_end_call_max_wait_seconds=8,
+        # Phase 9: a sane deployment authenticates its webhooks and bounds its calls.
+        environment="production", plivo_signature_mode="enforce", plivo_auth_token="t",
+        voice_max_active_streams=30, voice_max_call_seconds=1800, voice_hangup_on_stream_end=True,
     )
     base.update({name: False for name in config_check.BEHAVIOUR_FLAGS})
     base["log_privacy_enabled"] = True

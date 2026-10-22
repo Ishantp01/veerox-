@@ -20,6 +20,7 @@ channels/voice/twilio_client.py's module docstring.
 from __future__ import annotations
 
 import re
+import time
 from urllib.parse import parse_qs, urlencode
 from uuid import UUID
 
@@ -29,10 +30,13 @@ from fastapi.responses import Response
 
 from sqlalchemy import select
 
+from apps.api import pilot
 from apps.api.channels.voice import adapter as voice_adapter
 from apps.api.channels.voice import compliance
 from apps.api.channels.voice import plivo_client as voice_plivo
+from apps.api.channels.voice import signature
 from apps.api.channels.voice import twilio_client as voice_twilio
+from apps.api.channels.voice.latency import startup_mark
 from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.config import settings
 from apps.api.core.org_credentials import resolve_plivo_credentials, resolve_twilio_credentials
@@ -85,6 +89,8 @@ def _ws_stream_url(
         params["campaign_target_id"] = campaign_target_id
     if org_id:
         params["org_id"] = org_id
+    # Lets /voice/stream tell a stream our answer webhook sent from one anybody opened. Nothing is added when signatures are off.
+    params.update(signature.issue_stream_params(call_uuid, caller, org_id, campaign_target_id, provider))
     qs = urlencode(params)
     return f"{ws_base}/voice/stream?{qs}"
 
@@ -176,6 +182,20 @@ async def _resolve_org_by_last_contact(caller: str) -> str | None:
     return str(org_id) if org_id else None
 
 
+async def _org_plivo_tokens(request: Request) -> list[str]:
+    """The Plivo token of the org named on the URL (``org_id``), if that org has its own Plivo account."""
+    raw = request.query_params.get("org_id")
+    if not raw:
+        return []
+    try:
+        org_uuid = UUID(raw)
+    except ValueError:
+        return []
+    async with AsyncSessionLocal() as db:
+        creds = resolve_plivo_credentials(await db.get(Org, org_uuid))
+    return [creds.auth_token] if creds is not None else []
+
+
 async def _call_params(request: Request) -> dict[str, str]:
     """Read Plivo's call params from POST form-body or GET query string.
 
@@ -188,6 +208,53 @@ async def _call_params(request: Request) -> dict[str, str]:
     return dict(request.query_params)
 
 
+async def _after_answer(
+    *, call_uuid: str, org_id: str, caller: str, provider: str, is_outbound: bool, is_twilio: bool
+) -> None:
+    """Work that follows an answered call but must not delay the markup we return: the call-started usage event and the
+    org's recording decision (which starts provider-side recording only when its policy says to). The recording decision
+    comes first because it is time-sensitive; a slow usage write must not delay it. Never raises."""
+    try:
+        callback_url = f"{settings.public_base_url.rstrip('/')}/voice/recording-callback"
+        async with AsyncSessionLocal() as db:
+            org_record = await db.get(Org, UUID(org_id))
+        # The org's recording policy for this caller's region (NULL = the legacy behaviour: record
+        # every call). "consent" and "off" never start recording here; consent is asked on the call.
+        policy = compliance.resolve_recording_policy(
+            org_record.voice_compliance if org_record is not None else None, caller
+        )
+        if not policy.records_automatically:
+            logger.info("voice_recording_not_started", call_uuid=call_uuid, mode=policy.mode)
+        elif is_twilio:
+            twilio_creds = resolve_twilio_credentials(org_record)
+            if voice_twilio.is_configured(twilio_creds):
+                await voice_twilio.start_recording(twilio_creds, call_uuid, callback_url)
+        else:
+            plivo_creds = resolve_plivo_credentials(org_record)
+            if voice_plivo.is_configured(plivo_creds):
+                await voice_plivo.start_recording(plivo_creds, call_uuid, callback_url)
+    except Exception:  # noqa: BLE001 - a recording problem must never reach the call
+        logger.exception("recording_decision_failed", call_uuid=call_uuid)
+    try:
+        async with AsyncSessionLocal() as usage_db:
+            await record_usage(
+                usage_db,
+                organization_id=UUID(org_id),
+                event_id=deterministic_event_id("voice_call_started", call_uuid),
+                service="voice",
+                usage_type="ai_request_count",
+                quantity=1,
+                unit="calls",
+                provider=provider,
+                source="voice_webhook",
+                request_id=call_uuid,
+                metadata={"direction": "outbound" if is_outbound else "inbound"},
+            )
+            await usage_db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("usage_metering_failed", call_uuid=call_uuid)
+
+
 @router.api_route("/answer", methods=["GET", "POST"])
 async def answer(request: Request, background: BackgroundTasks) -> Response:
     """Return the markup executed when a call is answered — Plivo XML or
@@ -198,9 +265,15 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
     enough to branch on without needing the provider explicit anywhere else
     in the request.
     """
+    received_at = time.monotonic()
+    rejected = await signature.guard(request, "answer", lambda: _org_plivo_tokens(request))
+    if rejected is not None:
+        return rejected
     params = await _call_params(request)
     is_twilio = "CallSid" in params and "CallUUID" not in params
     call_uuid = params.get("CallUUID") or params.get("call_uuid") or params.get("CallSid") or ""
+    startup_mark(call_uuid, "answer_received", at=received_at)
+    startup_mark(call_uuid, "ticket_checked")
     # Set by the campaign dialer on the answer_url it gives the provider (the
     # provider's own POST body never carries it) — always present in the URL
     # query string regardless of request method.
@@ -222,6 +295,16 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
         caller = params.get("To") or params.get("to") or "unknown"
     else:
         caller = params.get("From") or params.get("from") or "unknown"
+    try:
+        # Pilot mode only: the other party must be an allowlisted test phone, inbound or outbound, so a stranger
+        # who dials the shared number is hung up on before anything is connected or recorded. No-op elsewhere.
+        pilot.check_number_allowed(caller, what="call")
+    except pilot.PilotBlocked:
+        logger.warning("pilot_call_rejected", call_uuid=call_uuid)
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
+            media_type="application/xml",
+        )
     if not org_id and not campaign_target_id:
         # A real inbound call — nothing in the URL says which org, so look up
         # the dialed number's owner instead.
@@ -236,27 +319,10 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
 
     provider = "twilio" if is_twilio else "plivo"
 
-    # Usage metering (req §6): call started, keyed to the provider's own
-    # call id so a redelivered answer webhook never double-counts.
-    if call_uuid and org_id:
-        try:
-            async with AsyncSessionLocal() as usage_db:
-                await record_usage(
-                    usage_db,
-                    organization_id=UUID(org_id),
-                    event_id=deterministic_event_id("voice_call_started", call_uuid),
-                    service="voice",
-                    usage_type="ai_request_count",
-                    quantity=1,
-                    unit="calls",
-                    provider=provider,
-                    source="voice_webhook",
-                    request_id=call_uuid,
-                    metadata={"direction": "outbound" if is_outbound else "inbound"},
-                )
-                await usage_db.commit()
-        except Exception:  # noqa: BLE001
-            logger.exception("usage_metering_failed", call_uuid=call_uuid)
+    # Usage metering (req §6) and the recording decision need the database, which on a slow link costs more than the
+    # whole rest of this handler. Neither changes the answer we return, so both run after the response has been sent
+    # (see ``_after_answer``): the caller is not kept waiting for a bookkeeping write.
+    provider = "twilio" if is_twilio else "plivo"
 
     # Start connecting to OpenAI right now, well before Plivo/Twilio even
     # opens the media stream — see realtime_bridge.py's
@@ -320,30 +386,12 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
         )
         logger.info("plivo_answer_served", caller=caller, call_uuid=call_uuid)
 
-    # Start recording via the provider's Call API — independent of the
-    # stream markup above, so it doesn't interfere with the realtime audio
-    # bridge. Deferred to a background task so a slow/failed provider
-    # request never delays the answer response it's waiting on.
     if call_uuid and org_id:
-        callback_url = f"{settings.public_base_url.rstrip('/')}/voice/recording-callback"
-        async with AsyncSessionLocal() as db:
-            org_record = await db.get(Org, UUID(org_id))
-        # The org's recording policy for this caller's region (NULL = the legacy behaviour: record
-        # every call). "consent" and "off" never start recording here; consent is asked on the call.
-        policy = compliance.resolve_recording_policy(
-            org_record.voice_compliance if org_record is not None else None, caller
+        background.add_task(
+            _after_answer, call_uuid=call_uuid, org_id=org_id, caller=caller, provider=provider,
+            is_outbound=is_outbound, is_twilio=is_twilio,
         )
-        if not policy.records_automatically:
-            logger.info("voice_recording_not_started", call_uuid=call_uuid, mode=policy.mode)
-        elif is_twilio:
-            twilio_creds = resolve_twilio_credentials(org_record)
-            if voice_twilio.is_configured(twilio_creds):
-                background.add_task(voice_twilio.start_recording, twilio_creds, call_uuid, callback_url)
-        else:
-            plivo_creds = resolve_plivo_credentials(org_record)
-            if voice_plivo.is_configured(plivo_creds):
-                background.add_task(voice_plivo.start_recording, plivo_creds, call_uuid, callback_url)
-
+    startup_mark(call_uuid, "answer_served")
     return Response(content=xml, media_type="application/xml")
 
 
@@ -355,6 +403,9 @@ async def campaign_hangup(request: Request) -> Response:
     failed/dropped calls where ``qualify_lead`` never fires, rather than
     waiting on the dialer's stale-call timeout.
     """
+    rejected = await signature.guard(request, "campaign_hangup", lambda: _org_plivo_tokens(request))
+    if rejected is not None:
+        return rejected
     params = await _call_params(request)
     campaign_target_id = request.query_params.get("campaign_target_id")
     call_status = params.get("CallStatus") or params.get("call_status")
@@ -367,7 +418,7 @@ async def campaign_hangup(request: Request) -> Response:
             call_status=call_status,
         )
     else:
-        logger.warning("plivo_campaign_hangup_missing_target_id", params=params)
+        logger.warning("plivo_campaign_hangup_missing_target_id", received_field_count=len(params))
 
     return Response(status_code=204)
 
@@ -382,6 +433,9 @@ async def recording_callback(request: Request) -> Response:
     Duration units differ: Plivo's ``RecordingDurationMs`` is milliseconds,
     Twilio's ``RecordingDuration`` is whole seconds.
     """
+    rejected = await signature.guard(request, "recording_callback", lambda: _org_plivo_tokens(request))
+    if rejected is not None:
+        return rejected
     params = await _call_params(request)
     call_uuid = (
         params.get("CallUUID")
@@ -414,6 +468,6 @@ async def recording_callback(request: Request) -> Response:
             duration_secs=duration_secs,
         )
     else:
-        logger.warning("plivo_recording_callback_missing_fields", params=params)
+        logger.warning("plivo_recording_callback_missing_fields", received_field_count=len(params))
 
     return Response(status_code=204)

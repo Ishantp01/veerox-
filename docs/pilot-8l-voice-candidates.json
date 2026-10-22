@@ -1,0 +1,50 @@
+[
+  {
+    "name": "A0 baseline (flash v2.5, stability 0.5, similarity 0.8)",
+    "provider": "elevenlabs",
+    "profile": {}
+  },
+  {
+    "name": "A1 turbo v2.5 (usually better quality, a little slower)",
+    "provider": "elevenlabs",
+    "profile": {
+      "model_id": "eleven_turbo_v2_5"
+    }
+  },
+  {
+    "name": "A2 flash, more expressive (stability 0.35)",
+    "provider": "elevenlabs",
+    "profile": {
+      "stability": 0.35,
+      "similarity_boost": 0.75
+    }
+  },
+  {
+    "name": "A3 flash, slightly slower (speed 0.95)",
+    "provider": "elevenlabs",
+    "profile": {
+      "speed": 0.95
+    }
+  },
+  {
+    "name": "A4 flash, numbers/times spoken out (normalize_speech)",
+    "provider": "elevenlabs",
+    "profile": {
+      "normalize_speech": true
+    }
+  },
+  {
+    "name": "A5 flash, another Hindi sales voice (Reyaansh)",
+    "provider": "elevenlabs",
+    "profile": {
+      "voice_id": "cRtvZrGFUW6HAyaDM8xe"
+    }
+  },
+  {
+    "name": "A6 multilingual v2 (quality reference; slower, not a live default)",
+    "provider": "elevenlabs",
+    "profile": {
+      "model_id": "eleven_multilingual_v2"
+    }
+  }
+]

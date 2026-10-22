@@ -2,11 +2,24 @@ from __future__ import annotations
 
 import logging
 import sys
+from pathlib import Path
+from traceback import walk_tb
+from typing import Any
 
 import structlog
 
 from apps.api.config import settings
 from apps.api.core.privacy import privacy_processor
+
+
+def _safe_exception(exc_info: Any) -> str:
+    """Keep error class and stack locations, never SDK payloads or locals."""
+    error_type, _value, tb = exc_info
+    frames = [
+        f"{Path(frame.f_code.co_filename).name}:{lineno} in {frame.f_code.co_name}"
+        for frame, lineno in walk_tb(tb)
+    ]
+    return f"{error_type.__name__}: " + " -> ".join(frames[-20:])
 
 
 def setup_logging() -> None:
@@ -19,7 +32,7 @@ def setup_logging() -> None:
         privacy_processor,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
+        structlog.processors.ExceptionRenderer(exception_formatter=_safe_exception),
     ]
 
     try:
@@ -45,6 +58,7 @@ def setup_logging() -> None:
         foreign_pre_chain=shared_processors,
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            privacy_processor,  # includes formatted exception text and foreign log messages
             json_renderer,
         ],
     )
@@ -55,3 +69,11 @@ def setup_logging() -> None:
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(log_level)
+
+    # Uvicorn's own handlers otherwise bypass our formatter (including WS URLs).
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        server_log = logging.getLogger(name)
+        server_log.handlers = []
+        server_log.propagate = True
+    if settings.environment.strip().lower() == "pilot":
+        logging.getLogger("uvicorn.access").disabled = True

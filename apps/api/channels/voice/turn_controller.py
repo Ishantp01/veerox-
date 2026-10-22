@@ -24,6 +24,7 @@ duration-based rules. Nothing in this module may break a call.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import re
 import time
@@ -103,13 +104,21 @@ def _tokens(text: str) -> list[str]:
     return [w for w in (t.strip(_STRIP) for t in text.lower().split()) if w]
 
 
+# Hums and breaths the transcriber spells with a variable number of letters ("hmmmm", "uhhh", "aaah").
+_HUM_RE = re.compile(r"^(?:h?m{2,}|u+h*m+|u+h+|a+h+|o+h+|e+h+)$")
+
+
+def _is_backchannel_word(word: str) -> bool:
+    return word in BACKCHANNEL_WORDS or bool(_HUM_RE.match(word))
+
+
 def is_backchannel(text: str, max_words: int = 4) -> bool:
     """True for empty/noise transcripts and short filler acknowledgments
     ("ok", "theek hai", "accha", "haan ji") — not real questions."""
     words = _tokens(text)
     if not words:
         return True
-    return len(words) <= max_words and all(w in BACKCHANNEL_WORDS for w in words)
+    return len(words) <= max_words and all(_is_backchannel_word(w) for w in words)
 
 
 def is_noise(text: str) -> bool:
@@ -144,7 +153,7 @@ def classify_partial(text: str, smart: bool = False) -> Verdict:
         return "unsure"
     if smart and any(w in CORRECTION_CUES for w in words):
         return "real"  # "galat", "sorry, I meant...": stop and listen
-    non_filler = [w for w in words if w not in BACKCHANNEL_WORDS]
+    non_filler = [w for w in words if not _is_backchannel_word(w)]
     if not non_filler:
         return "filler" if len(words) <= _MAX_FILLER_WORDS else "real"
     if any(w in QUESTION_CUES for w in words):
@@ -177,29 +186,87 @@ HOLD_CONTINUATION_SECONDS = 1.0
 HOLD_LONE_FILLER_SECONDS = 0.6
 
 
-def endpoint_hold_seconds(text: str, agent_was_busy: bool) -> float:
-    """How much longer to wait before answering, given the text streamed so far
-    for the caller's turn — 0 when the turn looks finished.
+# VOICE_SMART_TURN_TAKING only. A caller who says they need a moment is not done: wait longer than for an
+# ordinary mid-sentence pause. Only counts when it is how the utterance ENDS, so "ek minute... paanch lakh"
+# stops being a thinking pause as soon as the number arrives.
+HOLD_THINKING_SECONDS = 4.0
+_THINKING_RE = re.compile(
+    r"(?:\b(?:ek|1)\s*(?:minute|min|second|sec|moment|baar)|\bone\s+(?:minute|second|moment)|"
+    r"\bjust\s+a\s+(?:minute|second|sec|moment)|\bhold\s+on|\bgive\s+me\s+a\s+(?:minute|second|moment)|"
+    r"\blet\s+me\s+think|\bsoch\s+(?:raha|rahi|rha|rhi)\b|\bsochne\s+do|\bsochta\s+hoon|\bsochti\s+hoon|"
+    r"\bruko\b|\bruk\s+jao\b|\brukiye\b|\bdekhta\s+hoon|\bdekhti\s+hoon|\bwait\b|"
+    r"एक\s+(?:मिनट|सेकंड|सेकण्ड)|रुको|रुकिए|सोच\s+(?:रहा|रही))"
+    r"[\s.,!…\-]*(?:ji|please|na|hai|hoon|toh|ok|okay|sir|madam)?[\s.,!…\-]*$",
+    re.IGNORECASE,
+)
+# Words a sentence cannot end on: it names the thing but not what is being said about it.
+OPEN_ENDERS = frozenset(
+    {
+        "ke", "ka", "ko", "se", "mein", "me", "par", "pe", "liye", "baare", "bare", "about", "for", "with", "in",
+        "on", "at", "around", "roughly", "approximately", "shayad", "maybe", "perhaps", "kaafi", "bahut", "thoda",
+        "को", "के", "का", "से", "में", "पर", "लिए", "बारे", "शायद",
+    }
+)
+_POSSESSIVES = frozenset({"mera", "meri", "mere", "my", "our", "hamara", "hamari", "mujhe", "i", "main", "मेरा", "मेरी", "मेरे"})
+_CONDITIONAL = frozenset({"agar", "if", "jab", "when", "अगर", "जब"})
+_THEN = frozenset({"toh", "to", "then", "तो"})
 
-    Turn end is otherwise decided by a fixed 0.4s silence, which cuts off a
-    caller who pauses mid-sentence ("haan… mera matlab…"). Streamed text lags
-    the audio by up to ~1s, so this looks at a *prefix*: callers re-check it as
-    more text arrives and release the hold as soon as it stops looking
-    unfinished (see adapter.handle_live_delta).
+
+def thinking_cue(text: str) -> bool:
+    """The caller ended on "ek minute" / "let me think" / "ruko": they asked for time, not an answer."""
+    return bool(_THINKING_RE.search(text.strip()))
+
+
+def _unfinished(words: list[str]) -> bool:
+    """Heuristics for a sentence that has begun but not said anything yet (smart mode only)."""
+    if words[-1] in OPEN_ENDERS:
+        return True
+    if len(words) <= 3 and words[0] in _POSSESSIVES:
+        return True  # "mera budget" - what about it?
+    if any(w in _CONDITIONAL for w in words) and not any(w in _THEN for w in words[-3:]) and len(words) <= 12:
+        # "agar main investment karun" - the "then" part is still to come. A question mark or a
+        # question cue means they asked something complete.
+        return not any(w in QUESTION_CUES for w in words)
+    return False
+
+
+def hold_decision(text: str, agent_was_busy: bool, smart: bool = False) -> tuple[float, str | None]:
+    """How long to wait before answering, and why: ``(seconds, reason)``; ``(0.0, None)`` when the turn looks
+    finished. Reasons: ``thinking_request``, ``lone_filler``, ``trailing_punctuation``, ``continuation_word``,
+    ``unfinished_phrase``. All timings are the ``HOLD_*`` constants above - the one place to tune them.
+
+    Turn end is otherwise decided by a fixed 0.3s silence, which cuts off a caller who pauses mid-sentence
+    ("haan… mera matlab…"). Streamed text lags the audio by up to ~1s, so this looks at a *prefix*: callers
+    re-check it as more text arrives and release the hold as soon as it stops looking unfinished (see
+    adapter.handle_live_delta).
+
+    ``smart`` (VOICE_SMART_TURN_TAKING) adds waiting longer after "ek minute"-style requests for time, and
+    holding for sentences that stop on a postposition, a bare possessive or an open "agar ..." clause.
     """
     stripped = text.strip()
     words = _tokens(stripped)
     if not words:
-        return 0.0  # no text yet — don't guess, answer normally
-    lone_filler = len(words) <= 2 and all(w in BACKCHANNEL_WORDS for w in words)
+        return 0.0, None  # no text yet — don't guess, answer normally
+    if smart and thinking_cue(stripped):
+        return HOLD_THINKING_SECONDS, "thinking_request"
+    lone_filler = len(words) <= 2 and all(_is_backchannel_word(w) for w in words)
     if lone_filler and not agent_was_busy:
         # A bare "haan"/"ok" to an idle agent is very often followed by more.
-        return HOLD_LONE_FILLER_SECONDS
+        return HOLD_LONE_FILLER_SECONDS, "lone_filler"
     if stripped.endswith(_TERMINAL) and not stripped.endswith("..."):
-        return 0.0
-    if stripped.endswith(("…", "...", ",")) or words[-1] in CONTINUATION_WORDS:
-        return HOLD_CONTINUATION_SECONDS
-    return 0.0
+        return 0.0, None
+    if stripped.endswith(("…", "...", ",")):
+        return HOLD_CONTINUATION_SECONDS, "trailing_punctuation"
+    if words[-1] in CONTINUATION_WORDS:
+        return HOLD_CONTINUATION_SECONDS, "continuation_word"
+    if smart and _unfinished(words):
+        return HOLD_CONTINUATION_SECONDS, "unfinished_phrase"
+    return 0.0, None
+
+
+def endpoint_hold_seconds(text: str, agent_was_busy: bool, smart: bool = False) -> float:
+    """Seconds to keep waiting for the caller to continue; see ``hold_decision``."""
+    return hold_decision(text, agent_was_busy, smart)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +286,84 @@ TURN_LABELS = (
 )
 # Below this the judgement is ignored and the agent keeps listening.
 LLM_MIN_CONFIDENCE = 0.6
+
+
+CUT_REASONS = frozenset({"duration", "live_fallback", "live_real"} | {f"live_llm_{label.lower()}" for label in TURN_LABELS})
+JUDGE_LABELS = frozenset(label.lower() for label in TURN_LABELS)
+
+
+@dataclass
+class LiveTurnStats:
+    """Per-call counters for the live turn-detection path. Numbers only: no transcript text, no phone numbers.
+
+    ``extra_provider_requests`` is what this feature adds on top of the call itself: the one warm-up and every judging
+    request (chat completions), plus the transcription connection, which also streams the caller's audio all call long."""
+
+    transcriber: str = "not_attempted"  # not_attempted | started | failed
+    warmup_requests: int = 0
+    warmup_failures: int = 0
+    judge_requests: int = 0
+    judge_timeouts: int = 0
+    judge_errors: int = 0
+    judge_unparsable: int = 0
+    judge_late: int = 0  # answered, but after the window in which it could still change anything
+    judge_labels: dict[str, int] = field(default_factory=dict)
+    cuts: dict[str, int] = field(default_factory=dict)  # interruption decisions that stopped the agent, by reason
+    filler_ignored: int = 0  # interruptions judged to be filler: the agent kept talking
+    fallback_filler_kept: int = 0  # the safety-net timer fired but the words so far were filler
+
+    def count(self, bucket: dict[str, int], key: str, allowed: frozenset[str]) -> None:
+        """Count ``key`` only if it is one of the fixed ``allowed`` names; anything else is counted as "other", so no
+        free text (a number, a key, a word the caller said) can ever become a log key."""
+        safe = key if key in allowed else "other"
+        bucket[safe] = bucket.get(safe, 0) + 1
+
+    def count_cut(self, reason: str) -> None:
+        self.count(self.cuts, reason, CUT_REASONS)
+
+    def count_label(self, label: str) -> None:
+        self.count(self.judge_labels, (label or "").lower(), JUDGE_LABELS)
+
+    @property
+    def extra_provider_requests(self) -> int:
+        return self.warmup_requests + self.judge_requests + (1 if self.transcriber == "started" else 0)
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "transcriber": self.transcriber,
+            "extra_provider_requests": self.extra_provider_requests,
+            "warmup_requests": self.warmup_requests,
+            "warmup_failures": self.warmup_failures,
+            "judge_requests": self.judge_requests,
+            "judge_timeouts": self.judge_timeouts,
+            "judge_errors": self.judge_errors,
+            "judge_unparsable": self.judge_unparsable,
+            "judge_late": self.judge_late,
+            "judge_labels": dict(self.judge_labels),
+            "cuts": dict(self.cuts),
+            "cuts_total": sum(self.cuts.values()),
+            "filler_ignored": self.filler_ignored,
+            "fallback_filler_kept": self.fallback_filler_kept,
+        }
+
+
+SUMMARY_KEYS = frozenset(
+    {"transcriber", "extra_provider_requests", "warmup_requests", "warmup_failures", "judge_requests", "judge_timeouts", "judge_errors",
+     "judge_unparsable", "judge_late", "judge_labels", "cuts", "cuts_total", "filler_ignored", "fallback_filler_kept",
+     "judge_tokens_in", "judge_tokens_out"}
+)
+
+
+def summary_fields(stats: LiveTurnStats, judge_tokens_in: int, judge_tokens_out: int) -> dict[str, Any]:
+    """The fields of the one end-of-call log line: counts and fixed labels only, from a closed set of keys."""
+    fields = stats.snapshot()
+    fields["judge_tokens_in"], fields["judge_tokens_out"] = int(judge_tokens_in or 0), int(judge_tokens_out or 0)
+    return {k: v for k, v in fields.items() if k in SUMMARY_KEYS}
+
+
+# The call whose judging request is in flight in this task, so ``judge_turn`` can count it without a new parameter
+# (callers and test doubles keep the original signature).
+ACTIVE_STATS: contextvars.ContextVar[LiveTurnStats | None] = contextvars.ContextVar("live_turn_stats", default=None)
 
 
 @dataclass(frozen=True)
@@ -282,11 +427,19 @@ def parse_judgement(content: str | None) -> TurnJudgement | None:
     return TurnJudgement(label=label, confidence=max(0.0, min(1.0, confidence)))
 
 
-async def judge_turn(text: str, api_key: str | None, timeout: float = 0.8) -> TurnJudgement | None:
+async def judge_turn(
+    text: str, api_key: str | None, timeout: float = 0.8, *, stats: LiveTurnStats | None = None, warmup: bool = False
+) -> TurnJudgement | None:
     """Ask a small, fast model to label ``text`` (any language) with a
     confidence, or None if it couldn't answer in time."""
     from apps.api.core.llm import chat_completion  # local: keeps import cost off startup
 
+    stats = stats or ACTIVE_STATS.get()
+    if stats is not None:
+        if warmup:
+            stats.warmup_requests += 1
+        else:
+            stats.judge_requests += 1
     try:
         result = await asyncio.wait_for(
             chat_completion(
@@ -301,19 +454,28 @@ async def judge_turn(text: str, api_key: str | None, timeout: float = 0.8) -> Tu
             timeout=timeout,
         )
     except Exception as exc:  # noqa: BLE001 — never let a classifier failure touch the call
-        logger.warning("voice_live_llm_check_failed", error=str(exc))
+        logger.warning("voice_live_llm_check_failed", error_type=type(exc).__name__)
+        if stats is not None:
+            if warmup:
+                stats.warmup_failures += 1
+            elif isinstance(exc, asyncio.TimeoutError):
+                stats.judge_timeouts += 1
+            else:
+                stats.judge_errors += 1
         return None
     judged = parse_judgement(result.content)
     if judged is None:
+        if stats is not None and not warmup:
+            stats.judge_unparsable += 1
         return None
     return replace(judged, tokens_in=int(result.tokens_in or 0), tokens_out=int(result.tokens_out or 0))
 
 
-async def warm_up(api_key: str | None) -> None:
+async def warm_up(api_key: str | None, stats: LiveTurnStats | None = None) -> None:
     """Make one throwaway classification at call start so the first real check
     doesn't pay the cold-connection cost (~2s), which would blow its timeout."""
     try:
-        await judge_turn("ok", api_key, timeout=8.0)
+        await judge_turn("ok", api_key, timeout=8.0, stats=stats, warmup=True)
     except Exception:  # noqa: BLE001 — purely an optimisation
         pass
 
@@ -393,11 +555,11 @@ class LiveTranscriber:
                 if event.get("type") == "session.updated":
                     break
                 if event.get("type") == "error":
-                    self._log.warning("voice_live_transcriber_rejected", error=event.get("error"))
+                    self._log.warning("voice_live_transcriber_rejected", provider_error=True)
                     await self.close()
                     return False
         except Exception as exc:  # noqa: BLE001
-            self._log.warning("voice_live_transcriber_start_failed", error=str(exc))
+            self._log.warning("voice_live_transcriber_start_failed", error_type=type(exc).__name__)
             await self.close()
             return False
 
@@ -426,7 +588,7 @@ class LiveTranscriber:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            self._log.warning("voice_live_transcriber_send_failed", error=str(exc))
+            self._log.warning("voice_live_transcriber_send_failed", error_type=type(exc).__name__)
             self.healthy = False
 
     async def _read_loop(self) -> None:
@@ -440,13 +602,13 @@ class LiveTranscriber:
                         try:
                             await self._on_delta(delta)
                         except Exception as exc:  # noqa: BLE001
-                            self._log.warning("voice_live_delta_handler_failed", error=str(exc))
+                            self._log.warning("voice_live_delta_handler_failed", error_type=type(exc).__name__)
                 elif etype == "error":
-                    self._log.warning("voice_live_transcriber_error", error=event.get("error"))
+                    self._log.warning("voice_live_transcriber_error", provider_error=True)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            self._log.info("voice_live_transcriber_closed", error=str(exc))
+            self._log.info("voice_live_transcriber_closed", error_type=type(exc).__name__)
         finally:
             self.healthy = False
 

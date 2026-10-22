@@ -25,6 +25,7 @@ from typing import Any
 import httpx
 import structlog
 
+from apps.api.config import settings
 from apps.api.core.org_credentials import TwilioCredentials
 
 logger = structlog.get_logger(__name__)
@@ -75,6 +76,12 @@ async def initiate_call(
         # Twilio fires the callback once per event listed here; these four
         # cover the same "call is over" cases Plivo's hangup_url reports.
         data["StatusCallbackEvent"] = "completed"
+    # Twilio's ``TimeLimit`` / ``Timeout`` (seconds). UNVERIFIED against a live Twilio account, like the rest of this
+    # module; only sent when configured.
+    if settings.voice_outbound_time_limit_seconds > 0:
+        data["TimeLimit"] = str(int(settings.voice_outbound_time_limit_seconds))
+    if settings.voice_outbound_ring_timeout_seconds > 0:
+        data["Timeout"] = str(int(settings.voice_outbound_ring_timeout_seconds))
     try:
         r = await _http.post(url, data=data, auth=_auth(creds))
         r.raise_for_status()
@@ -82,9 +89,8 @@ async def initiate_call(
         logger.warning(
             "twilio_initiate_call_failed",
             to=to_e164,
-            error=str(exc),
+            error_type=type(exc).__name__,
             status=getattr(getattr(exc, "response", None), "status_code", None),
-            body=getattr(getattr(exc, "response", None), "text", None),
         )
         raise
 
@@ -107,7 +113,7 @@ async def owns_number(creds: TwilioCredentials, e164: str) -> bool:
         r.raise_for_status()
         return bool(r.json().get("incoming_phone_numbers"))
     except httpx.HTTPError as exc:
-        logger.warning("twilio_owns_number_check_failed", number=e164, error=str(exc))
+        logger.warning("twilio_owns_number_check_failed", number=e164, error_type=type(exc).__name__)
         return False
 
 
@@ -134,7 +140,7 @@ async def start_recording(creds: TwilioCredentials, call_sid: str, callback_url:
         r.raise_for_status()
         logger.info("twilio_recording_started", call_sid=call_sid)
     except httpx.HTTPError as exc:
-        logger.warning("twilio_recording_start_failed", call_sid=call_sid, error=str(exc))
+        logger.warning("twilio_recording_start_failed", call_sid=call_sid, error_type=type(exc).__name__)
 
 
 async def send_sms(creds: TwilioCredentials, to_e164: str, text: str, from_number: str) -> dict[str, Any]:
@@ -160,7 +166,7 @@ async def send_sms(creds: TwilioCredentials, to_e164: str, text: str, from_numbe
         logger.warning(
             "twilio_send_sms_failed",
             to=to_e164,
-            error=str(exc),
+            error_type=type(exc).__name__,
             status=getattr(getattr(exc, "response", None), "status_code", None),
         )
         raise
@@ -189,7 +195,7 @@ async def hangup_call(creds: TwilioCredentials, call_sid: str) -> str:
         logger.info("twilio_call_hungup", call_sid=call_sid)
         return "ok"
     except httpx.HTTPError as exc:
-        logger.warning("twilio_hangup_failed", call_sid=call_sid, error=str(exc))
+        logger.warning("twilio_hangup_failed", call_sid=call_sid, error_type=type(exc).__name__)
         return "failed"
 
 
@@ -205,5 +211,5 @@ async def delete_recording(creds: TwilioCredentials, recording_sid: str) -> str:
         logger.info("twilio_recording_deleted", recording_sid=recording_sid)
         return "ok"
     except httpx.HTTPError as exc:
-        logger.warning("twilio_recording_delete_failed", recording_sid=recording_sid, error=str(exc))
+        logger.warning("twilio_recording_delete_failed", recording_sid=recording_sid, error_type=type(exc).__name__)
         return "failed"

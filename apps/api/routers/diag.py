@@ -99,6 +99,16 @@ async def voice_latency(x_admin_token: str | None = Header(None)) -> dict:
     }
 
 
+@router.get("/voice-active")
+async def voice_active(x_admin_token: str | None = Header(None)) -> dict:
+    """Live calls this process is carrying right now (counts only). Check it before a deploy: a restart ends every one."""
+    if x_admin_token != settings.admin_token:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from apps.api.channels.voice import capacity
+
+    return capacity.snapshot()
+
+
 @router.get("/voice-config")
 async def voice_config(x_admin_token: str | None = Header(None)) -> dict:
     """Which voice flags are on in THIS process and any combination that cannot work as intended."""
@@ -109,6 +119,7 @@ async def voice_config(x_admin_token: str | None = Header(None)) -> dict:
     return {
         "ok": True,
         "tts_provider": settings.voice_tts_provider,
+        "webhook_signature_mode": __import__("apps.api.channels.voice.signature", fromlist=["effective_mode"]).effective_mode(),
         "flags": flag_snapshot(),
         "issues": [{"level": i.level, "code": i.code, "message": i.message} for i in check_voice_config()],
     }
@@ -179,7 +190,7 @@ async def openai_realtime_probe(x_admin_token: str | None = Header(None)) -> dic
                     "step": "session.update.reply",
                     "t_ms": round((perf_counter() - t0) * 1000),
                     "event_type": evt2.get("type"),
-                    "error": evt2.get("error") if evt2.get("type") == "error" else None,
+                    "provider_error": evt2.get("type") == "error",
                 }
             )
 
@@ -191,6 +202,6 @@ async def openai_realtime_probe(x_admin_token: str | None = Header(None)) -> dic
     except Exception as exc:  # noqa: BLE001
         return {
             "ok": False,
-            "error": f"{type(exc).__name__}: {exc}",
+            "error": type(exc).__name__,
             "trace": trace,
         }

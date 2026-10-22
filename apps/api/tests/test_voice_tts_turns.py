@@ -309,7 +309,10 @@ async def test_nonblocking_finish_returns_at_once_and_keeps_the_agent_playing(
     assert call.audio_sent() == ["QUJD"]
     assert session.finished and session.closed
     assert fakes == [("Namaste", None)]
-    await asyncio.sleep(0.01)  # the 3-byte test chunk has a fraction of a ms to play
+    # Advance beyond queued playback deterministically; Windows clock resolution
+    # can exceed this tiny chunk and a 10ms sleep.
+    played_at = call.state.playback_end + 1.0
+    monkeypatch.setattr(adapter.time, "monotonic", lambda: played_at)
     assert not adapter._is_playing(call.state)
 
 

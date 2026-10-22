@@ -79,6 +79,7 @@ _smart_cache: dict[UUID, bool] = {}
 # about the caller (and the *_pending values are unconfirmed by definition).
 _INTERNAL_MEMORY_KEYS = frozenset(
     {"appointment_asks", "answered_topics", "handoff_requested", "pressure_concern", "name_used",
+     "meeting_declined", "ack_last",
      "property_info_pending", "investment_budget_pending"}
 )
 
@@ -459,6 +460,17 @@ def build_instruction(plan: VoicePlan, *, action_result: dict[str, Any] | None) 
         body = (
             "The caller prefers an online meeting. Say that works, and do not fix any time unless they "
             "give one."
+        )
+    elif kind == "give_time":
+        body = (
+            "The caller asked for a moment. Say one very short line that they can take their time, ask "
+            "nothing, add nothing, and wait for them."
+        )
+    elif kind == "confirm_day_correction":
+        body = (
+            "The caller corrected the day or time you suggested. Say sorry once, in a few words, and say back "
+            "the day or time THEY just gave in one short sentence. Do not book or schedule anything yet: "
+            "ask them to confirm it."
         )
     elif kind == "honest_unknown_repeat":
         body = (

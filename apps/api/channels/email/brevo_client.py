@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 import structlog
 
+from apps.api import pilot
 from apps.api.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -40,6 +41,7 @@ async def send_email(
 
     Raises ``httpx.HTTPStatusError`` on a non-2xx response.
     """
+    pilot.check_email_allowed(to_email)
     url = f"{_BREVO_BASE}/smtp/email"
     payload: dict[str, Any] = {
         "sender": {"name": settings.brevo_sender_name, "email": settings.brevo_sender_email},

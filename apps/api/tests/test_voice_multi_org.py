@@ -104,7 +104,8 @@ PROCESS_LOCAL = {
     "apps.api.channels.voice.greeting": {"greeting_cache"},
     "apps.api.channels.voice.recovery": {"fallback_audio"},       # apology audio; a miss means no spoken apology
     "apps.api.channels.voice.voice_preview": {"preview_limiter"},  # preview rate limit is per process (approximate)
-    "apps.api.channels.voice.latency": {"STATS"},                  # diagnostics only
+    "apps.api.channels.voice.capacity": {"_active"},               # live-stream count; each instance enforces its own cap
+    "apps.api.channels.voice.latency": {"STATS", "_STARTUPS"},    # diagnostics only (the start-up timeline; answer and stream of a call share a process)
     "apps.api.core.conversation.voice_decision": {"_mode_cache", "_smart_cache"},  # 30 s TTL; staleness only
     "apps.api.core.conversation.config": {"_active_cache", "_version_cache", "_pin_cache"},  # TTL / immutable
     "apps.api.core.conversation.runtime_stats": {"_latencies", "_outcomes"},        # diagnostics only

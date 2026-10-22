@@ -36,6 +36,7 @@ htmlcov/
 .env
 .env.local
 .env.*.local
+.env.pilot
 *.pem
 *.key
 
@@ -83,3 +84,7 @@ readme.md
 *.xls
 *.xlsx
 ~$*
+.pilot_plivo_state.json
+
+# Local validation artifacts (test logs, junit files, evidence); never commit
+.validation-*

@@ -199,7 +199,11 @@ _HINGLISH_MARKERS = frozenset(
     "hai hain hoon hun ka ki ke ko mein aap aapka aapki aapke kya nahi nahin haan ji kal aaj "
     "baje rupaye rupay tak aur bilkul theek karna karein kijiye liye wala wali mera meri hum "
     "hamare batao bataiye dhanyavaad namaste abhi phir sab kuch bhi toh kaise kyun kab kitna "
-    "kitne kitni chahiye sakta sakti sakte raha rahi rahe".split()
+    "kitne kitni chahiye sakta sakti sakte raha rahi rahe "
+    # Common verb forms and words that are not English, so a short clause is not mistaken for English.
+    "lagega lagegi hoga hogi hoge rahega rahegi milega milegi banega banegi karenge karunga karungi karte "
+    "karti dijiye lijiye batayein bataunga bataungi thoda zyada sirf lekin magar kyunki isliye yahan wahan "
+    "lagbhag paise rupaiye mahine saal hafte samajh samjhe pata matlab achha accha bahut bohot".split()
 )
 _WORD_RE = re.compile(r"[A-Za-z]+")
 
@@ -240,6 +244,7 @@ _DASH_DATE_RE = re.compile(r"(?<![\d/.-])(?P<d>\d{1,2})-(?P<m>\d{1,2})-(?P<y>\d{
 _ISO_DATE_RE = re.compile(r"(?<![\d-])(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})(?![\d-])")
 _TIME_RE = re.compile(
     r"(?<![\d:.,/-])(?P<h>\d{1,2})(?::(?P<m>\d{2}))?(?:\s?(?P<ap>[AaPp][Mm]))?(?![\w:])"
+    r"(?P<bj>\s?(?:baje|bje|बजे)(?![\w]))?"
 )
 _CODE_RE = re.compile(
     r"(?P<kw>\b(?i:otp|pin|pincode|pin code|code)\b\s*(?:(?i:is|hai|:)\s*)?)(?P<num>\d{3,8})(?!\w)"
@@ -414,7 +419,10 @@ def normalize_text(
         if m.group("m") is None and not m.group("ap"):
             return m.group(0)  # a bare number is not a time
         out = _time_words(int(m.group("h")), int(m.group("m") or 0), m.group("ap"), lang)
-        return out if out is not None else m.group(0)
+        if out is None:
+            return m.group(0)
+        # The spoken Hindi/Hinglish form already says "baje": do not say it twice ("baarah baje baje").
+        return out + (m.group("bj") or "") if lang == "en" else out
 
     text = _TIME_RE.sub(time_repl, text)
     text = _CODE_RE.sub(lambda m: m.group("kw") + digits_spoken(m.group("num"), lang), text)
@@ -482,9 +490,20 @@ class TTSNormalizer:
         self._language = language
         self._pron = tuple(pronunciations)
         self._buf = ""
+        # Chunks are converted one at a time, so a Hinglish turn could flip to English number words on a clause
+        # that happens to carry no Hindi marker ("... hai, Rs 5,000" -> "five thousand rupees"). Once any chunk of
+        # this turn is Hindi/Hinglish, later chunks without a language of their own follow it.
+        self._turn_language: str | None = None
 
     def _convert(self, chunk: str) -> str:
-        return normalize_text(chunk, language=self._language, pronunciations=self._pron)
+        language = self._language
+        if language is None:
+            detected = detect_language(chunk)
+            if detected != "en":
+                self._turn_language = "hinglish"
+            elif self._turn_language:
+                language = self._turn_language
+        return normalize_text(chunk, language=language, pronunciations=self._pron)
 
     @staticmethod
     def _boundary(buf: str) -> int:

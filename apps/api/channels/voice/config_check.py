@@ -95,4 +95,26 @@ def check_voice_config(s: Any = None) -> list[Issue]:
         add("error", "public_base_url_default", "PUBLIC_BASE_URL is still the example default: the telephony provider cannot reach this service.")
     if not getattr(s, "openai_api_key", None):
         add("info", "platform_openai_key_missing", "No platform OPENAI_API_KEY: only orgs with their own key can take calls.")
+
+    # Webhook authentication (Phase 9). Same rule as channels/voice/signature.effective_mode, read from ``s``.
+    configured = str(getattr(s, "plivo_signature_mode", "auto") or "auto").strip().lower()
+    environment = str(getattr(s, "environment", "") or "").strip().lower()
+    mode = configured if configured in ("off", "warn", "enforce") else ("enforce" if environment == "pilot" else "off")
+    if mode == "off":
+        add("warning", "webhooks_unauthenticated", "PLIVO_SIGNATURE_MODE resolves to off: /voice/answer and /voice/stream accept any caller. Roll out with 'warn', then 'enforce' (docs/production-release-9.md).")
+    else:
+        if getattr(s, "twilio_account_sid", None) and getattr(s, "twilio_auth_token", None):
+            level: Level = "error" if mode == "enforce" else "warning"
+            add(level, "signatures_without_twilio_support", "Signature checking understands Plivo only: with Twilio configured, Twilio's webhooks and media streams are refused (enforce) or reported (warn). Do not enforce while Twilio failover or inbound is in use.")
+        if not getattr(s, "plivo_auth_token", None):
+            add("warning", "signature_token_missing", "No PLIVO_AUTH_TOKEN: only orgs with their own Plivo token can pass the signature check.")
+        base = str(getattr(s, "public_base_url", "") or "")
+        if not base.startswith("https://") or base.rstrip("/").count("/") > 2:
+            add("warning", "public_base_url_not_root_https", "Signatures are checked against PUBLIC_BASE_URL + the request path: it must be the https root the provider calls (no path prefix).")
+    if not int(getattr(s, "voice_max_active_streams", 0) or 0):
+        add("info", "no_stream_cap", "VOICE_MAX_ACTIVE_STREAMS is 0: the number of simultaneous calls on this process is not limited.")
+    if not int(getattr(s, "voice_max_call_seconds", 0) or 0):
+        add("info", "no_max_call_duration", "VOICE_MAX_CALL_SECONDS is 0: a call can run until the provider's own stream timeout.")
+    if not getattr(s, "voice_hangup_on_stream_end", False):
+        add("info", "leg_not_ended_on_stream_end", "VOICE_HANGUP_ON_STREAM_END is off: a restart leaves the phone line open (silent) until the caller hangs up.")
     return issues

@@ -51,7 +51,7 @@ def _ratings(sheet: list[dict], raters: int, per_variant_means: dict[str, int]) 
     for r in range(raters):
         for row in sheet:
             score = per_variant_means[row["variant"]]
-            out.append({"rater": f"R{r}", "label": row["label"], "scores": {"naturalness": score, "clarity": score, "pacing": score}})
+            out.append({"rater": f"R{r}", "label": row["label"], "scores": {"naturalness": score, "indian_accent": score, "expressiveness": score}})
     return out
 
 

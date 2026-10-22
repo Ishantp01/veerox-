@@ -19,7 +19,7 @@ import re
 import sys
 from collections.abc import Iterable, Iterator
 
-from apps.api.channels.voice.latency import summarize_events
+from apps.api.channels.voice.latency import summarize_events, turn_event_counts
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -53,7 +53,14 @@ def main(argv: list[str]) -> int:
         lines: Iterable[str] = (ln for path in argv for ln in open(path, encoding="utf8", errors="replace"))
     else:
         lines = sys.stdin
-    print(format_report(summarize_events(iter_events(lines))))
+    events = list(iter_events(lines))
+    print(format_report(summarize_events(events)))
+    extra = turn_event_counts(events)
+    if extra["counts"]:
+        print()
+        print(f"turn events over {extra['turns']} turns (counts of suspected/prevented cases, not measured quality):")
+        for kind, n in sorted(extra["counts"].items()):
+            print(f"  {kind:<34}{n:>6}  ({extra['per_100_turns'].get(kind, '-')} per 100 turns)")
     return 0
 
 

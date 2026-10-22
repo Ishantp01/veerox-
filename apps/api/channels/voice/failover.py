@@ -22,9 +22,11 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+
+from apps.api import pilot
 import structlog
 
-from apps.api.channels.voice import plivo_client, twilio_client
+from apps.api.channels.voice import capacity, plivo_client, signature, twilio_client
 from apps.api.core.org_credentials import PlivoCredentials, TwilioCredentials
 
 logger = structlog.get_logger(__name__)
@@ -79,6 +81,14 @@ async def initiate_call(
         else [("plivo", plivo_from_number), ("twilio", twilio_from_number)]
     )
 
+    pilot.check_number_allowed(to_e164, what="call")
+    if not capacity.has_room():
+        # Full: do not ring a customer whose call this process cannot carry (VOICE_MAX_ACTIVE_STREAMS, off by default).
+        logger.warning("outbound_refused_at_capacity", **capacity.snapshot())
+        raise capacity.CapacityReached("this server is carrying its maximum number of live calls; try again shortly")
+    # Before the one-call allowance is spent: a call that could not be answered must not use it up.
+    answer_url = await signature.attach_call_ticket(answer_url, to_e164)
+    pilot.reserve_outbound_call("call")
     primary_error: httpx.HTTPError | None = None
     for name, from_number in providers:
         if name == "plivo":
@@ -98,7 +108,7 @@ async def initiate_call(
             logger.warning(
                 f"{name}_call_failed_trying_fallback",
                 to=to_e164,
-                error=str(exc),
+                error_type=type(exc).__name__,
             )
             if primary_error is None:
                 primary_error = exc
@@ -130,6 +140,7 @@ async def send_sms(
     (not the fallback's) if both fail. Each ``*_from_number`` must be one of
     this org's own dedicated numbers on that provider — no platform default.
     """
+    pilot.check_number_allowed(to_e164, what="sms")
     providers = [
         ("plivo", plivo_client, plivo_creds, plivo_from_number),
         ("twilio", twilio_client, twilio_creds, twilio_from_number),
@@ -143,7 +154,7 @@ async def send_sms(
             result = await client.send_sms(creds, to_e164, text, from_number)
             return result, name
         except httpx.HTTPError as exc:
-            logger.warning(f"{name}_sms_failed_trying_fallback", to=to_e164, error=str(exc))
+            logger.warning(f"{name}_sms_failed_trying_fallback", to=to_e164, error_type=type(exc).__name__)
             if primary_error is None:
                 primary_error = exc
             else:

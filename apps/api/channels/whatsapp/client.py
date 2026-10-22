@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 import structlog
 
+from apps.api import pilot
 from apps.api.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -141,6 +142,7 @@ async def send_text(
     Returns the raw JSON response (which contains the outbound message id).
     Raises ``httpx.HTTPStatusError`` on a non-2xx response.
     """
+    pilot.check_number_allowed(to_e164, what="whatsapp")
     url = _graph_url("/messages", phone_number_id)
     payload = {
         "messaging_product": "whatsapp",
@@ -217,6 +219,7 @@ async def send_template(
     Returns the raw JSON response (contains the outbound message id). Raises
     ``httpx.HTTPStatusError`` on a non-2xx response.
     """
+    pilot.check_number_allowed(to_e164, what="whatsapp")
     url = _graph_url("/messages", phone_number_id)
     template: dict[str, Any] = {
         "name": template_name,
@@ -319,6 +322,7 @@ async def send_media(
     Returns the raw JSON response (contains the outbound message id). Raises
     ``httpx.HTTPStatusError`` on a non-2xx response.
     """
+    pilot.check_number_allowed(to_e164, what="whatsapp")
     url = _graph_url("/messages", phone_number_id)
     media_obj: dict[str, Any] = {"link": link}
     if caption:

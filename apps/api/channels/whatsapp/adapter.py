@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.channels.whatsapp import client as wa_client
+from apps.api import pilot
 from apps.api.config import settings
 from apps.api.core.agent import agent_core, appointment_booked_this_turn
 from apps.api.core.org_credentials import resolve_meta_credentials
@@ -361,6 +362,14 @@ async def process_inbound(payload: dict[str, Any]) -> None:
         msg = _extract_message(payload)
         if msg is None:
             logger.info("whatsapp_inbound_no_message", reason="status_or_empty")
+            return
+
+        try:
+            # Pilot mode only: a message from anyone but an allowlisted test phone is dropped before any side
+            # effect (no idempotency claim, no read receipt, no database row, no model call). No-op elsewhere.
+            pilot.check_number_allowed(msg.from_phone, what="whatsapp_inbound")
+        except pilot.PilotBlocked:
+            logger.info("pilot_whatsapp_inbound_dropped")
             return
 
         # Idempotency comes before any side effect (DB write, OpenAI spend).

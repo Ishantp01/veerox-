@@ -46,6 +46,10 @@ def is_configured() -> bool:
     return bool(settings.elevenlabs_api_key)
 
 
+class TTSConnectionClosed(RuntimeError):
+    """An ElevenLabs transport failure, never an OpenAI session closure."""
+
+
 class ElevenLabsTTSSession:
     """One streaming-TTS turn — open, push text as it arrives, read audio
     back concurrently, then finish. Not reusable across turns; open a new
@@ -106,15 +110,15 @@ class ElevenLabsTTSSession:
         # a lone space primes the connection; the API key travels in the
         # body rather than a header since not every WS client can set
         # custom headers, and this is ElevenLabs' documented pattern.
-        await self._ws.send(
-            json.dumps(
-                {
-                    "text": " ",
-                    "voice_settings": self._voice_settings,
-                    "xi_api_key": settings.elevenlabs_api_key,
-                }
-            )
-        )
+        handshake: dict[str, Any] = {
+            "text": " ",
+            "voice_settings": self._voice_settings,
+            "xi_api_key": settings.elevenlabs_api_key,
+        }
+        if self._profile is not None and self._profile.chunk_schedule:
+            # Only for an org that asked for it; otherwise the handshake is exactly what it always was.
+            handshake["generation_config"] = {"chunk_length_schedule": list(self._profile.chunk_schedule)}
+        await self._send(json.dumps(handshake))
         self._reader_task = asyncio.create_task(self._read_audio())
         return self
 
@@ -152,8 +156,7 @@ class ElevenLabsTTSSession:
                 if msg.get("error") or msg.get("message"):
                     logger.warning(
                         "elevenlabs_tts_error",
-                        error=msg.get("error"),
-                        message=msg.get("message"),
+                        provider_error=True,
                     )
                     self.failed = True
                     self.fail_reason = str(msg.get("error") or msg.get("message"))[:200]
@@ -183,6 +186,14 @@ class ElevenLabsTTSSession:
         finally:
             await self._audio_queue.put(None)
 
+    async def _send(self, payload: str) -> None:
+        try:
+            await self._ws.send(payload)
+        except websockets.ConnectionClosed as exc:
+            self.failed = True
+            self.fail_reason = "connection_closed"
+            raise TTSConnectionClosed("ElevenLabs socket closed during send") from exc
+
     async def send_text(self, text: str) -> None:
         """Push one text chunk (e.g. one ``response.text.delta``) in."""
         if not text or self._ws is None:
@@ -192,7 +203,7 @@ class ElevenLabsTTSSession:
             if not text:
                 return  # buffered until a clause boundary
         self.chars_sent += len(text)
-        await self._ws.send(json.dumps({"text": text}))
+        await self._send(json.dumps({"text": text}))
 
     async def finish(self) -> None:
         """Signal no more text is coming for this turn — flushes ElevenLabs'
@@ -203,8 +214,8 @@ class ElevenLabsTTSSession:
             tail = self._normalizer.flush()
             if tail:
                 self.chars_sent += len(tail)
-                await self._ws.send(json.dumps({"text": tail}))
-        await self._ws.send(json.dumps({"text": ""}))
+                await self._send(json.dumps({"text": tail}))
+        await self._send(json.dumps({"text": ""}))
 
     async def audio_chunks(self) -> AsyncIterator[str]:
         """Yield base64 mu-law audio chunks as they arrive, until the turn

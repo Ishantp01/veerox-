@@ -38,6 +38,7 @@ from apps.api.channels.voice import greeting as voice_greeting
 from apps.api.channels.voice import voice_preview
 from apps.api.channels.voice import voice_profile as voice_profile_mod
 from apps.api.channels.voice import failover as voice_failover
+from apps.api.channels.voice import capacity as voice_capacity
 from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.voice.org_numbers import (
     get_default_numbers,
@@ -2846,6 +2847,9 @@ def _voice_profile_out(record: Org | None) -> VoiceProfileSettingsOut:
             "voice_settings": dict(voice_profile_mod.LEGACY_VOICE_SETTINGS),
             "normalize_speech": False,
             "speaking_style": False,
+            "natural_hinglish": False,
+            "tone": None,
+            "chunk_schedule": None,
             "pronunciations": {},
             "preferred_language": None,
         }
@@ -2856,6 +2860,9 @@ def _voice_profile_out(record: Org | None) -> VoiceProfileSettingsOut:
             "voice_settings": dict(resolved.voice_settings),
             "normalize_speech": resolved.normalize,
             "speaking_style": resolved.speaking_style,
+            "natural_hinglish": resolved.natural_hinglish,
+            "tone": resolved.tone,
+            "chunk_schedule": list(resolved.chunk_schedule) if resolved.chunk_schedule else None,
             "pronunciations": dict(resolved.pronunciations),
             "preferred_language": resolved.language,
         }
@@ -4422,6 +4429,8 @@ async def outbound_call(
             error=str(exc),
         )
         raise HTTPException(status_code=502, detail="Outbound call failed") from exc
+    except voice_capacity.CapacityReached as exc:
+        raise HTTPException(status_code=503, detail="The voice server is at its call limit; try again shortly") from exc
     except RuntimeError as exc:
         logger.warning("outbound_call_not_configured", to=payload.to_phone, error=str(exc))
         raise HTTPException(status_code=502, detail="Outbound call failed") from exc

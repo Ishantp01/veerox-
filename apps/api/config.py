@@ -1,10 +1,24 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+def resolve_env_file() -> Path:
+    """The dotenv file to load: the repository's ``.env`` unless ``VEEROX_ENV_FILE`` names another one.
+
+    A pilot sets ``VEEROX_ENV_FILE`` to its own file so the process reads ONLY that file. Without this the real
+    ``.env`` would still be read for every variable the pilot file leaves out, silently lending a pilot the
+    real provider credentials."""
+    override = os.environ.get("VEEROX_ENV_FILE")
+    if override:
+        return Path(override).expanduser().resolve()
+    return Path(__file__).resolve().parents[2] / ".env"
+
+
+ENV_FILE = resolve_env_file()
 
 
 class Settings(BaseSettings):
@@ -77,6 +91,44 @@ class Settings(BaseSettings):
     # set PLIVO_STARTUP_REGISTRATION=false in any dev .env, otherwise starting
     # a dev server re-points the shared Plivo application at the dev ngrok URL.
     plivo_startup_registration: bool = True
+    # Pilot mode (ENVIRONMENT=pilot): see apps/api/pilot.py. All inert in every other environment.
+    pilot_allowed_numbers: str = ""
+    pilot_allowed_emails: str = ""
+    pilot_workers_enabled: bool = False
+    pilot_allow_provider_config_changes: bool = False
+    # Plivo webhook signatures and the media-stream token (channels/voice/signature.py). auto = enforce in pilot mode,
+    # off elsewhere; warn logs what would be rejected; enforce rejects; off = legacy behaviour.
+    plivo_signature_mode: str = "auto"
+    # Token admission expiry. Reconnects require previous-owner cleanup; replay ledgers
+    # have fixed capacities and no TTL because Plivo nonces have no signed timestamp.
+    plivo_stream_token_ttl_seconds: int = 300
+    plivo_stream_token_max_uses: int = 2  # legacy; replaced by exclusive session ownership
+    plivo_nonce_ttl_seconds: int = 3600  # legacy setting; never expires replay protection
+    # Lifetime of the single-use ticket minted when an outbound call is dialled (it must outlast the ring time).
+    plivo_call_ticket_ttl_seconds: int = 180
+    # Production safeguards, all off (0 / false) unless an operator turns them on. See channels/voice/capacity.py.
+    # Streams one process will carry at once (new streams and new outbound dials are refused beyond it); 0 = no limit.
+    voice_max_active_streams: int = 0
+    # Hang a call up after this many seconds whatever is happening (a spending and stuck-call safeguard); 0 = never.
+    voice_max_call_seconds: int = 0
+    # When a call's media stream ends (the caller left, or this process is restarting), also ask the provider to end the
+    # call leg so a restart cannot leave a billed, silent line open. A hang-up for an ended call is a harmless 404.
+    voice_hangup_on_stream_end: bool = False
+    # Replay state outside the pilot: expiring, no initialisation (see signature.strict_state). auto = strict in pilot mode,
+    # expiring everywhere else; "strict" / "expiring" force one.
+    plivo_replay_state: str = "auto"
+    plivo_nonce_expiring_ttl_seconds: int = 86_400
+    plivo_stream_lease_seconds: int = 7_200
+    plivo_nonce_capacity: int = 100_000
+    plivo_stream_capacity: int = 10_000
+    # Pilot only: refuse the Nth+1 outbound call/SMS this process is asked to place (0 = no limit).
+    pilot_max_outbound_calls: int = 0
+    # Ask the telephony provider to end an OUTBOUND call itself after this many seconds of the call (Plivo
+    # ``time_limit``, Twilio ``TimeLimit``) and to stop ringing after this many (``ring_timeout`` / ``Timeout``).
+    # 0 = send neither, exactly as before. Enforced by the provider, so it holds even if this process dies.
+    voice_outbound_time_limit_seconds: int = 0
+    voice_outbound_ring_timeout_seconds: int = 0
+    pilot_database_name: str = ""
     # Conversation Intelligence Engine (core/conversation/). The per-org
     # switch is Org.conversation_mode; these are global tuning/kill knobs.
     # Voice only ever runs the engine in log-only shadow mode — set

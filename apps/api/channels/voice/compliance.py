@@ -122,6 +122,12 @@ class RecordingPolicy:
 LEGACY_POLICY = RecordingPolicy()
 
 
+def _pilot_mode() -> bool:
+    from apps.api import pilot
+
+    return pilot.pilot_mode()
+
+
 def validate(raw: Any) -> VoiceCompliance:
     """Parse a submitted policy; raises ``pydantic.ValidationError``."""
     return VoiceCompliance.model_validate(raw)
@@ -131,12 +137,14 @@ def resolve_recording_policy(raw: Any, remote_number: str | None) -> RecordingPo
     """The policy for a call with ``remote_number``. Anything stored that no longer
     validates is logged and treated as no policy: a bad row must never fail a call."""
     if not raw:
-        return LEGACY_POLICY
+        # Pilot mode (ENVIRONMENT=pilot) never records an org that has not chosen a policy; every other
+        # environment keeps the long-standing "record every call" default.
+        return RecordingPolicy(mode="off") if _pilot_mode() else LEGACY_POLICY
     try:
         config = VoiceCompliance.model_validate(raw)
     except ValidationError:
         logger.warning("voice_compliance_invalid_ignored")
-        return LEGACY_POLICY
+        return RecordingPolicy(mode="off") if _pilot_mode() else LEGACY_POLICY
     mode, notice = config.recording_mode, config.recording_notice
     digits = re.sub(r"\D", "", remote_number or "").lstrip("0")
     best = max((code for code in config.regions if digits.startswith(code)), key=len, default=None)

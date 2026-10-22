@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 import structlog
 
+from apps.api import pilot
 from apps.api.config import settings
 from apps.api.core.org_credentials import PlivoCredentials
 
@@ -77,6 +78,12 @@ async def initiate_call(
     if hangup_url:
         payload["hangup_url"] = hangup_url
         payload["hangup_method"] = "POST"
+    # Provider-enforced limits (Plivo Make-a-call ``time_limit`` and ``ring_timeout``, both integer seconds).
+    # Only sent when configured, so the request is unchanged by default.
+    if settings.voice_outbound_time_limit_seconds > 0:
+        payload["time_limit"] = int(settings.voice_outbound_time_limit_seconds)
+    if settings.voice_outbound_ring_timeout_seconds > 0:
+        payload["ring_timeout"] = int(settings.voice_outbound_ring_timeout_seconds)
     try:
         r = await _http.post(url, json=payload, auth=_auth(creds))
         r.raise_for_status()
@@ -84,7 +91,7 @@ async def initiate_call(
         logger.warning(
             "plivo_initiate_call_failed",
             to=to_e164,
-            error=str(exc),
+            error_type=type(exc).__name__,
             status=getattr(getattr(exc, "response", None), "status_code", None),
         )
         raise
@@ -111,7 +118,7 @@ async def owns_number(creds: PlivoCredentials, digits: str) -> bool:
         r = await _http.get(url, auth=_auth(creds))
         return r.status_code == 200
     except httpx.HTTPError as exc:
-        logger.warning("plivo_owns_number_check_failed", number=digits, error=str(exc))
+        logger.warning("plivo_owns_number_check_failed", number=digits, error_type=type(exc).__name__)
         return False
 
 
@@ -139,7 +146,7 @@ async def start_recording(creds: PlivoCredentials, call_uuid: str, callback_url:
         r.raise_for_status()
         logger.info("plivo_recording_started", call_uuid=call_uuid)
     except httpx.HTTPError as exc:
-        logger.warning("plivo_recording_start_failed", call_uuid=call_uuid, error=str(exc))
+        logger.warning("plivo_recording_start_failed", call_uuid=call_uuid, error_type=type(exc).__name__)
 
 
 async def hangup_call(creds: PlivoCredentials, call_uuid: str) -> str:
@@ -165,7 +172,7 @@ async def hangup_call(creds: PlivoCredentials, call_uuid: str) -> str:
         logger.info("plivo_call_hungup", call_uuid=call_uuid)
         return "ok"
     except httpx.HTTPError as exc:
-        logger.warning("plivo_hangup_failed", call_uuid=call_uuid, error=str(exc))
+        logger.warning("plivo_hangup_failed", call_uuid=call_uuid, error_type=type(exc).__name__)
         return "failed"
 
 
@@ -181,7 +188,7 @@ async def delete_recording(creds: PlivoCredentials, recording_id: str) -> str:
         logger.info("plivo_recording_deleted", recording_id=recording_id)
         return "ok"
     except httpx.HTTPError as exc:
-        logger.warning("plivo_recording_delete_failed", recording_id=recording_id, error=str(exc))
+        logger.warning("plivo_recording_delete_failed", recording_id=recording_id, error_type=type(exc).__name__)
         return "failed"
 
 
@@ -206,7 +213,7 @@ async def send_sms(creds: PlivoCredentials, to_e164: str, text: str, from_number
         logger.warning(
             "plivo_send_sms_failed",
             to=to_e164,
-            error=str(exc),
+            error_type=type(exc).__name__,
             status=getattr(getattr(exc, "response", None), "status_code", None),
         )
         raise
@@ -229,6 +236,8 @@ async def register_inbound_answer_url(creds: PlivoCredentials, phone_number: str
     per-org. Idempotent: reuses the existing ``veerox-voice-app`` Application
     on that org's account if present, else creates it.
     """
+    if pilot.provider_config_changes_blocked("plivo_answer_url"):
+        return
     answer_url = f"{settings.public_base_url.rstrip('/')}/voice/answer"
     number = phone_number.lstrip("+")
     base = f"{_PLIVO_BASE}/Account/{creds.auth_id}"
@@ -267,4 +276,4 @@ async def register_inbound_answer_url(creds: PlivoCredentials, phone_number: str
         r.raise_for_status()
         logger.info("plivo_inbound_answer_url_registered", answer_url=answer_url, app_id=app_id)
     except httpx.HTTPError as exc:
-        logger.warning("plivo_inbound_registration_failed", error=str(exc))
+        logger.warning("plivo_inbound_registration_failed", error_type=type(exc).__name__)

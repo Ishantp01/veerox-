@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -133,6 +133,67 @@ class RollingStats:
 STATS = RollingStats()
 
 
+# --- call start-up timeline ---------------------------------------------------------------------------------------------------------
+#
+# What happens between the callee answering and the first greeting audio is spread across the answer webhook, the media
+# WebSocket and the bridge, so no single tracker sees it. Each side drops a named mark here, keyed by the provider call id;
+# when the first audio frame is sent the marks are logged once as ``voice_startup_timeline`` (milliseconds since the first
+# mark, i.e. since our answer handler began) and forgotten. Process-local (the answer webhook and the stream of one call
+# land in the same process), bounded, and incapable of raising. Ids and stage names only.
+
+STARTUP_STAGES = (
+    "answer_received",      # the answer webhook began (the nearest thing we can see to "Plivo answered")
+    "ticket_checked",       # signature and single-use ticket accepted
+    "answer_served",        # the XML response was ready to return
+    "stream_accepted",      # the media WebSocket handshake began
+    "handshake_done",       # the provider's connected/start frames were read
+    "precall_claimed",      # the pre-connected OpenAI session was taken (or found missing)
+    "context_loaded",       # org greeting, voice and recording policy were read
+    "conversation_opened",  # the user, lead and conversation rows exist
+    "greeting_started",     # the greeting was requested (spoken) or sent (cached)
+    "first_audio_sent",     # the first audio frame went to the provider
+)
+_STARTUPS: "OrderedDict[str, dict[str, float]]" = OrderedDict()
+_STARTUP_MAX = 32
+
+
+def startup_mark(call_id: str | None, stage: str, *, at: float | None = None) -> None:
+    """Record ``stage`` for this call (first mark of a stage wins). No-op without a call id or when tracking is off."""
+    if not call_id or not settings.voice_latency_tracking:
+        return
+    try:
+        marks = _STARTUPS.get(call_id)
+        if marks is None:
+            marks = _STARTUPS[call_id] = {}
+            while len(_STARTUPS) > _STARTUP_MAX:
+                _STARTUPS.popitem(last=False)
+        marks.setdefault(stage, time.monotonic() if at is None else at)
+    except Exception:  # noqa: BLE001 - instrumentation must never touch the call
+        return
+
+
+def startup_snapshot(call_id: str | None) -> dict[str, int]:
+    """Stage -> milliseconds since the earliest mark, in stage order."""
+    marks = _STARTUPS.get(call_id or "") or {}
+    if not marks:
+        return {}
+    base = min(marks.values())
+    return {stage: round((marks[stage] - base) * 1000) for stage in STARTUP_STAGES if stage in marks}
+
+
+def startup_emit(call_id: str | None, **extra: Any) -> None:
+    """Log the timeline once (``voice_startup_timeline``) and forget the call."""
+    if not call_id:
+        return
+    try:
+        snapshot = startup_snapshot(call_id)
+        _STARTUPS.pop(call_id, None)
+        if snapshot:
+            logger.info("voice_startup_timeline", call_uuid=call_id, **extra, **{f"{k}_ms": v for k, v in snapshot.items()})
+    except Exception:  # noqa: BLE001
+        return
+
+
 @dataclass
 class _Turn:
     seq: int
@@ -208,6 +269,9 @@ class LatencyTracker:
             return
         self.mark("first_audio_sent")
         turn.emitted = True
+        if turn.kind in ("greeting", "greeting_cached"):
+            startup_mark(self._ids.get("call_uuid"), "first_audio_sent")
+            startup_emit(self._ids.get("call_uuid"), kind=turn.kind)
         try:
             self._emit_turn(turn)
         except Exception:  # noqa: BLE001 — instrumentation must never touch the call
@@ -281,6 +345,17 @@ class LatencyTracker:
         except Exception:  # noqa: BLE001 - instrumentation must never touch the call
             logger.warning("voice_metric_failed", exc_info=True)
 
+    def event(self, kind: str, **extra: Any) -> None:
+        """A countable turn-taking occurrence (``false_interruption``, ``premature_response_suspected``,
+        ``stale_audio_dropped``, ``silence_prompt``...). Logged as ``voice_turn_event``; counts and rates per
+        100 turns come from ``summarize_events``. Ids only, never content."""
+        if not self.enabled:
+            return
+        try:
+            logger.info("voice_turn_event", **self._ids, kind=kind, **extra)
+        except Exception:  # noqa: BLE001 - instrumentation must never touch the call
+            logger.warning("voice_turn_event_failed", exc_info=True)
+
     def cancel_completed(self, elapsed_ms: int, *, response_id: str | None = None) -> None:
         """A response.cancel took ``elapsed_ms`` to be confirmed by response.done."""
         if not self.enabled:
@@ -338,3 +413,20 @@ def summarize_events(events: Iterable[Mapping[str, Any]]) -> dict[str, dict[str,
             if isinstance(value, (int, float)):
                 stats.add("est_playback_ms", value)
     return stats.snapshot()
+
+
+def turn_event_counts(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Counts of ``voice_turn_event`` kinds, with the turns they occurred in, so a rate per 100 turns can be
+    read off. These are COUNTS of things the adapter suspected or prevented, not measured quality:
+    ``premature_response_suspected`` and ``false_interruption`` are heuristics (see adapter.py), and
+    ``muted_audio_dropped`` / ``stale_event_dropped`` are stale audio that was kept from the caller."""
+    counts: dict[str, int] = {}
+    turns = 0
+    for ev in events:
+        name = ev.get("event")
+        if name == "voice_turn_latency":
+            turns += 1
+        elif name == "voice_turn_event" and isinstance(ev.get("kind"), str):
+            counts[ev["kind"]] = counts.get(ev["kind"], 0) + 1
+    per_100 = {k: round(100 * v / turns, 1) for k, v in counts.items()} if turns else {}
+    return {"turns": turns, "counts": counts, "per_100_turns": per_100}

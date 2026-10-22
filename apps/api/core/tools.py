@@ -883,6 +883,11 @@ async def book_appointment(
     }
 
 
+# A callback may be asked for "right now"; this much slack avoids rejecting it because the model's idea of the
+# current time is a little behind.
+CALLBACK_PAST_GRACE = timedelta(minutes=5)
+
+
 async def request_callback(
     db: AsyncSession,
     date: str,
@@ -928,10 +933,42 @@ async def request_callback(
         return {"status": "error", "reason": "invalid_date_or_time"}
     callback_at = local_dt.astimezone(UTC)
 
+    if callback_at < datetime.now(UTC) - CALLBACK_PAST_GRACE:
+        # The model has no reliable sense of "now": a callback in the past would sit on the Call Back column
+        # forever and never ring. A few minutes of slack allows "call me right now".
+        return {
+            "status": "error",
+            "reason": "date_in_past",
+            "note": "That callback time has already passed. Ask the caller for a time in the future.",
+        }
+
     lead = await get_or_create_lead_for_user(
         db, org_id, user_id, name=resolved_name, phone=callback_user.phone
     )
     await db.flush()  # populate lead.id for the Appointment FK below
+
+    # The same callback asked for twice (the model repeating itself, or the model and the decision layer both
+    # acting on it) is one callback: report the one that exists instead of adding a second row.
+    existing = (
+        await db.execute(
+            select(Appointment).where(
+                Appointment.org_id == org_id,
+                Appointment.lead_id == lead.id,
+                Appointment.callback_at == callback_at,
+                Appointment.status.notin_(("cancelled", "no_show")),
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return {
+            "status": "ok",
+            "duplicate": True,
+            "lead_id": str(lead.id),
+            "appointment_id": str(existing.id),
+            "date": date,
+            "time": time,
+            "timezone": tz_name,
+        }
 
     appointment = Appointment(
         org_id=org_id,
@@ -1145,6 +1182,7 @@ async def transfer_to_human(
         notify_account_user_id, notify_phone = notify_targets[(turn - 1) % len(notify_targets)]
 
     org = await db.get(Org, org_id)
+    notified = False
     if notify_account_user_id is not None and notify_phone:
         # An org-chosen template (WhatsApp settings page) wins over the
         # built-ins. Any approved template can be picked; its params are
@@ -1178,6 +1216,7 @@ async def transfer_to_human(
                     body_params=body_params,
                     phone_number_id=phone_number_id,
                 )
+                notified = True
             except httpx.HTTPError:
                 logger.warning(
                     "transfer_to_human_notify_send_error",
@@ -1236,9 +1275,16 @@ async def transfer_to_human(
         lead_id=lead_id,
     )
 
+    # Only say someone was notified when a notification really went out. The request itself is recorded either
+    # way (queue + Human Support lead), so the agent can still promise a follow-up, but not a notification.
     return {
         "status": "ok",
-        "message": "A team member has been notified and will follow up with you shortly.",
+        "notified": notified,
+        "message": (
+            "A team member has been notified and will follow up with you shortly."
+            if notified
+            else "Your request has been recorded for the team and they will follow up with you."
+        ),
         "lead_id": lead_id,
     }
 

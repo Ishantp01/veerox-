@@ -30,6 +30,7 @@ import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api import pilot
 from apps.api.config import settings
 from apps.api.core.org_credentials import resolve_meta_credentials
 from apps.api.db.models.org import Org
@@ -46,6 +47,8 @@ async def register_org_webhook(db: AsyncSession, org_id: UUID | str) -> None:
     verify token, then subscribe that App to the org's WABA. No-op (logs and
     returns) when the org's Meta credentials aren't complete enough for a
     given half of this — each half is independently best-effort."""
+    if pilot.provider_config_changes_blocked("meta_webhook"):
+        return
     org_record = await db.get(Org, org_id)
     creds = resolve_meta_credentials(org_record)
     if creds is None:

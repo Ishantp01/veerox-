@@ -68,7 +68,7 @@ audio was handed to the carrier, not when the caller heard it.
 1. Collect 15–20 sentences covering Hindi, Hinglish, English, Indian names, amounts, dates, a long and a short answer.
 2. `python scripts/voice_quality_rate.py sheet prompts.txt --seed 7 --out sheet.json` writes a blind sheet.
 3. Generate the clips for each variant (paid; needs approval; `scripts/voice_compare.py`), name them by the sheet's labels.
-4. At least 3 listeners score every clip 1–5 on naturalness, clarity, Hindi pronunciation, name pronunciation, pacing.
+4. At least 3 listeners score every clip 1–5 on naturalness, Indian accent, Hindi and Hinglish pronunciation, names, expressiveness, artifacts, overall preference.
 5. `python scripts/voice_quality_rate.py report sheet.json ratings.json`. The tool names a leader only with ≥3 raters,
    ≥12 scores per variant and a gap of ≥0.3 points; otherwise it prints why it cannot conclude. **No variant has been
    rated, and none is recommended here.**

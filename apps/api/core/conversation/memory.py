@@ -45,6 +45,9 @@ KEY_SCOPE: dict[str, str] = {
     "handoff_requested": "call",
     "pressure_concern": "call",
     "name_used": "call",
+    "customer_city": "persistent",
+    "meeting_declined": "call",
+    "ack_last": "call",
 }
 
 _MAX_VALUE_LEN = 200

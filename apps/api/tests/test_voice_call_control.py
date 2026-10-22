@@ -430,22 +430,28 @@ async def test_end_call_hangs_up_after_the_goodbye_and_keeps_the_agent_quiet(pro
 
 
 async def test_end_call_with_no_goodbye_yet_asks_for_one_before_hanging_up(provider: SimpleNamespace) -> None:
-    call = Call(response_active=False)  # the model called the tool without saying anything
+    call = Call(response_active=True)  # tool response has no spoken goodbye
     await call.event("response.function_call_arguments.done", name="end_call", call_id="c1",
                      arguments=json.dumps({"reason": "task_complete"}))
-    assert "response.create" in call.types()  # a goodbye is requested so the caller is not cut off mid-silence
+    assert "response.create" not in call.types()  # never overlap the tool's originating response
     assert call.state.hangup_task is not None and provider.hangups == []
     await call.event("response.done")
-    await asyncio.sleep(0.4)
+    assert call.types().count("response.create") == 1  # request the goodbye only now
+    assert provider.hangups == []
+    await call.event("response.created", response={"id": "goodbye"})
+    await call.event("response.done", response={"id": "goodbye"})
+    await asyncio.wait_for(call.state.hangup_task, timeout=3)
     assert provider.hangups == ["call-1"]
 
 
 async def test_end_call_when_disabled_is_refused_and_the_call_carries_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "voice_end_call_enabled", False)
-    call = Call()
+    call = Call(response_active=True)
     await call.event("response.function_call_arguments.done", name="end_call", call_id="c1", arguments="{}")
     assert call.outputs()[0]["reason"] == "end_call_not_enabled" and call.state.hangup_task is None
-    assert "response.create" in call.types()
+    assert "response.create" not in call.types()
+    await call.event("response.done")
+    assert call.types().count("response.create") == 1
 
 
 @pytest.mark.parametrize(

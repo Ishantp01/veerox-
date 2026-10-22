@@ -13,6 +13,7 @@ from apps.api.channels.voice.plivo_provisioning import register_all_org_plivo_nu
 from apps.api.channels.voice.realtime_bridge import router as voice_stream_router
 from apps.api.channels.voice.webhook import router as voice_router
 from apps.api.channels.whatsapp.webhook import router as whatsapp_router
+from apps.api import pilot
 from apps.api.config import settings
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.db.startup_seed import ensure_env_seed_data_on_startup
@@ -76,28 +77,36 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             # Best-effort — must never block or crash startup.
             pass
 
-    plivo_registration_task = asyncio.create_task(_register_all_org_plivo_numbers())
-    dialer_task = asyncio.create_task(run_campaign_dialer())
-    whatsapp_dispatcher_task = asyncio.create_task(run_whatsapp_dispatcher())
-    follow_up_task = asyncio.create_task(run_follow_up_dispatcher())
-    license_expiry_task = asyncio.create_task(run_license_expiry_worker())
-    usage_daily_task = asyncio.create_task(run_usage_daily_aggregator())
-    usage_monthly_task = asyncio.create_task(run_usage_monthly_aggregator())
-    aws_cost_import_task = asyncio.create_task(run_aws_cost_importer())
-    late_event_sweep_task = asyncio.create_task(run_late_event_adjustment_sweep())
-    voice_retention_task = asyncio.create_task(run_voice_retention_worker())
-    background_tasks = (
-        plivo_registration_task,
-        dialer_task,
-        whatsapp_dispatcher_task,
-        follow_up_task,
-        license_expiry_task,
-        usage_daily_task,
-        usage_monthly_task,
-        aws_cost_import_task,
-        late_event_sweep_task,
-        voice_retention_task,
-    )
+    background_tasks: tuple[asyncio.Task[None], ...] = ()
+    if pilot.workers_enabled():
+        plivo_registration_task = asyncio.create_task(_register_all_org_plivo_numbers())
+        dialer_task = asyncio.create_task(run_campaign_dialer())
+        whatsapp_dispatcher_task = asyncio.create_task(run_whatsapp_dispatcher())
+        follow_up_task = asyncio.create_task(run_follow_up_dispatcher())
+        license_expiry_task = asyncio.create_task(run_license_expiry_worker())
+        usage_daily_task = asyncio.create_task(run_usage_daily_aggregator())
+        usage_monthly_task = asyncio.create_task(run_usage_monthly_aggregator())
+        aws_cost_import_task = asyncio.create_task(run_aws_cost_importer())
+        late_event_sweep_task = asyncio.create_task(run_late_event_adjustment_sweep())
+        voice_retention_task = asyncio.create_task(run_voice_retention_worker())
+        background_tasks = (
+            plivo_registration_task,
+            dialer_task,
+            whatsapp_dispatcher_task,
+            follow_up_task,
+            license_expiry_task,
+            usage_daily_task,
+            usage_monthly_task,
+            aws_cost_import_task,
+            late_event_sweep_task,
+            voice_retention_task,
+        )
+    else:
+        # ENVIRONMENT=pilot without PILOT_WORKERS_ENABLED: no dialer, dispatchers, billing jobs or Plivo
+        # re-registration can run against the pilot database with real provider credentials in the environment.
+        import structlog
+
+        structlog.get_logger("pilot").warning("pilot_background_workers_disabled")
     try:
         yield
     finally:
@@ -111,11 +120,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
+    # Pilot mode (ENVIRONMENT=pilot) publishes no API documentation: the schema lists every admin route.
+    docs_off = {"docs_url": None, "redoc_url": None, "openapi_url": None} if pilot.pilot_mode() else {}
     app = FastAPI(
         title="Veerox AI",
         description="Voice + WhatsApp AI agent backend.",
         version="0.1.0",
         lifespan=lifespan,
+        **docs_off,
     )
 
     app.state.limiter = limiter

@@ -19,6 +19,10 @@ stream-input documentation as remembered, so each is kept conservative):
   stream-input endpoint; ``eleven_multilingual_v2`` has noticeably higher
   latency than the two ``v2_5`` models and is for quality comparison, not a
   recommended live default.
+* ``generation_config.chunk_length_schedule`` (documented default ``[120, 160, 250, 290]``, each 50-500) is how
+  many buffered characters ElevenLabs waits for before it starts generating; only sent when an org sets
+  ``chunk_schedule``. Smaller values start speaking sooner but the provider warns they may cost quality, which
+  only listening can judge.
 * ``language_code`` and ``pronunciation_dictionary_locators`` are deliberately
   NOT sent to the provider. Pronunciation fixes are done by our own
   deterministic text layer (``tts_normalize.py``) instead.
@@ -49,6 +53,9 @@ ALLOWED_MODELS: dict[str, str] = {
 STYLE_MODELS = frozenset({"eleven_multilingual_v2"})
 
 SPEED_RANGE = (0.7, 1.2)
+CHUNK_SCHEDULE_RANGE = (50, 500)
+MAX_CHUNK_SCHEDULE_LEN = 6
+TONES = ("professional_warm", "friendly", "calm_reassuring", "confident_informative")
 LANGUAGES = ("hi", "en", "hinglish")
 MAX_PRONUNCIATIONS = 50
 MAX_PRONUNCIATION_KEY = 40
@@ -92,6 +99,29 @@ class VoiceProfile(BaseModel):
     speaking_style: bool = Field(
         False, description="Add the human-like speaking-style guidance to the voice prompt."
     )
+    natural_hinglish: bool = Field(
+        False, description="Add everyday-Hinglish phrasing guidance to the voice prompt (wording only)."
+    )
+    tone: Literal["professional_warm", "friendly", "calm_reassuring", "confident_informative"] | None = Field(
+        None, description="Phrasing personality added to the voice prompt; it never changes what is true or allowed."
+    )
+    chunk_schedule: list[int] | None = Field(
+        None,
+        description="ElevenLabs generation_config.chunk_length_schedule (characters buffered before speaking); "
+        "unset = provider default.",
+    )
+
+    @field_validator("chunk_schedule")
+    @classmethod
+    def _chunk_schedule(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        lo, hi = CHUNK_SCHEDULE_RANGE
+        if not 1 <= len(value) <= MAX_CHUNK_SCHEDULE_LEN:
+            raise ValueError(f"chunk_schedule needs 1-{MAX_CHUNK_SCHEDULE_LEN} numbers")
+        if any(isinstance(v, bool) or not lo <= v <= hi for v in value):
+            raise ValueError(f"every chunk_schedule value must be between {lo} and {hi}")
+        return value
 
     @field_validator("voice_id")
     @classmethod
@@ -167,6 +197,9 @@ class ResolvedVoice:
     language: str | None = None
     pronunciations: tuple[tuple[str, str], ...] = ()
     speaking_style: bool = False
+    natural_hinglish: bool = False
+    tone: str | None = None
+    chunk_schedule: tuple[int, ...] | None = None
     fingerprint: str = field(default="", compare=False)
 
     def audio_fingerprint(self) -> str:
@@ -186,7 +219,7 @@ def resolve_profile(raw: Any) -> ResolvedVoice | None:
     try:
         profile = parse_profile(raw)
     except VoiceProfileError as exc:
-        logger.warning("voice_profile_invalid_ignored", error=str(exc))
+        logger.warning("voice_profile_invalid_ignored", error_type=type(exc).__name__)
         return None
     model_id = profile.effective_model()
     voice_settings: dict[str, Any] = {
@@ -207,7 +240,8 @@ def resolve_profile(raw: Any) -> ResolvedVoice | None:
     pron = tuple(sorted(profile.pronunciations.items()))
     digest = hashlib.sha256(
         json.dumps(
-            [voice_id, model_id, voice_settings, profile.normalize_speech, profile.preferred_language, pron],
+            [voice_id, model_id, voice_settings, profile.normalize_speech, profile.preferred_language, pron,
+             profile.chunk_schedule],
             sort_keys=True,
             ensure_ascii=False,
         ).encode()
@@ -220,8 +254,20 @@ def resolve_profile(raw: Any) -> ResolvedVoice | None:
         language=profile.preferred_language,
         pronunciations=pron,
         speaking_style=profile.speaking_style,
+        natural_hinglish=profile.natural_hinglish,
+        tone=profile.tone,
+        chunk_schedule=tuple(profile.chunk_schedule) if profile.chunk_schedule else None,
         fingerprint=digest,
     )
+
+
+def prompt_options(raw: Any) -> tuple[bool, str | None, bool]:
+    """``(speaking_style, tone, natural_hinglish)`` for the voice prompt; ``(False, None, False)`` for no or
+    an invalid profile, which renders the prompt exactly as before."""
+    resolved = resolve_profile(raw)
+    if resolved is None:
+        return False, None, False
+    return resolved.speaking_style, resolved.tone, resolved.natural_hinglish
 
 
 def speaking_style_enabled(raw: Any) -> bool:

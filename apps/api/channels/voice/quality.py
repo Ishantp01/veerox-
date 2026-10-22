@@ -15,7 +15,18 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 VARIANTS = ("elevenlabs_turbo_v2_5", "elevenlabs_flash_v2_5", "openai_native")
-CRITERIA = ("naturalness", "clarity", "hindi_pronunciation", "name_pronunciation", "pacing", "interruption_feel")
+# Rated by listeners, 1-5 (5 = best; for ``artifacts`` 5 = none heard). First-audio latency is MEASURED, not
+# rated: see scripts/voice_compare.py --measure (ElevenLabs only; OpenAI native needs a live session).
+CRITERIA = (
+    "naturalness",
+    "indian_accent",
+    "hindi_pronunciation",
+    "hinglish_pronunciation",
+    "name_pronunciation",
+    "expressiveness",
+    "artifacts",
+    "overall_preference",
+)
 SCALE = (1, 5)
 MIN_RATERS = 3
 MIN_RATINGS_PER_VARIANT = 12

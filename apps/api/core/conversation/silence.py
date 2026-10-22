@@ -28,10 +28,11 @@ class SilenceMonitor:
     issue: bool = False
     _deadline: float | None = None
 
-    def agent_finished(self, now: float) -> None:
-        """The agent finished speaking (``now`` = when its audio stops playing)."""
+    def agent_finished(self, now: float, patience: float = 1.0) -> None:
+        """The agent finished speaking (``now`` = when its audio stops playing). ``patience`` stretches the wait
+        before the FIRST check, for a caller who asked for a moment to think."""
         if not self.issue:
-            self._deadline = now + self.check_after
+            self._deadline = now + self.check_after * (patience if self.checks == 0 else 1.0)
 
     def caller_active(self) -> None:
         """The caller made a sound or said something: start over."""

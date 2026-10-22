@@ -161,6 +161,16 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "hinglish": "Ji bilkul, online meeting ho sakti hai. Jab aap plan karna chahein, bata dijiye.",
         "hi": "जी बिल्कुल, ऑनलाइन मीटिंग हो सकती है। जब आप प्लान करना चाहें, बता दीजिए।",
     },
+    "give_time": {
+        "en": "Of course, take your time.",
+        "hinglish": "Ji bilkul, aap araam se dekh lijiye.",
+        "hi": "जी बिल्कुल, आप आराम से देख लीजिए।",
+    },
+    "confirm_day_correction": {
+        "en": "Sorry about that, I will go with the day you mentioned. Shall I note it down once you confirm?",
+        "hinglish": "Maaf kijiye, aapne jo din bataya wahi rakhte hain. Aap confirm kar dein toh main note kar leta hoon.",
+        "hi": "माफ़ कीजिए, आपने जो दिन बताया वही रखते हैं। आप पक्का कर दें तो मैं नोट कर लेता हूँ।",
+    },
     "honest_unknown_repeat": {
         "en": "I do not have a confirmed answer on that, and I have already passed your question to our team. Is there anything else I can help with?",
         "hinglish": "Iska confirmed jawab mere paas nahi hai, aur aapka sawaal main hamari team ko pehle hi de chuka hoon. Kya main aur kuch madad kar sakta hoon?",

@@ -182,8 +182,45 @@ Speaking style (human-like delivery):
 """
 
 
+VOICE_NATURAL_HINGLISH = """
+
+Natural Hindi / Hinglish:
+- Talk the way a polished Indian customer-support person talks on the phone: everyday Hinglish, not
+  textbook Hindi. Say "investment", "budget", "details", "appointment" rather than stiff Sanskritised words
+  (nivesh rashi, aavashyak, pradan karna, prayas, uplabdh, kripya).
+- Match the caller's language and level of formality. One English word from the caller is not a request to
+  change language.
+- Ask ONE short question at a time and end questions with a question mark so the voice rises naturally.
+- Say times and amounts the way people say them ("kal 12 baje", "paanch lakh"), but never change the
+  figure, date, time, name, price or condition itself - no rounding, no "around" where the fact is exact.
+- Do not add promises, guarantees or claims to sound friendlier.
+"""
+
+_TONE_SUFFIX = (
+    " Tone changes how you phrase things, never what is true or allowed: business rules, approved claims "
+    "and your AI disclosure stay exactly as they are."
+)
+VOICE_TONES = {
+    "professional_warm": "Tone: professional and warm. Polite, clear and steady; friendly but businesslike.",
+    "friendly": "Tone: friendly and conversational. Relaxed and approachable, light but still respectful; never overly familiar.",
+    "calm_reassuring": (
+        "Tone: calm and reassuring. Unhurried and gentle; acknowledge a concern before answering it. Respond to "
+        "what the caller actually says - do not claim to sense their feelings."
+    ),
+    "confident_informative": (
+        "Tone: confident and informative. Clear, direct, concrete explanations without hype; if you do not "
+        "know something, say so plainly and offer to have the team follow up."
+    ),
+}
+
+
 def render_voice_append(
-    brand: str, *, ai_disclosure: bool = True, speaking_style: bool = False
+    brand: str,
+    *,
+    ai_disclosure: bool = True,
+    speaking_style: bool = False,
+    tone: str | None = None,
+    natural_hinglish: bool = False,
 ) -> str:
     """The voice-channel prompt tail with the example greeting for ``brand``.
 
@@ -202,6 +239,10 @@ def render_voice_append(
     if speaking_style:
         # Opt-in per org (voice profile); off renders byte-identically to before.
         rendered = rendered.rstrip("\n") + "\n" + VOICE_SPEAKING_STYLE
+    if natural_hinglish:
+        rendered = rendered.rstrip("\n") + "\n" + VOICE_NATURAL_HINGLISH
+    if tone in VOICE_TONES:
+        rendered = rendered.rstrip("\n") + "\n\n" + VOICE_TONES[tone] + _TONE_SUFFIX + "\n"
     return rendered
 
 
