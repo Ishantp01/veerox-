@@ -356,11 +356,39 @@ async def _resolve_text(
     return _UNSUPPORTED_PLACEHOLDER
 
 
+def _log_delivery_statuses(payload: dict[str, Any]) -> None:
+    """Log Meta's delivery receipts for our outbound messages.
+
+    A send that Meta *accepts* can still fail to reach the phone — the reason
+    (e.g. 131026 "not a WhatsApp user", 131049 "ecosystem engagement" for a
+    marketing template) only arrives later as a ``statuses`` entry on the
+    webhook. ``failed`` is logged as a warning with Meta's error code so a
+    "message accepted but never received" report is diagnosable from logs.
+    """
+    for entry in payload.get("entry") or []:
+        for change in entry.get("changes") or []:
+            for status in (change.get("value") or {}).get("statuses") or []:
+                errors = status.get("errors") or []
+                event = "whatsapp_delivery_failed" if status.get("status") == "failed" else "whatsapp_delivery_status"
+                log = logger.warning if status.get("status") == "failed" else logger.info
+                log(
+                    event,
+                    wa_message_id=status.get("id"),
+                    status=status.get("status"),
+                    to=status.get("recipient_id"),
+                    category=(status.get("pricing") or {}).get("category"),
+                    error_code=errors[0].get("code") if errors else None,
+                    error_title=errors[0].get("title") if errors else None,
+                    error_detail=((errors[0].get("error_data") or {}).get("details") if errors else None),
+                )
+
+
 async def process_inbound(payload: dict[str, Any]) -> None:
     """Background-task entrypoint — never raises, always logs."""
     try:
         msg = _extract_message(payload)
         if msg is None:
+            _log_delivery_statuses(payload)
             logger.info("whatsapp_inbound_no_message", reason="status_or_empty")
             return
 
