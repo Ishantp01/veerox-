@@ -1052,6 +1052,17 @@ async def _handoff_body_params(
     return ([caller, why] + [why] * count)[:count]
 
 
+async def _org_owner_account_ids(db: AsyncSession, org_id: UUID) -> set[UUID]:
+    """Account ids of the org's owner membership(s) — the provisioning account
+    (``invited_by_id IS NULL``) that the Team page doesn't list."""
+    result = await db.execute(
+        select(OrgMembership.account_user_id).where(
+            OrgMembership.org_id == org_id, OrgMembership.invited_by_id.is_(None)
+        )
+    )
+    return set(result.scalars().all())
+
+
 async def _resolve_team_notify_targets(db: AsyncSession, org_id: UUID) -> list[tuple[UUID, str]]:
     """Every org teammate's ``(account_user_id, WhatsApp-notify number)`` for
     a human handoff, in a stable order (earliest-added membership first).
@@ -1073,6 +1084,11 @@ async def _resolve_team_notify_targets(db: AsyncSession, org_id: UUID) -> list[t
         .where(
             OrgMembership.org_id == org_id,
             AccountUser.mobile.is_not(None),
+            # The org owner (the account the org was provisioned under,
+            # ``invited_by_id IS NULL``) isn't a team member — the Team page
+            # hides it (team/page.tsx `!m.is_owner`) — so it must not be
+            # pinged with handoffs either.
+            OrgMembership.invited_by_id.is_not(None),
         )
         .order_by(OrgMembership.created_at)
     )
@@ -1154,9 +1170,17 @@ async def transfer_to_human(
     # would silently move a closed-able deal onto someone else's plate.
     lead: Lead | None = None
     existing_owner: tuple[UUID, str | None] | None = None
+    # The hidden org owner never receives handoffs (see
+    # _resolve_team_notify_targets), so a claim by them — e.g. left by an
+    # earlier round-robin or a failed send — doesn't pin the lead: it is
+    # re-routed to a real teammate below.
+    owner_account_ids = await _org_owner_account_ids(db, org_id)
     if user_id is not None:
         lead = await get_or_create_lead_for_user(db, org_id, user_id, phone=phone, channel=channel)
-        if lead.claimed_by_account_user_id is not None:
+        if (
+            lead.claimed_by_account_user_id is not None
+            and lead.claimed_by_account_user_id not in owner_account_ids
+        ):
             owner = await db.get(AccountUser, lead.claimed_by_account_user_id)
             existing_owner = (lead.claimed_by_account_user_id, owner.mobile if owner else None)
 
@@ -1174,7 +1198,11 @@ async def transfer_to_human(
         ).scalar_one_or_none()
         if target is not None:
             campaign = await db.get(CallCampaign, target.campaign_id)
-            if campaign is not None and campaign.created_by_account_user_id is not None:
+            if (
+                campaign is not None
+                and campaign.created_by_account_user_id is not None
+                and campaign.created_by_account_user_id not in owner_account_ids
+            ):
                 owner = await db.get(AccountUser, campaign.created_by_account_user_id)
                 campaign_owner = (campaign.created_by_account_user_id, owner.mobile if owner else None)
 

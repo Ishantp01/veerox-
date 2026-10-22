@@ -633,7 +633,7 @@ async def test_transfer_to_human_notifies_org_owner_via_whatsapp(
     owner = AccountUser(email="owner@example.com", token_hash="x", mobile="+919999999999")
     db_session.add(owner)
     await db_session.flush()
-    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin", invited_by_id=owner.id))
 
     lead_user = User(org_id=ORG_ID, phone="+910000000099", name="Asha")
     db_session.add(lead_user)
@@ -678,7 +678,7 @@ async def test_transfer_to_human_uses_org_chosen_handoff_template(
     owner = AccountUser(email="owner@example.com", token_hash="x", mobile="+919999999999")
     db_session.add(owner)
     await db_session.flush()
-    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin", invited_by_id=owner.id))
     lead_user = User(org_id=ORG_ID, phone="+910000000099", name="Asha")
     db_session.add(lead_user)
     await db_session.commit()
@@ -725,7 +725,7 @@ async def test_transfer_to_human_sends_chosen_template_in_its_own_language(
     owner = AccountUser(email="owner@example.com", token_hash="x", mobile="+919999999999")
     db_session.add(owner)
     await db_session.flush()
-    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin", invited_by_id=owner.id))
     lead_user = User(org_id=ORG_ID, phone="+910000000099", name="Asha")
     db_session.add(lead_user)
     await db_session.commit()
@@ -784,7 +784,7 @@ async def test_transfer_to_human_hindi_template_survives_a_meta_that_checks_lang
     owner = AccountUser(email="owner@example.com", token_hash="x", mobile="+919999999999")
     db_session.add(owner)
     await db_session.flush()
-    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin", invited_by_id=owner.id))
     lead_user = User(org_id=ORG_ID, phone="+910000000099", name="Asha")
     db_session.add(lead_user)
     await db_session.commit()
@@ -823,7 +823,7 @@ async def test_transfer_to_human_fallback_template_uses_its_synced_language(
     owner = AccountUser(email="owner@example.com", token_hash="x", mobile="+919999999999")
     db_session.add(owner)
     await db_session.flush()
-    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin", invited_by_id=owner.id))
     lead_user = User(org_id=ORG_ID, phone="+910000000099", name="Asha")
     db_session.add(lead_user)
     await db_session.commit()
@@ -869,7 +869,7 @@ async def test_transfer_to_human_sizes_body_params_to_chosen_template(
     owner = AccountUser(email="owner@example.com", token_hash="x", mobile="+919999999999")
     db_session.add(owner)
     await db_session.flush()
-    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin", invited_by_id=owner.id))
     lead_user = User(org_id=ORG_ID, phone="+910000000099", name="Asha")
     db_session.add(lead_user)
     await db_session.commit()
@@ -900,7 +900,7 @@ async def test_transfer_to_human_auto_assigns_lead_to_notified_teammate(
     owner = AccountUser(email="owner2@example.com", token_hash="x", mobile="+919999999998")
     db_session.add(owner)
     await db_session.flush()
-    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin", invited_by_id=owner.id))
 
     lead_user = User(org_id=ORG_ID, phone="+910000000098", name="Priya")
     db_session.add(lead_user)
@@ -940,8 +940,8 @@ async def test_transfer_to_human_already_claimed_lead_stays_with_its_owner(
     owner_b = AccountUser(email="owner-b@example.com", token_hash="xb", mobile="+919999999002")
     db_session.add_all([owner_a, owner_b])
     await db_session.flush()
-    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner_a.id, role="member"))
-    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner_b.id, role="member"))
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner_a.id, role="member", invited_by_id=owner_a.id))
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner_b.id, role="member", invited_by_id=owner_b.id))
 
     lead_user = User(org_id=ORG_ID, phone="+910000000096", name="Kunal")
     db_session.add(lead_user)
@@ -1028,6 +1028,49 @@ async def test_transfer_to_human_falls_back_to_any_teammate_when_owner_has_no_mo
     assert sent[0]["to"] == "+918888888888"
 
 
+async def test_transfer_to_human_never_notifies_the_hidden_org_owner(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The org owner (``invited_by_id IS NULL``) isn't listed on the Team page, so
+    it must not get handoffs — even with a mobile on file and even when it
+    already holds the lead's claim. The visible member gets both the message
+    and the lead."""
+    sent: list[dict[str, object]] = []
+
+    async def _fake_send_template(
+        access_token: str, to: str, template_name: str, **kwargs: object
+    ) -> None:
+        sent.append({"to": to, "template_name": template_name, **kwargs})
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
+    await _seed_org(db_session)
+
+    owner = AccountUser(email="owner@example.com", token_hash="x", mobile="+919589024401")
+    member = AccountUser(email="member@example.com", token_hash="y", mobile="+919179609988")
+    lead_user = User(org_id=ORG_ID, phone="+910000000099", name="Asha")
+    db_session.add_all([owner, member, lead_user])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin", invited_by_id=None),
+            OrgMembership(
+                org_id=ORG_ID, account_user_id=member.id, role="member", invited_by_id=owner.id
+            ),
+        ]
+    )
+    lead = Lead(org_id=ORG_ID, user_id=lead_user.id, claimed_by_account_user_id=owner.id)
+    db_session.add(lead)
+    await db_session.commit()
+
+    await transfer_to_human(
+        db_session, reason="wants a callback", user_id=lead_user.id, channel="whatsapp"
+    )
+
+    assert [s["to"] for s in sent] == ["+919179609988"]
+    await db_session.refresh(lead)
+    assert lead.claimed_by_account_user_id == member.id
+
+
 async def _seed_campaign_conversation(
     db: AsyncSession, *, creator_id: uuid.UUID | None, user: User
 ) -> uuid.UUID:
@@ -1071,8 +1114,8 @@ async def test_transfer_to_human_campaign_human_support_routes_to_campaign_creat
     await db_session.flush()
     db_session.add_all(
         [
-            OrgMembership(org_id=ORG_ID, account_user_id=creator.id, role="member"),
-            OrgMembership(org_id=ORG_ID, account_user_id=other.id, role="admin"),
+            OrgMembership(org_id=ORG_ID, account_user_id=creator.id, role="member", invited_by_id=creator.id),
+            OrgMembership(org_id=ORG_ID, account_user_id=other.id, role="admin", invited_by_id=other.id),
         ]
     )
     user = User(org_id=ORG_ID, phone="+910000000200", name="Lead")
@@ -1107,7 +1150,7 @@ async def test_transfer_to_human_campaign_with_no_creator_falls_back_to_round_ro
     teammate = AccountUser(email="tm@example.com", token_hash="x", mobile="+919333333333")
     db_session.add(teammate)
     await db_session.flush()
-    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=teammate.id, role="member"))
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=teammate.id, role="member", invited_by_id=teammate.id))
     user = User(org_id=ORG_ID, phone="+910000000201", name="Lead")
     db_session.add(user)
     await db_session.flush()
@@ -1139,8 +1182,8 @@ async def test_transfer_to_human_campaign_creator_without_mobile_still_assigns_l
     await db_session.flush()
     db_session.add_all(
         [
-            OrgMembership(org_id=ORG_ID, account_user_id=creator.id, role="member"),
-            OrgMembership(org_id=ORG_ID, account_user_id=teammate.id, role="admin"),
+            OrgMembership(org_id=ORG_ID, account_user_id=creator.id, role="member", invited_by_id=creator.id),
+            OrgMembership(org_id=ORG_ID, account_user_id=teammate.id, role="admin", invited_by_id=teammate.id),
         ]
     )
     user = User(org_id=ORG_ID, phone="+910000000202", name="Lead")
