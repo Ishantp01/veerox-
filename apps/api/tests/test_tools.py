@@ -798,6 +798,44 @@ async def test_transfer_to_human_hindi_template_survives_a_meta_that_checks_lang
     assert result["notified"] is True
 
 
+async def test_transfer_to_human_fallback_template_uses_its_synced_language(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No handoff template chosen: the built-in appointment_confirmation
+    fallback must also go out in the language it is synced under, not en_US."""
+    from apps.api.db.models import WhatsAppTemplate
+
+    sent: list[dict[str, object]] = []
+
+    async def _fake_send_template(
+        access_token: str, to: str, template_name: str, **kwargs: object
+    ) -> None:
+        sent.append({"to": to, "template_name": template_name, **kwargs})
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
+    await _seed_org(db_session)
+    db_session.add(
+        WhatsAppTemplate(
+            org_id=ORG_ID, name="appointment_confirmation", language="en",
+            param_labels=["Param 1", "Param 2", "Param 3"], active=True,
+        )
+    )
+    owner = AccountUser(email="owner@example.com", token_hash="x", mobile="+919999999999")
+    db_session.add(owner)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+    lead_user = User(org_id=ORG_ID, phone="+910000000099", name="Asha")
+    db_session.add(lead_user)
+    await db_session.commit()
+
+    await transfer_to_human(
+        db_session, reason="wants a callback", user_id=lead_user.id, channel="whatsapp"
+    )
+
+    assert sent[-1]["template_name"] == "appointment_confirmation"
+    assert sent[-1]["language_code"] == "en"
+
+
 async def test_transfer_to_human_sizes_body_params_to_chosen_template(
     db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:
