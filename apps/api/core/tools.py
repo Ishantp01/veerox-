@@ -1016,6 +1016,17 @@ _AGENT_CONNECT_TEMPLATE_APPROVED = False
 _NO_REASON_GIVEN = "Not specified"
 
 
+async def _handoff_language(db: AsyncSession, template_name: str) -> str:
+    """The language code Meta has the org's handoff template under (e.g. ``hi``
+    for ``welcome_message_hindi``). Sending the wrong code fails with Meta
+    error 132001 ("template name does not exist in en_US"), so use the synced
+    row's own language and only fall back to ``en_US`` when there is none."""
+    row = (
+        await db.execute(select(WhatsAppTemplate).where(WhatsAppTemplate.name == template_name))
+    ).scalars().first()
+    return row.language if row and row.language else "en_US"
+
+
 async def _handoff_body_params(
     db: AsyncSession, template_name: str, *, phone: str | None, reason: str | None
 ) -> list[str]:
@@ -1189,9 +1200,11 @@ async def transfer_to_human(
         # sized to its own {{n}} count — {{1}} caller number, {{2}} reason,
         # extras padded (see _handoff_body_params).
         chosen = org.agent_connect_template_name if org else None
+        template_language = "en_US"
         if chosen:
             template_name = chosen
             body_params = await _handoff_body_params(db, chosen, phone=phone, reason=reason)
+            template_language = await _handoff_language(db, chosen)
         elif _AGENT_CONNECT_TEMPLATE_APPROVED:
             template_name = _AGENT_CONNECT_TEMPLATE_NAME
             body_params = [phone or "not provided", reason or _NO_REASON_GIVEN]
@@ -1213,6 +1226,7 @@ async def transfer_to_human(
                     meta_creds.access_token,
                     _normalize_phone(notify_phone),
                     template_name,
+                    language_code=template_language,
                     body_params=body_params,
                     phone_number_id=phone_number_id,
                 )
