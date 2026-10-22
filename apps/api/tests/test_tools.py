@@ -692,6 +692,112 @@ async def test_transfer_to_human_uses_org_chosen_handoff_template(
     assert sent[0]["body_params"] == ["+910000000099", "wants pricing details"]
 
 
+async def test_transfer_to_human_sends_chosen_template_in_its_own_language(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A handoff template synced under a non-English language (e.g. ``hi``) must
+    be sent with that code — en_US makes Meta fail with 132001 and the team
+    member is never notified. With no synced row it still falls back to en_US."""
+    from apps.api.db.models import WhatsAppTemplate
+
+    sent: list[dict[str, object]] = []
+
+    async def _fake_send_template(
+        access_token: str, to: str, template_name: str, **kwargs: object
+    ) -> None:
+        sent.append({"to": to, "template_name": template_name, **kwargs})
+
+    monkeypatch.setattr(tools.wa_client, "send_template", _fake_send_template)
+    await _seed_org(db_session)
+    org = await db_session.get(Org, ORG_ID)
+    assert org is not None
+    org.agent_connect_template_name = "welcome_message_hindi"
+    db_session.add(
+        WhatsAppTemplate(
+            org_id=ORG_ID,
+            name="welcome_message_hindi",
+            language="hi",
+            param_labels=["Param 1", "Param 2"],
+            active=True,
+        )
+    )
+
+    owner = AccountUser(email="owner@example.com", token_hash="x", mobile="+919999999999")
+    db_session.add(owner)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+    lead_user = User(org_id=ORG_ID, phone="+910000000099", name="Asha")
+    db_session.add(lead_user)
+    await db_session.commit()
+
+    await transfer_to_human(
+        db_session, reason="wants a callback", user_id=lead_user.id, channel="whatsapp"
+    )
+    assert sent[-1]["template_name"] == "welcome_message_hindi"
+    assert sent[-1]["language_code"] == "hi"
+
+    # Same chosen name with no synced row falls back to en_US.
+    org.agent_connect_template_name = "unsynced_template"
+    await db_session.commit()
+    await transfer_to_human(
+        db_session, reason="wants a callback", user_id=lead_user.id, channel="whatsapp"
+    )
+    assert sent[-1]["language_code"] == "en_US"
+
+
+async def test_transfer_to_human_hindi_template_survives_a_meta_that_checks_language(
+    db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end through the real ``send_template`` against a stand-in for Meta
+    that answers 404 / #132001 unless the template is requested in ``hi`` — the
+    exact failure seen in production for ``welcome_message_hindi``."""
+    import httpx
+
+    from apps.api.db.models import WhatsAppTemplate
+
+    requests: list[dict[str, object]] = []
+
+    def _fake_meta(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        if body["template"]["language"]["code"] != "hi":
+            return httpx.Response(
+                404,
+                json={"error": {"message": "(#132001) Template name does not exist in the translation",
+                                "code": 132001}},
+            )
+        return httpx.Response(200, json={"messages": [{"id": "wamid.TEST"}]})
+
+    monkeypatch.setattr(
+        tools.wa_client, "_http", httpx.AsyncClient(transport=httpx.MockTransport(_fake_meta))
+    )
+    await _seed_org(db_session)
+    org = await db_session.get(Org, ORG_ID)
+    assert org is not None
+    org.agent_connect_template_name = "welcome_message_hindi"
+    db_session.add(
+        WhatsAppTemplate(
+            org_id=ORG_ID, name="welcome_message_hindi", language="hi",
+            param_labels=["Param 1", "Param 2"], active=True,
+        )
+    )
+    owner = AccountUser(email="owner@example.com", token_hash="x", mobile="+919999999999")
+    db_session.add(owner)
+    await db_session.flush()
+    db_session.add(OrgMembership(org_id=ORG_ID, account_user_id=owner.id, role="admin"))
+    lead_user = User(org_id=ORG_ID, phone="+910000000099", name="Asha")
+    db_session.add(lead_user)
+    await db_session.commit()
+
+    result = await transfer_to_human(
+        db_session, reason="wants a callback", user_id=lead_user.id, channel="whatsapp"
+    )
+
+    assert len(requests) == 1
+    assert requests[0]["template"]["language"]["code"] == "hi"
+    assert result["notified"] is True
+
+
 async def test_transfer_to_human_sizes_body_params_to_chosen_template(
     db_session: AsyncSession, fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:
