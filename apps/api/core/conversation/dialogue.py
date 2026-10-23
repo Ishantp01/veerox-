@@ -126,6 +126,8 @@ _HESITATION_RE = re.compile(
     r"haven'?t (yet )?decided|not decided|undecided|\bmaybe\b|i'?ll see|"
     r"dekhte hain|dekhta hoon|dekhti hoon|sochna|sochta|sochti|sochunga|sochungi|soch (ke|kar)|soch raha|"
     r"decide (nahi|nhi|nahin)|pakka (nahi|nhi|nahin)|sure (nahi|nhi|nahin)|pata nahi|confused|dilemma|"
+    r"samajh (nahi|nhi|nahin) aa|samajh (nahi|nhi|nahin) pa|(interested|interest) hoon,? ya (nahi|nhi|nahin)|"
+    r"hoon ya (nahi|nhi|nahin)|hai ya (nahi|nhi|nahin)|"
     r"सोचना|सोचूंगा|सोचूँगा|देखते हैं|पक्का नहीं|तय नहीं)",
     re.IGNORECASE,
 )
@@ -753,7 +755,9 @@ def appointment_ready(understanding: Understanding, state: DialogueState, memory
 
 _D_ANSWER_FIRST = (
     "The caller asked a direct question: answer it first, before anything else, then stop. "
-    "Do not carry on with your earlier line."
+    "Do not carry on with your earlier line. Answer accurately and immediately, never ignore it to repeat "
+    "an earlier statement or push for a meeting, and only move to a next step once their point is fully "
+    "resolved."
 )
 _D_NO_FIGURES = (
     "You have no approved figure for investment, profit, returns or income, so do not state, "
@@ -767,8 +771,10 @@ _D_COMMITMENT = (
     "refunds or contract terms."
 )
 _D_ACK_HESITATION = (
-    "Acknowledge briefly that they are still deciding and that there is no hurry; do not argue "
-    "or sell harder."
+    "Cushion first: they are still deciding, so your reply MUST open with one soft sentence that "
+    "acknowledges their doubt and says there is no hurry (for example \"Main aapki uljhan samajh sakti hoon, koi jaldi nahi hai\", in the "
+    "caller's language and your own gender). Only after that, gently offer to explain or answer anything. "
+    "Do not argue, sell harder, or move straight to a meeting or time."
 )
 _D_REASSURE = "Briefly reassure them there is no pressure on them to decide."
 _D_ONLINE = "They prefer an online meeting: say an online meeting works fine and do not insist on anything else."

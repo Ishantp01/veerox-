@@ -168,8 +168,9 @@ class Settings(BaseSettings):
     voice_interruption_mode: str = "answer_now"
     # Silence (ms) the Realtime VAD waits before deciding the caller has finished
     # speaking — the floor on how soon the agent can start answering. Lower =
-    # faster replies, but a caller who pauses mid-sentence is cut off more.
-    voice_vad_silence_ms: int = 300
+    # faster replies, but a caller who pauses mid-sentence is cut off more. 500 balances
+    # snappy replies against cutting callers off mid-thought ("rukho rukho" in test calls).
+    voice_vad_silence_ms: int = 500
     # Adaptive endpointing: hold the reply up to ~1s when the caller's text looks
     # unfinished ("haan, mera matlab..."). Off by default — it adds a second of
     # latency whenever a sentence happens to end on a connective word.

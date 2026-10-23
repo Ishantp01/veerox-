@@ -33,7 +33,7 @@ from uuid import UUID
 import structlog
 
 from apps.api.channels.voice import elevenlabs_client
-from apps.api.channels.voice.voice_profile import ResolvedVoice
+from apps.api.channels.voice.voice_profile import ResolvedVoice, platform_model_id, platform_voice_id
 from apps.api.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -179,7 +179,7 @@ class GreetingAudioCache:
         # normalization, pronunciations) is part of it, so changing speed or a
         # respelling also invalidates the cached audio.
         if voice is None:
-            raw = f"{org_id}|{settings.elevenlabs_voice_id}|{settings.elevenlabs_model_id}|{text}"
+            raw = f"{org_id}|{platform_voice_id()}|{platform_model_id()}|{text}"
         else:
             raw = f"{org_id}|profile:{voice.audio_fingerprint()}|{text}"
         return hashlib.sha256(raw.encode()).hexdigest()

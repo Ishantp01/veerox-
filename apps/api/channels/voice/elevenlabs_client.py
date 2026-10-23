@@ -34,7 +34,14 @@ import structlog
 import websockets
 
 from apps.api.channels.voice.tts_normalize import TTSNormalizer
-from apps.api.channels.voice.voice_profile import ResolvedVoice
+from apps.api.channels.voice.voice_profile import (
+    DEFAULT_STYLE,
+    LEGACY_VOICE_SETTINGS,
+    STYLE_MODELS,
+    ResolvedVoice,
+    platform_model_id,
+    platform_voice_id,
+)
 from apps.api.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -63,14 +70,16 @@ class ElevenLabsTTSSession:
     ) -> None:
         # ``profile`` is the call's org voice profile merged over the platform
         # settings (voice_profile.resolve_profile). None = exactly the
-        # pre-profile behaviour: platform voice/model, stability 0.5 and
+        # pre-profile behaviour: platform voice/model, stability 0.42 and
         # similarity_boost 0.8, no text rewriting.
         self._profile = profile
-        self._voice_id = voice_id or (profile.voice_id if profile else None) or settings.elevenlabs_voice_id
-        self._model_id = model_id or (profile.model_id if profile else None) or settings.elevenlabs_model_id
+        self._voice_id = voice_id or (profile.voice_id if profile else None) or platform_voice_id()
+        self._model_id = model_id or (profile.model_id if profile else None) or platform_model_id()
         self._voice_settings: dict[str, Any] = (
-            dict(profile.voice_settings) if profile else {"stability": 0.5, "similarity_boost": 0.8}
+            dict(profile.voice_settings) if profile else dict(LEGACY_VOICE_SETTINGS)
         )
+        if not profile and self._model_id in STYLE_MODELS:
+            self._voice_settings["style"] = DEFAULT_STYLE
         # Spoken-form rewriting of the text sent to TTS (off unless the org's
         # profile enables it); None means send text through untouched.
         self._normalizer: TTSNormalizer | None = (

@@ -381,6 +381,30 @@ prospect who has clearly declined.
 """
 
 
+def whatsapp_campaign_qualification_append(criteria: str) -> str:
+    """WhatsApp twin of ``campaign_qualification_append``: this chat is the
+    reply to an outbound campaign message, so the prospect must be judged
+    against ``criteria`` and the verdict recorded via ``qualify_lead``."""
+    return f"""
+This chat is a reply to an outbound WhatsApp campaign message we sent this contact. On top of
+everything above, your job is to judge them against the following criteria:
+
+{criteria.strip()}
+
+Ask enough short, natural questions (one at a time) to judge them. Don't read the criteria back
+verbatim. Call ``qualify_lead`` exactly once, in the same turn you have a clear signal either way:
+- They say they are interested / want to proceed / ask for a call, price or demo -> call
+  qualify_lead with interested=true right away, then continue helping (e.g. place the call).
+- They explicitly decline or say they are not interested -> call qualify_lead with
+  interested=false (and mark_not_interested).
+Do not wait for a perfect answer to every criterion, and never reply "noted" or "we will
+contact you" without having called qualify_lead first. A recorded verdict is required either way.
+
+If they ask for a call (e.g. "call karo", "call me"), call initiate_ai_call right then - never just
+say you will call. Only say the call is on its way when the tool result status is "ok".
+"""
+
+
 OUTBOUND_CALL_PROMPT = """
 You are an AI agent calling on behalf of Veerox Group. Veerox builds AI-powered sales and
 support agents that handle customer conversations - over phone and WhatsApp - for businesses.

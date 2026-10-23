@@ -639,7 +639,7 @@ def test_latency_defaults_favour_speed() -> None:
     from apps.api.config import Settings
 
     assert Settings.model_fields["voice_endpoint_hold"].default is False
-    assert Settings.model_fields["voice_vad_silence_ms"].default <= 300
+    assert Settings.model_fields["voice_vad_silence_ms"].default == 500
 
 
 def test_vad_silence_window_comes_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -707,3 +707,8 @@ async def test_reply_latency_is_logged_for_text_output_too() -> None:
         {"type": "response.output_text.delta", "delta": "Hello"}, call, oai, state, log,  # type: ignore[arg-type]
     )
     assert [name for name, _ in log.events].count("voice_reply_latency") == 1
+
+
+def test_hoon_is_a_listening_filler_not_a_turn() -> None:
+    assert turn_controller.classify_partial("haan hoon") == "filler"
+    assert turn_controller.classify_partial("interested hoon ya nahi") == "real"

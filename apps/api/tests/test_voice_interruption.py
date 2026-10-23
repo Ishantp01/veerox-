@@ -449,7 +449,7 @@ async def test_interruption_during_normalized_speech_does_not_flush_buffered_tex
     profile = ResolvedVoice(
         voice_id="v" * 12,
         model_id="eleven_flash_v2_5",
-        voice_settings={"stability": 0.5, "similarity_boost": 0.8},
+        voice_settings={"stability": 0.42, "similarity_boost": 0.8},
         normalize=True,
     )
     session = await _RealElevenLabsSession(profile=profile).__aenter__()

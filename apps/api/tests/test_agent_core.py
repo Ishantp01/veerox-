@@ -176,6 +176,65 @@ async def test_handle_turn_whatsapp_uses_campaigns_pinned_script(
     assert "PINNED_SCRIPT_MARKER" in system_message
 
 
+async def test_campaign_reply_skips_engine_and_qualifies_lead(
+    db_session: AsyncSession,
+    fake_redis: _FakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In human_conversation mode a reply to an open campaign message must
+    not go through the engine (it cannot qualify or call): the tool path runs
+    with the campaign criteria in the prompt, and qualify_lead resolves the
+    target."""
+    db_session.add(Org(id=ORG_ID, name="Test Org", conversation_mode="human_conversation"))
+    db_session.add(User(id=USER_ID, org_id=ORG_ID, phone="919000000001", name="Test"))
+    campaign = CallCampaign(org_id=ORG_ID, name="C", criteria="CRITERIA_MARKER", channel="whatsapp")
+    db_session.add(campaign)
+    await db_session.flush()
+    target = CampaignTarget(
+        campaign_id=campaign.id, org_id=ORG_ID, name="Asha", phone="+919000000001",
+        channel="whatsapp", status="completed",
+    )
+    db_session.add(target)
+    await db_session.commit()
+
+    async def explode(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("engine ran on a campaign reply")
+
+    monkeypatch.setattr(agent_module, "run_engine", explode)
+    calls = _patch_llm_sequence(
+        monkeypatch,
+        [
+            ChatResult(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        id="q1",
+                        name="qualify_lead",
+                        arguments_json='{"interested": true, "reason": "said interested"}',
+                    )
+                ],
+                tokens_in=1,
+                tokens_out=1,
+            ),
+            ChatResult(content="Great!", tokens_in=1, tokens_out=1),
+        ],
+    )
+
+    reply = await agent_core.handle_turn(
+        db=db_session,
+        user_id=USER_ID,
+        channel="whatsapp",
+        input_text="interested",
+        campaign_target_id=target.id,
+    )
+
+    assert reply == "Great!"
+    system_message = calls[0][0]["content"]
+    assert "CRITERIA_MARKER" in system_message and "qualify_lead" in system_message
+    await db_session.refresh(target)
+    assert target.qualified is True
+
+
 async def test_handle_turn_kill_switch_short_circuits(
     db_session: AsyncSession,
     fake_redis: _FakeRedis,

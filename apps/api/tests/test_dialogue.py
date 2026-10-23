@@ -449,3 +449,11 @@ def test_tags_hold_one_disposition_and_a_weak_signal_never_downgrades_a_real_out
 async def test_a_model_failure_still_falls_back_exactly_as_before() -> None:
     with pytest.raises(UnderstandError):
         await _understand("zebra quantum marmalade", llm=_CountingLLM())  # the model is asked and fails
+
+
+def test_hinglish_not_sure_if_interested_is_hesitation_and_cushioned() -> None:
+    from datetime import date
+
+    text = "mujhe samajh nahi aa raha hai ki interested hoon ya nahi"
+    assert dialogue.HESITATION in dialogue.analyse(text, memory={}, today=date(2026, 10, 23)).signals
+    assert "MUST open with one soft sentence" in dialogue._D_ACK_HESITATION

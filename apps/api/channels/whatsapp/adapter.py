@@ -270,10 +270,17 @@ async def _find_open_campaign_target(db: AsyncSession, phone: str) -> UUID | Non
     just the first one (mirrors the intent of voice's per-call
     campaign_target_id, adapted for WhatsApp's multi-turn webhook model).
     """
+    # Meta delivers the sender as bare digits ("919876543210") while campaign
+    # targets are stored E.164 ("+919876543210"), so match on the national
+    # number's last 10 digits, same as core/tools.py::_same_phone.
+    digits = re.sub(r"\D", "", phone or "")
+    if len(digits) < 7:
+        return None
+    suffix = digits[-10:]
     stmt = (
         select(CampaignTarget.id)
         .where(
-            CampaignTarget.phone == phone,
+            CampaignTarget.phone.like(f"%{suffix}"),
             CampaignTarget.channel == "whatsapp",
             CampaignTarget.status == "completed",
             CampaignTarget.qualified.is_(None),

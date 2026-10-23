@@ -432,7 +432,8 @@ def build_instruction(plan: VoicePlan, *, action_result: dict[str, Any] | None) 
         )
     elif kind == "hesitation_support":
         body = (
-            "The caller is still deciding. Acknowledge that there is no hurry, and offer to share "
+            "The caller is unsure or still deciding. Start with one soft sentence acknowledging their doubt "
+            "(e.g. \"Main aapki uljhan samajh sakti hoon, koi jaldi nahi hai\"), then offer to share "
             "information or answer a question. Do not ask for a meeting or a decision."
         )
     elif kind == "confirm_correction":
@@ -492,6 +493,13 @@ def build_instruction(plan: VoicePlan, *, action_result: dict[str, Any] | None) 
         ) + "."
     if decision.directives:
         body += " " + " ".join(decision.directives)
+    body += (
+        " If the caller asks a direct question or raises an objection, address and answer it accurately and "
+        "immediately (from approved facts only; if you have none, say so honestly). Never ignore it to repeat a "
+        "previous statement or push for a meeting; move to next steps only after their query is fully resolved. "
+        "If their wording does not fit the situation above, answer what they actually said in your own words "
+        "instead of falling back on a stock line."
+    )
     body += " Do not repeat information you have already given in this call."
     return f"DECISION FOR THIS TURN: {lead}{body}"
 

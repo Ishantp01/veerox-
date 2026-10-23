@@ -35,7 +35,7 @@ import structlog
 
 from apps.api.channels.voice import elevenlabs_client
 from apps.api.channels.voice.greeting import synthesize_greeting
-from apps.api.channels.voice.voice_profile import ResolvedVoice
+from apps.api.channels.voice.voice_profile import ResolvedVoice, platform_model_id, platform_voice_id
 from apps.api.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -63,7 +63,7 @@ class FallbackAudioCache:
     def key(voice: ResolvedVoice | None) -> str:
         if voice is not None:
             return voice.audio_fingerprint()
-        raw = f"platform|{settings.elevenlabs_voice_id}|{settings.elevenlabs_model_id}"
+        raw = f"platform|{platform_voice_id()}|{platform_model_id()}"
         return hashlib.sha256(raw.encode()).hexdigest()
 
     def get(self, voice: ResolvedVoice | None) -> tuple[str, ...] | None:

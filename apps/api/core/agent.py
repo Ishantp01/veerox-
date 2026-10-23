@@ -31,6 +31,7 @@ from apps.api.core.prompts import (
     render_voice_append,
     WHATSAPP_APPEND,
     current_datetime_block,
+    whatsapp_campaign_qualification_append,
 )
 from apps.api.core.org_social_links import social_links_prompt_block
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS
@@ -488,6 +489,7 @@ class AgentCore:
         # Also resolves the owning campaign's pinned WhatsApp script (if any)
         # for _system_prompt_for below — same one query, no extra round-trip.
         whatsapp_script_id: UUID | None = None
+        campaign_criteria: str | None = None
         if campaign_target_id is not None:
             target = await db.get(CampaignTarget, campaign_target_id)
             if target is not None:
@@ -497,6 +499,7 @@ class AgentCore:
                 if channel == "whatsapp":
                     campaign = await db.get(CallCampaign, target.campaign_id)
                     whatsapp_script_id = campaign.whatsapp_script_id if campaign else None
+                    campaign_criteria = campaign.criteria if campaign else None
 
         history = await load_last_n(db, user_id)
         org_row = await db.get(Org, org_id)
@@ -508,8 +511,14 @@ class AgentCore:
         # reply and the unchanged script/tool-calling path below runs.
         engine_tokens_in = engine_tokens_out = 0
         engine_guidance: str | None = None
+        # A reply to an open campaign message skips the engine: its action
+        # allow-list has no qualify_lead / initiate_ai_call, so it could
+        # answer "interested" or "call karo" without recording or dialling
+        # anything. The tool-calling path below owns campaign replies until
+        # qualify_lead resolves the target.
         if (
             channel == "whatsapp"
+            and campaign_criteria is None
             and org_row is not None
             and org_row.conversation_mode in ("human_conversation", "smart_script")
         ):
@@ -557,6 +566,11 @@ class AgentCore:
         system_prompt = await _system_prompt_for(
             db, org_id, channel, whatsapp_script_id, whatsapp_phone_number_id
         )
+        if campaign_criteria:
+            system_prompt = (
+                f"{system_prompt}\n\n"
+                f"{whatsapp_campaign_qualification_append(campaign_criteria).strip()}"
+            )
         if engine_guidance:
             # Smart Script: the script answers, steered by the detected scenario.
             system_prompt = (

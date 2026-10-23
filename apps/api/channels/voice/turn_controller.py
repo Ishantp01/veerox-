@@ -51,7 +51,7 @@ BACKCHANNEL_WORDS = frozenset(
     {
         "ok", "okay", "okk", "k", "kk", "hmm", "hm", "hmmm", "mm", "mmm", "mhm", "uh", "um",
         "uhh", "umm", "oh", "ohh", "ah", "aah", "haan", "han", "haa", "ha", "hanji", "haanji",
-        "ji", "achha", "accha", "acha", "achcha", "theek", "thik", "tik", "hai", "sahi",
+        "ji", "hoon", "hun", "achha", "accha", "acha", "achcha", "theek", "thik", "tik", "hai", "sahi",
         "right", "yes", "yeah", "yep", "yup", "sure", "fine", "alright", "all", "good", "nice",
         "cool", "great", "got", "it", "i", "see", "understood", "bilkul", "samajh", "gaya",
         "gayi", "sir", "madam", "mam", "ma'am", "lovely", "perfect", "wow", "true", "correct",

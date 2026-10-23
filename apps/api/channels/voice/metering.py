@@ -33,6 +33,8 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+
+from apps.api.channels.voice.voice_profile import platform_model_id
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
@@ -212,7 +214,7 @@ async def flush_call_usage(
     await emit("transcribe", "transcribe_seconds", "seconds", "openai", "voice_live_transcribe",
                {"model": settings.voice_live_transcribe_model, "what": "audio streamed to the transcription connection"})
     await emit("tts", "tts_characters", "characters", "elevenlabs", "voice_tts",
-               {"retry_characters": delta.get("tts_retry", 0), "model": settings.elevenlabs_model_id})
+               {"retry_characters": delta.get("tts_retry", 0), "model": platform_model_id()})
     await emit("judge_in", "ai_input_tokens", "tokens", "openai", "voice_turn_judge", {})
     await emit("judge_out", "ai_output_tokens", "tokens", "openai", "voice_turn_judge", {})
     await emit("call_seconds", "voice_seconds", "seconds", provider, "realtime_bridge", {}, service="voice")

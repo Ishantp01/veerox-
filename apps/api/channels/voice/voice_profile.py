@@ -2,7 +2,7 @@
 
 Stored as a nullable JSON document on ``Org.voice_profile``. **NULL (every
 existing org) means "no profile": the call uses the platform settings and the
-exact handshake it always sent** (``stability 0.5``, ``similarity_boost 0.8``,
+exact handshake it always sent** (``stability 0.42``, ``similarity_boost 0.8``,
 ``settings.elevenlabs_voice_id`` / ``settings.elevenlabs_model_id``).
 ``resolve_profile`` returns ``None`` in that case so callers can keep their
 pre-existing code path untouched.
@@ -45,9 +45,9 @@ logger = structlog.get_logger(__name__)
 
 # model id -> short note for the settings page / comparison table.
 ALLOWED_MODELS: dict[str, str] = {
-    "eleven_flash_v2_5": "lowest latency (platform default)",
+    "eleven_flash_v2_5": "lowest latency (no style support)",
     "eleven_turbo_v2_5": "low latency, usually better quality than flash",
-    "eleven_multilingual_v2": "highest quality, slower - not recommended as a live default",
+    "eleven_multilingual_v2": "most expressive, higher latency (platform default)",
 }
 # Models for which ``style`` is forwarded (and accepted on save).
 STYLE_MODELS = frozenset({"eleven_multilingual_v2"})
@@ -65,8 +65,26 @@ _VOICE_ID_RE = re.compile(r"^[A-Za-z0-9]{10,40}$")
 # Private-use characters are reserved by the normalizer as placeholders.
 _BAD_TEXT_RE = re.compile(r"[\x00-\x1f\x7f\ue000-\uf8ff]")
 
+# Platform voice/model when ELEVENLABS_VOICE_ID / ELEVENLABS_MODEL_ID are not set in the environment. Naturalness
+# is preferred over speed, so the default is multilingual v2 (the model that honours ``style``) and candidate A5
+# (Reyaansh) from docs/pilot-8l-voice-candidates.json. An explicitly set env var still wins.
+DEFAULT_MODEL_ID = "eleven_multilingual_v2"
+DEFAULT_VOICE_ID = "cRtvZrGFUW6HAyaDM8xe"
+
+
+def platform_model_id() -> str:
+    return settings.elevenlabs_model_id if "elevenlabs_model_id" in settings.model_fields_set else DEFAULT_MODEL_ID
+
+
+def platform_voice_id() -> str:
+    return settings.elevenlabs_voice_id if "elevenlabs_voice_id" in settings.model_fields_set else DEFAULT_VOICE_ID
+
+
 # What a NULL profile sends — kept here so a test can pin it.
-LEGACY_VOICE_SETTINGS: dict[str, float] = {"stability": 0.5, "similarity_boost": 0.8}
+LEGACY_VOICE_SETTINGS: dict[str, float] = {"stability": 0.42, "similarity_boost": 0.8}
+# Added on top of the above, but only for ``STYLE_MODELS`` (the provider ignores it elsewhere, and a profile
+# that sets ``style`` on another model is rejected on save).
+DEFAULT_STYLE = 0.20
 
 
 class VoiceProfileError(ValueError):
@@ -160,7 +178,7 @@ class VoiceProfile(BaseModel):
         return out
 
     def effective_model(self) -> str:
-        return self.model_id or settings.elevenlabs_model_id
+        return self.model_id or platform_model_id()
 
     def check_cross_fields(self) -> None:
         if self.style and self.effective_model() not in STYLE_MODELS:
@@ -230,13 +248,13 @@ def resolve_profile(raw: Any) -> ResolvedVoice | None:
             else LEGACY_VOICE_SETTINGS["similarity_boost"]
         ),
     }
-    if profile.style is not None and model_id in STYLE_MODELS:
-        voice_settings["style"] = profile.style
+    if model_id in STYLE_MODELS:
+        voice_settings["style"] = profile.style if profile.style is not None else DEFAULT_STYLE
     if profile.use_speaker_boost is not None:
         voice_settings["use_speaker_boost"] = profile.use_speaker_boost
     if profile.speed is not None:
         voice_settings["speed"] = profile.speed
-    voice_id = profile.voice_id or settings.elevenlabs_voice_id
+    voice_id = profile.voice_id or platform_voice_id()
     pron = tuple(sorted(profile.pronunciations.items()))
     digest = hashlib.sha256(
         json.dumps(

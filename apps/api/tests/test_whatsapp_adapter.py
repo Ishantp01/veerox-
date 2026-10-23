@@ -286,6 +286,30 @@ async def test_find_open_campaign_target_resolves_whatsapp_target_on_mixed_campa
 
 
 @pytest.mark.asyncio
+async def test_find_open_campaign_target_matches_meta_bare_digits(
+    seeded_db: AsyncSession,
+) -> None:
+    """Meta sends the sender as "919876543210" (no "+") while targets are
+    stored E.164 — the lookup must still resolve."""
+    from apps.api.db.models.call_campaign import CallCampaign
+    from apps.api.db.models.campaign_target import CampaignTarget
+
+    campaign = CallCampaign(org_id=ORG_ID, name="WA", criteria="n/a", channel="whatsapp")
+    seeded_db.add(campaign)
+    await seeded_db.flush()
+    target = CampaignTarget(
+        campaign_id=campaign.id, org_id=ORG_ID, phone="+919876543299",
+        channel="whatsapp", status="completed", qualified=None,
+    )
+    seeded_db.add(target)
+    await seeded_db.commit()
+
+    assert await adapter_module._find_open_campaign_target(seeded_db, "919876543299") == target.id
+    assert await adapter_module._find_open_campaign_target(seeded_db, "+919876543299") == target.id
+    assert await adapter_module._find_open_campaign_target(seeded_db, "919876543288") is None
+
+
+@pytest.mark.asyncio
 async def test_find_open_campaign_target_none_when_only_voice_target_open(
     seeded_db: AsyncSession,
 ) -> None:
