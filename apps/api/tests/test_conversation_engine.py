@@ -36,7 +36,7 @@ from apps.api.core.conversation.understand import (
     understand,
 )
 from apps.api.core.llm import ChatResult
-from apps.api.db.models import Conversation, Org, User
+from apps.api.db.models import Conversation, Lead, Org, User
 from apps.api.db.models.conversation_engine import (
     ConversationMemory,
     ConversationTurn,
@@ -113,6 +113,69 @@ async def _run(db: AsyncSession, conversation: Conversation, text: str, **kwargs
 async def _turns(db: AsyncSession) -> list[ConversationTurn]:
     result = await db.execute(select(ConversationTurn).order_by(ConversationTurn.created_at))
     return list(result.scalars().all())
+
+
+_CALLBACK_LLM = _llm_json(
+    scenario="callback_request", intent="callback_request", emotion="neutral",
+    language="en", confidence=0.95, facts={},
+)
+
+
+@pytest.mark.parametrize("text", ["Call me", "call karo", "mujhe call karo"])
+async def test_plain_call_me_places_an_ai_call_now(db_session: AsyncSession, text: str) -> None:
+    conversation = await _seed(db_session)
+    recorder = _Recorder()
+
+    result = await _run(db_session, conversation, text, dispatch=recorder, llm=_CALLBACK_LLM)
+
+    assert recorder.calls == [("initiate_ai_call", {})]
+    assert result.reply is not None and "call" in result.reply.lower()
+
+
+@pytest.mark.parametrize("text", ["call me tomorrow", "call me at 6", "I am busy, call me later"])
+async def test_call_me_with_a_time_or_busy_is_not_an_immediate_call(
+    db_session: AsyncSession, text: str
+) -> None:
+    conversation = await _seed(db_session)
+    recorder = _Recorder()
+
+    await _run(db_session, conversation, text, dispatch=recorder)
+
+    assert all(action != "initiate_ai_call" for action, _ in recorder.calls)
+
+
+async def test_failed_call_falls_back_instead_of_claiming_a_call(db_session: AsyncSession) -> None:
+    conversation = await _seed(db_session)
+    recorder = _Recorder({"status": "error", "reason": "calling_not_configured"})
+
+    result = await _run(db_session, conversation, "Call me", dispatch=recorder, llm=_CALLBACK_LLM)
+
+    assert result.reply is None and result.fallback_reason == "action_failed"
+
+
+async def test_saying_interested_qualifies_the_lead(db_session: AsyncSession) -> None:
+    conversation = await _seed(db_session)
+    lead = Lead(org_id=ORG_ID, user_id=USER_ID, name="Test", phone="+910000000001", status="new")
+    done = Lead(org_id=ORG_ID, user_id=uuid.uuid4(), name="X", phone="+910000000002", status="lost")
+    db_session.add_all([lead, done])
+    await db_session.commit()
+
+    await _run(db_session, conversation, "I am interested")
+
+    await db_session.refresh(lead)
+    assert lead.status == "qualified"
+
+
+async def test_interested_never_reopens_a_lost_lead(db_session: AsyncSession) -> None:
+    conversation = await _seed(db_session)
+    lead = Lead(org_id=ORG_ID, user_id=USER_ID, name="Test", phone="+910000000001", status="lost")
+    db_session.add(lead)
+    await db_session.commit()
+
+    await _run(db_session, conversation, "I am interested")
+
+    await db_session.refresh(lead)
+    assert lead.status == "lost"
 
 
 # --- 2.0 understand: rules -------------------------------------------------

@@ -8,6 +8,7 @@ live or shadow) writes one ``ConversationTurn`` row.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -28,16 +29,22 @@ from apps.api.core.conversation.config import (
 from apps.api.core.conversation.decide import decide, low_confidence_decision, validate_action
 from apps.api.core.conversation.knowledge import find_knowledge
 from apps.api.core.conversation.memory import forget_facts, load_memory, save_facts
-from apps.api.core.conversation.outcome import record_disposition
+from apps.api.core.conversation.outcome import mark_lead_interested, record_disposition
 from apps.api.core.conversation.reply import build_reply
 from apps.api.core.conversation.types import (
     ALLOWED_ACTIONS,
     MEMORY_KEYS,
+    STATE_ENGAGED,
     Decision,
     EngineResult,
     Understanding,
 )
-from apps.api.core.conversation.understand import LLMCall, UnderstandError, understand
+from apps.api.core.conversation.understand import (
+    _BUSY_CUE_RE,
+    LLMCall,
+    UnderstandError,
+    understand,
+)
 from apps.api.core.llm import ChatResult, chat_completion
 from apps.api.db.models.conversation_engine import ConversationTurn
 
@@ -79,6 +86,34 @@ def wants_knowledge(
         return True
     defined = config.get(scenario) if config is not None else None
     return defined is not None and not defined.builtin
+
+
+_CALL_NOW_RE = re.compile(
+    r"\b(call\s*me|call\s*kar(?:o|do|na|iye|iyega)?|mujhe\s*call|phone\s*kar(?:o|do)?|"
+    r"give\s*me\s*a\s*call|ring\s*me)\b",
+    re.IGNORECASE,
+)
+# A call asked for "later"/at some time is a scheduled callback, not a call right now.
+_CALL_LATER_RE = re.compile(
+    r"\b(later|baad|kal|tomorrow|tonight|evening|morning|afternoon|shaam|subah|dopahar|raat|"
+    r"next|mon|tue|wed|thu|fri|sat|sun)\w*\b|\d",
+    re.IGNORECASE,
+)
+
+
+def wants_call_now(
+    understanding: Understanding, decision: Decision, text: str, channel: str
+) -> bool:
+    """True when a WhatsApp customer plainly asks to be called right now ("call me",
+    "call karo") and the rules found no callback time to schedule instead."""
+    return (
+        channel == "whatsapp"
+        and understanding.scenario in ("callback_request", "busy_callback")
+        and decision.reply_kind == "ask_callback_time"
+        and _CALL_NOW_RE.search(text) is not None
+        and _CALL_LATER_RE.search(text) is None
+        and _BUSY_CUE_RE.search(text) is None
+    )
 
 
 def _default_llm(api_key: str | None) -> LLMCall:
@@ -273,6 +308,9 @@ async def run_engine(
             if forced is None:
                 return await fall_back("low_confidence", state=state)
 
+        if live and forced is None and understanding.scenario == "interested":
+            await mark_lead_interested(db, org_id=org_id, user_id=user_id)
+
         if smart_script and understanding.scenario not in SMART_SCRIPT_ENGINE_SCENARIOS:
             # Smart Script: the org's script answers, steered by the scenario.
             if live:
@@ -300,7 +338,16 @@ async def run_engine(
             channel=channel,
             config=config,
         )
-        if not validate_action(decision.action_id, decision.args):
+        # Engine-internal, never model-proposed (so ALLOWED_ACTIONS stays as is): an
+        # explicit "call me" with no time given means ring them now.
+        call_now = (
+            live
+            and forced is None
+            and wants_call_now(understanding, decision, text, channel)
+        )
+        if call_now:
+            decision = Decision("initiate_ai_call", {}, "call_placed", next_state=STATE_ENGAGED)
+        elif not validate_action(decision.action_id, decision.args):
             return await fall_back("invalid_action", state=state)
 
         action_result: dict[str, Any] | None = None

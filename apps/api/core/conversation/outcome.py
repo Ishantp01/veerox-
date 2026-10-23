@@ -25,6 +25,32 @@ from apps.api.db.models.lead import Lead
 logger = structlog.get_logger(__name__)
 
 
+# Statuses a customer saying "I'm interested" may move a lead out of; a lead already
+# qualified, converted or closed as lost is never changed by a chat message.
+_INTEREST_PROMOTES_FROM = frozenset({"new", "contacted"})
+
+
+async def mark_lead_interested(db: AsyncSession, *, org_id: UUID, user_id: UUID) -> bool:
+    """Move this customer's lead to ``qualified`` once they say they are interested.
+    Org-scoped, never raises; True when the status changed."""
+    try:
+        lead = (
+            await db.execute(select(Lead).where(Lead.org_id == org_id, Lead.user_id == user_id))
+        ).scalars().first()
+        if lead is None or lead.status not in _INTEREST_PROMOTES_FROM:
+            return False
+        lead.status = "qualified"
+        await db.commit()
+        return True
+    except Exception:  # noqa: BLE001 - CRM update must never break a turn
+        logger.warning("conversation_mark_interested_failed", exc_info=True)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+
 async def record_disposition(
     db: AsyncSession,
     *,

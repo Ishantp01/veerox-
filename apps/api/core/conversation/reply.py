@@ -36,6 +36,11 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "hinglish": "Koi baat nahi. Hum aapko kab call karein? Bas time bata dijiye.",
         "hi": "कोई बात नहीं। हम आपको कब कॉल करें? बस समय बता दीजिए।",
     },
+    "call_placed": {
+        "en": "Sure{who}! We're calling you right now - please pick up in a moment.",
+        "hinglish": "Zaroor{who}! Hum abhi aapko call kar rahe hain, kripya phone uthaiye.",
+        "hi": "ज़रूर{who}! हम अभी आपको कॉल कर रहे हैं, कृपया फ़ोन उठाइए।",
+    },
     "callback_confirmed": {
         "en": "Done, we'll call you back on {when}. Thank you{who}!",
         "hinglish": "Theek hai, hum aapko {when} par call karenge. Dhanyavaad{who}!",
