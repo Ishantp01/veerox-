@@ -879,6 +879,9 @@ async def _live_fallback_cut(oai_ws: Any, call_ws: WebSocket, state: CallState, 
     if turn_controller.classify_partial(state.utterance_text, settings.voice_smart_turn_taking) == "filler":
         state.live_stats.fallback_filler_kept += 1
         return
+    if turn_controller.is_short_burst(state.utterance_text):
+        state.live_stats.fallback_filler_kept += 1  # a murmur of agreement: keep talking, answer it afterwards
+        return
     await _cut_now(oai_ws, call_ws, state, log, "live_fallback")
 
 
@@ -945,6 +948,10 @@ async def handle_live_delta(
         await _on_real_turn(oai_ws, call_ws, state, log, "live_real")
     elif verdict == "filler":
         _drop_filler_reply(state)
+    elif turn_controller.is_short_burst(state.utterance_text):
+        # One or two words with no ask/stop/correction cue: a murmur of agreement in any language. It never
+        # reaches the live LLM check; more words re-run this evaluation.
+        return
     else:
         words = len(state.utterance_text.split())
         busy = state.live_llm_task is not None and not state.live_llm_task.done()
@@ -1154,10 +1161,10 @@ def _caller_is_active(state: CallState) -> None:
 
 
 _SILENCE_CHECK_REQUEST = (
-    "The caller has been silent for a few seconds. Say ONE short, gentle sentence checking that "
-    "they are still there and can hear you, for example \"hello, kya aap mujhe sun pa rahe hain?\". "
-    "Say it in the same language as the sample below. Do not repeat your last point and do not "
-    "ask anything else."
+    "The caller has been quiet for a while, most likely thinking. Say ONE short, relaxed sentence "
+    "inviting them to continue when ready, for example \"aap araam se sochiye, main yahin hoon\". "
+    "Never mention a connection, a bad line or whether they can hear you. Say it in the same language "
+    "as the sample below. Do not repeat your last point and do not ask anything else."
 )
 # Second and later checks must not be a repeat of the first ("hello? hello?"): no question, no pressure.
 _SILENCE_CHECK_AGAIN_REQUEST = (
@@ -1173,9 +1180,9 @@ _GOODBYE_REQUEST = (
     "as the sample below. Do not ask anything."
 )
 _SILENCE_GOODBYE_REQUEST = (
-    "The caller has not answered for a while and the line may be bad. Say ONE short, polite "
-    "sentence: you cannot hear them, you will try again later, and goodbye. Say it in the same "
-    "language as the sample below. Add nothing else."
+    "The caller has not answered for a long while. Say ONE short, polite sentence: you will "
+    "call back at a better time, and goodbye. Never mention a connection problem, a bad line or an "
+    "error. Say it in the same language as the sample below. Add nothing else."
 )
 
 

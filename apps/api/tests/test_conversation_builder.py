@@ -876,7 +876,7 @@ async def test_voice_silence_loop_checks_then_ends_politely(monkeypatch: pytest.
     await asyncio.sleep(1.3)
     assert logged == ["check"]
     check = oai.sent[-1]["response"]
-    assert check["tool_choice"] == "none" and "still there" in check["instructions"]
+    assert check["tool_choice"] == "none" and "main yahin hoon" in check["instructions"]
 
     state.response_active = False
     state.silence.agent_finished(0.0)  # the check prompt finished playing; still silent

@@ -64,6 +64,8 @@ DIRECT_QUESTION = "direct_question"
 DECLINES_MEETING = "declines_meeting"
 DATE_CORRECTION = "date_correction"
 ASKS_TIME = "asks_for_time"
+# A previously given detail was replaced by a new value: absorbed silently, never a hedge.
+SLOT_UPDATED = "slot_updated"
 
 # Memory keys this module adds (kept out of MEMORY_KEYS so orgs that have not
 # opted in never store them; see memory.save_facts(allowed_keys=...)).
@@ -467,6 +469,7 @@ def analyse(text: str, *, memory: dict[str, str], today: date) -> DialogueAnalys
     facts: dict[str, str] = {}
     corrections: dict[str, str] = {}
     conflicts: dict[str, str] = {}
+    overwritten: set[str] = set()
 
     if _HESITATION_RE.search(text) or _CONSULT_RE.search(text):
         signals.add(HESITATION)
@@ -554,14 +557,15 @@ def analyse(text: str, *, memory: dict[str, str], today: date) -> DialogueAnalys
         if not old or _norm(old) == _norm(new):
             facts[key] = new
             if not old and (strong or weak) and pending and _norm(pending) != _norm(new):
-                corrections[key] = pending  # "Nahi, actually 7 lakh" to a guess of 10 lakh: the guess is dropped
-        elif strong or weak or (pending and _norm(pending) == _norm(new)):
-            facts[key] = new
-            corrections[key] = old
+                overwritten.add(key)  # "Nahi, actually 7 lakh" to a guess of 10 lakh: the guess is dropped
         else:
-            conflicts[key] = old
-            facts[f"{key}_pending"] = new
-    if strong or corrections:
+            # The customer changed a detail they gave earlier (budget, space): the latest figure simply
+            # replaces it. No confirmation round, no "which one is right" question.
+            facts[key] = new
+            overwritten.add(key)
+    if overwritten:
+        signals.add(SLOT_UPDATED)
+    if (strong and not overwritten) or corrections:
         signals.add(CORRECTION)
     if _DAY_CORRECTION_RE.search(text):
         signals.add(CORRECTION)
@@ -623,6 +627,8 @@ def _synthesised_scenario(analysis: DialogueAnalysis) -> tuple[str, str] | None:
         return "objection", "undecided_or_pressure"
     if analysis.corrections or analysis.conflicts or DATE_CORRECTION in sig:
         return "discovery", "correction"
+    if SLOT_UPDATED in sig:
+        return "discovery", "slot_update"  # absorbed silently; the base discovery reply carries on
     if UNAVAILABLE in sig or DECLINES_TIME in sig:
         return "busy_callback", "unavailable"
     if PREFERS_ONLINE in sig or PREFERS_IN_PERSON in sig:
@@ -807,7 +813,16 @@ _D_DATE_CORRECTION = (
     "day or time THEY said and confirm it back in one short sentence. Do not book or schedule anything "
     "until they clearly agree to that confirmed slot."
 )
-_D_ACK_PREFIX = "Natural acknowledgement:"
+_D_SLOT_UPDATED = (
+    "They changed a detail they gave earlier (budget, space or similar). Quietly use the new value from "
+    "now on: do not repeat their words or the old value back, do not ask them to confirm it, and do not "
+    "say you have updated anything. Carry on with the conversation."
+)
+_D_NO_HOLD_PHRASE = (
+    "Do not use a hold phrase (\"ek second\", \"ek minute\", \"hold on\") and do not react to pauses or "
+    "half-finished sentences: reply only to what they have actually finished saying."
+)
+_D_ACK_PREFIX ="Natural acknowledgement:"
 _D_ACK = (
     f"{_D_ACK_PREFIX} at most ONE short opener (\"Ji.\", \"Achha.\", \"Samajh gaya/gayi\", \"Right.\", "
     "\"Okay.\"), only if it fits; many replies need none. Never the same one twice in a row, never to fill a "
@@ -818,7 +833,14 @@ _D_LENGTH = (
     "how something works may use up to three short sentences (this replaces the usual one-or-two limit) and "
     "then a check on whether they want the next part. Never talk for long without letting them reply."
 )
-_ECHO_LABELS = {"investment_budget": "budget", "customer_city": "city"}
+_SLOT_KEYS = ("investment_budget", "customer_city", "property_info", "business_type", "team_size")
+_D_NO_SLOT_ECHO = (
+    "CRITICAL: Never repeat, summarize, paraphrase or acknowledge any detail they just gave (budget, number, "
+    "city, space, category or industry) back to them in any form. Banned: \"Got it, aapka budget...\", "
+    "\"Samajh gaya, aap [category] chahte hain...\", \"Theek hai, [amount]...\", \"ab budget X hai\". Start the "
+    "reply directly with the next natural question or step, with NO opener or confirmation word before it. "
+    "Update the detail silently and never re-ask for one already given."
+)
 _D_STYLE = (
     "Keep it short and conversational, one clear question at most, and mix Hindi and English the way "
     "the caller does. Do not repeat explanations or acknowledgements you already gave, and use their "
@@ -1013,19 +1035,16 @@ def enhance_decision(
         directives.append(_D_NO_PUSH)
     if state.meeting_declined and DECLINES_MEETING not in sig:
         directives.append(_D_MEETING_DECLINED)
-    if not state.ack_last and not (sig & {CORRECTION, CONFLICT}):
+    if SLOT_UPDATED in sig:
+        directives.append(_D_SLOT_UPDATED)
+    if sig & {ASKS_TIME, HESITATION}:
+        directives.append(_D_NO_HOLD_PHRASE)
+    gave_slot = any(facts.get(key) for key in _SLOT_KEYS)
+    if gave_slot:
+        directives.append(_D_NO_SLOT_ECHO)
+    if not gave_slot and not state.ack_last and not (sig & {CORRECTION, CONFLICT}):
         # Acknowledge, but not on every turn: the previous reply's use is remembered (ack_last).
         directives.append(_D_ACK)
-        shared = [
-            f"{label} ({facts[key]})" for key, label in _ECHO_LABELS.items()
-            if facts.get(key) and key not in understanding.conflicts
-        ]
-        if shared:
-            directives.append(
-                "They just told you their " + " and ".join(shared) + ": echo it in two or three words (for example "
-                "\"Achha, " + str(facts.get("investment_budget") or facts.get("customer_city")) +
-                ".\") and carry on; never ask for it again."
-            )
     directives.append(_D_STYLE)
 
     deduped = tuple(dict.fromkeys(directives))

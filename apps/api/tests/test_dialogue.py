@@ -204,34 +204,41 @@ async def test_commitment_question_uses_approved_facts_not_a_promise() -> None:
 # --- corrections, conflicts, verified facts --------------------------------------------------------------------------
 
 
-async def test_an_explicit_correction_replaces_the_fact_and_is_confirmed_back() -> None:
+async def test_an_explicit_correction_silently_replaces_the_fact() -> None:
     memory = {"property_info": "Meri dukaan 500 sq ft ki hai"}
     und, decision = await _decide("Nahi nahi, dukaan 800 sq ft ki hai, 500 galat tha.", memory=memory)
-    assert und.corrections == {"property_info": "Meri dukaan 500 sq ft ki hai"}
     assert und.facts["property_info"] == "dukaan 800 sq ft ki hai"
-    assert decision.reply_kind == "confirm_correction"
-    assert decision.args == {"old": "Meri dukaan 500 sq ft ki hai", "new": "dukaan 800 sq ft ki hai"}
+    assert dialogue.SLOT_UPDATED in und.signals and dialogue.CORRECTION not in und.signals
+    assert not und.corrections and not und.conflicts
+    assert decision.reply_kind not in ("confirm_correction", "clarify_conflict")
+    assert any("Quietly use the new value" in d for d in decision.directives)
 
 
-async def test_a_differing_mention_without_a_correction_is_a_conflict_and_never_overwrites() -> None:
+async def test_a_differing_mention_without_a_correction_overwrites_without_asking() -> None:
     memory = {"property_info": "Meri dukaan 500 sq ft ki hai"}
     und, decision = await _decide("Meri dukaan 800 sq ft ki hai.", memory=memory)
-    assert dialogue.CONFLICT in und.signals and "property_info" not in und.facts  # old value stays verified
-    assert und.facts["property_info_pending"] == "Meri dukaan 800 sq ft ki hai"
-    assert decision.reply_kind == "clarify_conflict"
-    assert decision.args["old"] == "Meri dukaan 500 sq ft ki hai"
+    assert dialogue.CONFLICT not in und.signals and not und.conflicts
+    assert und.facts["property_info"] == "Meri dukaan 800 sq ft ki hai"
+    assert "property_info_pending" not in und.facts
+    assert decision.reply_kind != "clarify_conflict"
     updates, forget = dialogue.memory_updates(und, decision, DialogueState.from_memory(memory), memory)
-    assert "property_info" not in updates and updates["property_info_pending"].endswith("800 sq ft ki hai")
-    assert forget == []
+    assert updates["property_info"].endswith("800 sq ft ki hai") and forget == []
 
 
-async def test_saying_the_new_value_again_confirms_it() -> None:
+async def test_a_hedged_new_value_is_still_only_a_pending_guess() -> None:
+    memory = {"property_info": "Meri dukaan 500 sq ft ki hai"}
+    und, _ = await _decide("Shayad meri dukaan 800 sq ft ki hai.", memory=memory)
+    assert "property_info" not in und.facts and dialogue.SLOT_UPDATED not in und.signals
+    assert und.facts["property_info_pending"].endswith("800 sq ft ki hai")
+
+
+async def test_saying_the_new_value_again_replaces_it_and_clears_the_guess() -> None:
     memory = {
         "property_info": "Meri dukaan 500 sq ft ki hai",
         "property_info_pending": "Meri dukaan 800 sq ft ki hai",
     }
     und, decision = await _decide("Meri dukaan 800 sq ft ki hai.", memory=memory)
-    assert und.corrections and und.facts["property_info"] == "Meri dukaan 800 sq ft ki hai"
+    assert und.facts["property_info"] == "Meri dukaan 800 sq ft ki hai"
     updates, forget = dialogue.memory_updates(und, decision, DialogueState.from_memory(memory), memory)
     assert updates["property_info"].endswith("800 sq ft ki hai") and forget == ["property_info_pending"]
 

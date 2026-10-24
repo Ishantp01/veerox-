@@ -219,7 +219,7 @@ async def test_silence_gets_a_gentle_check_then_a_polite_goodbye(
     await asyncio.sleep(1.3)
     assert silence_log == ["check"]
     check = call.agent_replies()[-1]["response"]
-    assert check["tool_choice"] == "none" and "still there" in check["instructions"]
+    assert check["tool_choice"] == "none" and "main yahin hoon" in check["instructions"]
 
     await call.event("response.done")  # the check was spoken; the caller is still silent
     await asyncio.sleep(1.3)

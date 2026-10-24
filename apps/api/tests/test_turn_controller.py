@@ -184,7 +184,7 @@ async def test_unsure_text_is_judged_by_the_llm(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(turn_controller, "judge_turn", fake_llm)
     state, oai, call = _state(), _FakeOai(), _FakeCall()
-    await _feed(state, oai, call, " अवनो", " කානි")  # garbled, no cues -> unsure
+    await _feed(state, oai, call, " अवनो", " කානි", " ਵਧੀਆ")  # garbled, no cues -> unsure
     assert state.live_llm_task is not None
     await state.live_llm_task
     assert calls, "LLM was never consulted"
@@ -198,7 +198,7 @@ async def test_llm_saying_filler_keeps_the_agent_talking(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(turn_controller, "judge_turn", fake_llm)
     state, oai, call = _state(), _FakeOai(), _FakeCall()
-    await _feed(state, oai, call, " ਵਧੀਆ", " ਜੀ")
+    await _feed(state, oai, call, " ਵਧੀਆ", " ਜੀ", " ਬਹੁਤ ਵਧੀਆ")
     assert state.live_llm_task is not None
     await state.live_llm_task
     assert oai.sent == []
@@ -214,8 +214,11 @@ async def test_llm_calls_are_capped_per_utterance(monkeypatch: pytest.MonkeyPatc
         return TurnJudgement("FILLER", 0.95)
 
     monkeypatch.setattr(turn_controller, "judge_turn", fake_llm)
+    # Two-word bursts no longer reach the check and five words are "real" by rule, so only words 3-4 can be
+    # judged: lower the cap to prove it is still enforced.
+    monkeypatch.setattr(adapter, "LIVE_LLM_MAX_CALLS", 1)
     state, oai, call = _state(), _FakeOai(), _FakeCall()
-    for word in [" ਇੱਕ", " ਦੋ", " ਤਿੰਨ", " ਚਾਰ", " ਪੰਜ", " ਛੇ"]:
+    for word in [" ਇੱਕ", " ਦੋ", " ਤਿੰਨ", " ਚਾਰ"]:
         await _feed(state, oai, call, word)
         if state.live_llm_task:
             await state.live_llm_task
@@ -330,7 +333,7 @@ async def test_low_confidence_llm_verdict_does_not_cut(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(turn_controller, "judge_turn", fake_llm)
     state, oai, call = _state(), _FakeOai(), _FakeCall()
-    await _feed(state, oai, call, " ਵਧੀਆ", " ਜੀ")
+    await _feed(state, oai, call, " ਵਧੀਆ", " ਜੀ", " ਬਹੁਤ ਵਧੀਆ")
     await state.live_llm_task  # type: ignore[misc]
     assert oai.sent == []
 
@@ -341,7 +344,7 @@ async def test_continuation_llm_verdict_does_not_cut(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(turn_controller, "judge_turn", fake_llm)
     state, oai, call = _state(), _FakeOai(), _FakeCall()
-    await _feed(state, oai, call, " ਵਧੀਆ", " ਜੀ")
+    await _feed(state, oai, call, " ਵਧੀਆ", " ਜੀ", " ਬਹੁਤ ਵਧੀਆ")
     await state.live_llm_task  # type: ignore[misc]
     assert oai.sent == []
 
@@ -365,6 +368,16 @@ def test_unfinished_text_gets_a_hold(text: str) -> None:
 )
 def test_finished_or_empty_text_gets_no_hold(text: str) -> None:
     assert endpoint_hold_seconds(text, agent_was_busy=True) == 0.0
+
+
+@pytest.mark.parametrize("text", ["mera budget hai", "mera budget hoga", "my budget is", "haan hmm", "so, hmm"])
+def test_a_slot_sentence_with_no_figure_yet_is_held_in_smart_mode(text: str) -> None:
+    assert turn_controller.hold_decision(text, True, smart=True)[0] == turn_controller.HOLD_CONTINUATION_SECONDS
+
+
+def test_a_complete_slot_sentence_is_not_held() -> None:
+    assert turn_controller.hold_decision("mera budget 7 lakh hai", True, smart=True) == (0.0, None)
+    assert turn_controller.hold_decision("mera naam Rahul hai", True, smart=True) == (0.0, None)
 
 
 def test_lone_filler_to_an_idle_agent_gets_a_short_hold() -> None:
@@ -712,3 +725,38 @@ async def test_reply_latency_is_logged_for_text_output_too() -> None:
 def test_hoon_is_a_listening_filler_not_a_turn() -> None:
     assert turn_controller.classify_partial("haan hoon") == "filler"
     assert turn_controller.classify_partial("interested hoon ya nahi") == "real"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["ok", "thik hai", "haa", "sure", "acha", "sahi hai", "hnji", "badhiya", "Jabalpur", "Rahul ji", "mera naam"],
+)
+def test_one_or_two_word_bursts_never_cut_the_agent(text: str) -> None:
+    assert turn_controller.is_short_burst(text)
+
+
+@pytest.mark.parametrize("text", ["ruko", "nahi", "wait", "stop", "galat", "kya price hai", "mujhe ek cheez poochni hai"])
+def test_short_but_clear_intent_still_cuts(text: str) -> None:
+    assert not turn_controller.is_short_burst(text) or turn_controller.classify_partial(text, True) == "real"
+    assert turn_controller.classify_partial(text, True) == "real" or len(text.split()) > 2
+
+
+@pytest.mark.parametrize("text", ["hnji", "badhiya", "shukriya", "sahi hai", "jee", "ohk"])
+def test_more_backchannel_variants_are_filler(text: str) -> None:
+    assert turn_controller.classify_partial(text) == "filler"
+
+
+async def test_a_short_burst_never_reaches_the_live_llm_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    async def fake_llm(text: str, api_key: str | None, timeout: float = 2.5) -> TurnJudgement | None:
+        calls.append(text)
+        return TurnJudgement("QUESTION", 0.99)
+
+    monkeypatch.setattr(turn_controller, "judge_turn", fake_llm)
+    state, oai, call = _state(), _FakeOai(), _FakeCall()
+    await _feed(state, oai, call, " ओकेड़")
+    assert state.live_llm_task is None and calls == [] and oai.sent == []
+    state, oai, call = _state(), _FakeOai(), _FakeCall()
+    await _feed(state, oai, call, " ਵਧੀਆ", " ਜੀ")
+    assert state.live_llm_task is None and calls == [] and oai.sent == []

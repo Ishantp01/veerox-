@@ -52,6 +52,10 @@ BACKCHANNEL_WORDS = frozenset(
         "ok", "okay", "okk", "k", "kk", "hmm", "hm", "hmmm", "mm", "mmm", "mhm", "uh", "um",
         "uhh", "umm", "oh", "ohh", "ah", "aah", "haan", "han", "haa", "ha", "hanji", "haanji",
         "ji", "hoon", "hun", "achha", "accha", "acha", "achcha", "theek", "thik", "tik", "hai", "sahi",
+        "hn", "hnn", "hnm", "hanh", "jee", "jii", "oke", "ohk", "okie", "aha", "ahaa", "oho", "thikk", "teek",
+        "achaa", "aacha", "badhiya", "badiya", "mast", "thanks", "thankyou", "shukriya", "dhanyavaad",
+        "hmmmm", "mhmm", "uhhuh", "yea", "hnji",
+        "हूँ", "हूं", "ओह", "वाह", "जी हाँ", "शुक्रिया", "धन्यवाद",
         "right", "yes", "yeah", "yep", "yup", "sure", "fine", "alright", "all", "good", "nice",
         "cool", "great", "got", "it", "i", "see", "understood", "bilkul", "samajh", "gaya",
         "gayi", "sir", "madam", "mam", "ma'am", "lovely", "perfect", "wow", "true", "correct",
@@ -134,6 +138,23 @@ def is_noise(text: str) -> bool:
     return all(len(w) >= 3 and len(set(w)) == 1 and w.isalpha() for w in words)
 
 
+# A burst this short is a murmur of agreement, not a turn: it never cuts the agent off by itself.
+_SHORT_BURST_WORDS = 2
+_SHORT_BURST_CHARS = 10
+
+
+def is_short_burst(text: str) -> bool:
+    """At most two words or ten characters, and nothing that asks, stops or corrects ("ruko", "nahi", "galat").
+    Used only to keep the agent talking; a short answer ("Jabalpur") is still answered afterwards."""
+    stripped = text.strip()
+    words = _tokens(stripped)
+    if not words:
+        return False
+    if any(w in QUESTION_CUES or w in CORRECTION_CUES for w in words):
+        return False
+    return len(words) <= _SHORT_BURST_WORDS or len(re.sub(r"\s+", "", stripped)) <= _SHORT_BURST_CHARS
+
+
 def classify_partial(text: str, smart: bool = False) -> Verdict:
     """Cheap first-pass verdict on the (possibly partial, possibly garbled)
     transcript of what the caller is saying over the agent.
@@ -171,7 +192,7 @@ def classify_partial(text: str, smart: bool = False) -> Verdict:
 CONTINUATION_WORDS = frozenset(
     {
         "and", "but", "so", "because", "then", "or", "like", "actually", "well", "um", "uh",
-        "umm", "uhh", "the", "a", "an", "to", "of", "my", "i", "mean", "that", "if", "when",
+        "umm", "uhh", "hmm", "hm", "uhm", "err", "arre", "the", "a", "an", "to", "of", "my", "i", "mean", "that", "if", "when",
         "aur", "lekin", "magar", "toh", "to", "kyunki", "ki", "matlab", "mera", "meri", "mujhe",
         "woh", "wo", "vo", "yaani", "basically", "jaise", "agar", "ya", "phir", "fir", "main",
         "और", "लेकिन", "मगर", "तो", "क्योंकि", "कि", "मतलब", "मेरा", "मेरी", "मुझे", "वो",
@@ -208,6 +229,8 @@ OPEN_ENDERS = frozenset(
     }
 )
 _POSSESSIVES = frozenset({"mera", "meri", "mere", "my", "our", "hamara", "hamari", "mujhe", "i", "main", "मेरा", "मेरी", "मेरे"})
+_COPULAS = frozenset({"hai", "hoga", "hogi", "tha", "thi", "is", "will", "है", "होगा", "होगी"})
+_SLOT_NOUNS = frozenset({"budget", "investment", "space", "jagah", "timeline", "time", "बजट", "जगह"})
 _CONDITIONAL = frozenset({"agar", "if", "jab", "when", "अगर", "जब"})
 _THEN = frozenset({"toh", "to", "then", "तो"})
 
@@ -223,6 +246,10 @@ def _unfinished(words: list[str]) -> bool:
         return True
     if len(words) <= 3 and words[0] in _POSSESSIVES:
         return True  # "mera budget" - what about it?
+    if len(words) <= 4 and words[0] in _POSSESSIVES and words[-1] in _COPULAS and words[1:-1] and any(
+        w in _SLOT_NOUNS for w in words[1:-1]
+    ):
+        return True  # "mera budget hai" - the figure is still to come
     if any(w in _CONDITIONAL for w in words) and not any(w in _THEN for w in words[-3:]) and len(words) <= 12:
         # "agar main investment karun" - the "then" part is still to come. A question mark or a
         # question cue means they asked something complete.

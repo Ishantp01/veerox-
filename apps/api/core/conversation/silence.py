@@ -22,7 +22,7 @@ SilenceAction = Literal["check", "connection_issue"]
 
 @dataclass
 class SilenceMonitor:
-    check_after: float = 8.0
+    check_after: float = 15.0
     max_checks: int = 2
     checks: int = 0
     issue: bool = False

@@ -141,7 +141,7 @@ def test_patience_applies_only_to_the_first_check() -> None:
 
 def test_the_second_check_is_not_a_repeat_of_the_first() -> None:
     first, again = adapter._SILENCE_CHECK_REQUEST, adapter._SILENCE_CHECK_AGAIN_REQUEST
-    assert first != again and "sun pa rahe" in first
+    assert first != again and "main yahin hoon" in first and "Never mention a connection" in first
     assert "Do NOT say hello" in again and "do NOT ask whether they can hear you" in again
 
 

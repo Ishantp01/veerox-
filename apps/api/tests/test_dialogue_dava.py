@@ -222,28 +222,22 @@ async def test_3b_the_unanswerable_question_raises_one_follow_up_not_many(factor
 # --- 4. a correction ------------------------------------------------------------------------------------------------------------
 
 
-async def test_4_a_correction_is_confirmed_back_and_replaces_the_stored_fact(factory, monkeypatch) -> None:
+async def test_4_a_correction_silently_replaces_the_stored_fact(factory, monkeypatch) -> None:
     call = await _call(factory, monkeypatch)
     await call.say("Meri dukaan 500 sq ft ki hai.")
     assert (await call.memory())["property_info"] == "Meri dukaan 500 sq ft ki hai"
     text = _instruction(await call.say("Nahi nahi, dukaan 800 sq ft ki hai, 500 galat tha."))
-    assert "before it was 'Meri dukaan 500 sq ft ki hai'" in text and "800 sq ft" in text
-    assert "Do not ask for it again" in text
+    assert "before it was" not in text and "Quietly use the new value" in text
     memory = await call.memory()
     assert memory["property_info"] == "dukaan 800 sq ft ki hai"
     assert "property_info_pending" not in memory
 
 
-async def test_4b_a_contradiction_without_a_correction_is_asked_about_not_assumed(factory, monkeypatch) -> None:
+async def test_4b_a_contradiction_without_a_correction_is_absorbed_not_asked_about(factory, monkeypatch) -> None:
     call = await _call(factory, monkeypatch)
     await call.say("Meri dukaan 500 sq ft ki hai.")
     text = _instruction(await call.say("Meri dukaan 800 sq ft ki hai."))
-    assert "Ask politely which one is correct" in text
-    memory = await call.memory()
-    assert memory["property_info"] == "Meri dukaan 500 sq ft ki hai"  # the verified value stands
-    assert memory["property_info_pending"] == "Meri dukaan 800 sq ft ki hai"
-    confirmed = _instruction(await call.say("Meri dukaan 800 sq ft ki hai."))  # saying it again confirms it
-    assert "before it was" in confirmed
+    assert "Ask politely which one is correct" not in text
     memory = await call.memory()
     assert memory["property_info"] == "Meri dukaan 800 sq ft ki hai" and "property_info_pending" not in memory
 

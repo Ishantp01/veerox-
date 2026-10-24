@@ -61,7 +61,7 @@ async def test_scenario_a_thinking_pause_guess_and_correction() -> None:
     # 3. The correction replaces the guess, is confirmed back, and the guess is forgotten.
     und, decision = await talk.say("Nahi, actually 7 lakh.")
     assert talk.memory["investment_budget"] == "7 lakh" and "investment_budget_pending" not in talk.memory
-    assert decision.reply_kind == "confirm_correction" and decision.args == {"old": "10 lakh", "new": "7 lakh"}
+    assert decision.reply_kind != "confirm_correction" and dialogue.SLOT_UPDATED in und.signals
     # 4. Afterwards the speaking model is told only the corrected figure.
     und, decision = await talk.say("Aur kya details hain?")
     text = build_instruction(VoicePlan(und, decision, dict(talk.memory), None, time.monotonic(), "", ON), action_result=None)
@@ -367,10 +367,10 @@ async def test_the_final_instructions_keep_disclosure_authority_and_limits_witho
     assert "Do not repeat information you have already given" in text
     if "up to three short sentences" in text:
         assert "replaces the usual one-or-two limit" in text  # the length rules do not contradict each other
-    assert len(text) < 1_700  # per-turn growth is bounded
+    assert len(text) < 2_200  # per-turn growth is bounded (answer-first, length, ack and style directives)
 
 
 async def test_per_turn_guidance_has_one_sentence_budget_and_one_acknowledgement_rule() -> None:
-    _, decision = await Talk().say("Mera budget around 5 lakh hai.")
+    _, decision = await Talk().say("Theek hai, aur batao.")
     text = _directives(decision)
     assert text.count(dialogue._D_ACK_PREFIX) == 1 and text.count("name at most once") == 1

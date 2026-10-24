@@ -91,12 +91,12 @@ async def test_a_stated_budget_is_remembered_in_the_callers_words() -> None:
 # --- 3-4. corrections ------------------------------------------------------------------------------------------------------------------
 
 
-async def test_a_corrected_budget_replaces_the_old_one_and_is_confirmed_back() -> None:
+async def test_a_corrected_budget_silently_replaces_the_old_one() -> None:
     talk = Talk()
     await talk.say("Mera budget 10 lakh hai.")
     und, decision = await talk.say("Nahi, actually 7 lakh.")
-    assert talk.memory["investment_budget"] == "7 lakh" and und.corrections == {"investment_budget": "10 lakh"}
-    assert decision.reply_kind == "confirm_correction" and decision.args == {"old": "10 lakh", "new": "7 lakh"}
+    assert talk.memory["investment_budget"] == "7 lakh" and not und.corrections
+    assert decision.reply_kind != "confirm_correction"
 
 
 async def test_an_older_value_does_not_come_back_after_the_correction() -> None:
@@ -107,10 +107,17 @@ async def test_an_older_value_does_not_come_back_after_the_correction() -> None:
     assert talk.memory["investment_budget"] == "7 lakh"
 
 
-async def test_a_second_different_figure_without_a_correction_is_a_question_not_an_overwrite() -> None:
+async def test_budget_changed_again_and_again_always_keeps_the_latest_figure() -> None:
     talk = Talk({"investment_budget": "10 lakh"})
     und, decision = await talk.say("Mera budget 7 lakh hai")
-    assert talk.memory["investment_budget"] == "10 lakh" and decision.reply_kind == "clarify_conflict"
+    assert talk.memory["investment_budget"] == "7 lakh" and decision.reply_kind != "clarify_conflict"
+    await talk.say("Nahi, 5 lakh tak.")
+    assert talk.memory["investment_budget"] == "5 lakh"
+    assert "investment_budget_pending" not in talk.memory
+    und, decision = await talk.say("Mera budget 6 lakh hai")
+    assert talk.memory["investment_budget"] == "6 lakh"
+    joined = " ".join(decision.directives)
+    assert "Achha, 6 lakh" not in joined  # a changed figure is never echoed back
 
 
 async def test_a_corrected_day_is_acknowledged_once_and_nothing_is_booked() -> None:
@@ -259,10 +266,22 @@ async def test_a_how_does_it_work_question_is_asked_to_be_answered_in_short_segm
 # --- 11-12. acknowledgements, sparingly -------------------------------------------------------------------------------------------------
 
 
-async def test_a_shared_fact_is_echoed_briefly() -> None:
-    _, decision = await Talk().say("Mera budget around 5 lakh hai.")
-    text = _directives(decision)
-    assert "budget (5 lakh)" in text and "echo it in two or three words" in text and "never ask for it again" in text
+async def test_a_shared_fact_is_never_echoed_back() -> None:
+    talk = Talk()
+    for line in ("Mera budget around 5 lakh hai.", "Nahi, 7 lakh tak.", "Main Jabalpur se hoon"):
+        _, decision = await talk.say(line)
+        text = _directives(decision)
+        assert "CRITICAL: Never repeat" in text and "echo it" not in text
+        assert not any("Achha, " in d and "lakh" in d for d in decision.directives)
+
+
+async def test_category_and_industry_changes_are_never_echoed_either() -> None:
+    talk = Talk()
+    for line in ("Mera budget 10 lakh hai.", "Nahi, 7 lakh.", "Main sports franchise lena chahta hoon", "Actually training academy"):
+        _, decision = await talk.say(line)
+        assert decision.reply_kind not in ("confirm_correction", "clarify_conflict")
+    _, decision = await talk.say("Mera business pharma ka hai")
+    assert "CRITICAL: Never repeat" in _directives(decision)
 
 
 async def test_acknowledgement_guidance_alternates_instead_of_appearing_on_every_turn() -> None:
@@ -271,7 +290,7 @@ async def test_acknowledgement_guidance_alternates_instead_of_appearing_on_every
     for line in ("Mera budget 5 lakh hai", "Aur kya hota hai?", "Main Jabalpur se hoon", "Theek hai, aur batao"):
         _, decision = await talk.say(line)
         flags.append(dialogue._D_ACK_PREFIX in _directives(decision))
-    assert flags == [True, False, True, False]
+    assert flags == [False, True, False, True]  # a turn that carries a detail gets no opener at all
 
 
 def test_the_acknowledgement_guidance_forbids_fillers_and_repetition() -> None:
@@ -390,3 +409,10 @@ def test_the_misread_name_from_a_hinglish_sentence_is_dropped_only_in_the_enhanc
     real = Understanding(scenario="greeting", intent="x", emotion="neutral", language="hinglish", confidence=0.9,
                          source="rules", facts={"name": "Rahul"})
     assert dialogue.enhance_understanding(real, "Main Rahul hoon", memory={}, today=TODAY, language="hinglish").facts["name"] == "Rahul"
+
+
+async def test_thinking_out_loud_gets_a_no_hold_phrase_directive_and_no_booking() -> None:
+    talk = Talk()
+    und, decision = await talk.say("Mera budget... ek minute...")
+    assert decision.reply_kind == "give_time"
+    assert any("Do not use a hold phrase" in d for d in decision.directives)

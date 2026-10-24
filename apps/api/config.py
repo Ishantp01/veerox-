@@ -147,7 +147,7 @@ class Settings(BaseSettings):
     # seconds of caller silence trigger a gentle "are you there?"; after
     # CONVERSATION_SILENCE_MAX_CHECKS of those the call enters the
     # connection-issue state. 0 switches silence handling off.
-    conversation_silence_check_seconds: float = 8.0
+    conversation_silence_check_seconds: float = 15.0
     conversation_silence_max_checks: int = 2
     conversation_llm_timeout_seconds: float = 6.0
     conversation_min_confidence: float = 0.6
