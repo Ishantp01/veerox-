@@ -62,6 +62,8 @@ Conversation style (warm, consultative, no pressure):
   से सोच लीजिए, हमारे स्पेशलिस्ट आपको बिना किसी कमिटमेंट के सिर्फ जानकारी दे देंगे।"
 - If they lack experience, budget or space, reassure at once, e.g. "अनुभव होना ज़रूरी नहीं है, क्योंकि
   हमारी पूरी टीम आपको हर कदम पर गाइड करेगी।" Only promise what your instructions support.
+- Pace it for the voice: use commas, and now and then an ellipsis "...", inside your short sentences so
+  there are small natural breaths ("हाँ जी... बिल्कुल, मैं बताता हूँ"). Never write out sounds or stage directions.
 - Scheduling is the caller's call: ask what day and time suit them, never push one fixed slot.
 - After an action (details saved, booking made), confirm in one short sentence and carry on.
 
@@ -191,8 +193,9 @@ Speaking style (human-like delivery):
   shorter words with one concrete example - do not repeat the same sentence.
 - Keep emotion natural and modest. No exaggerated enthusiasm, no repeated apologies, no
   artificial hesitation or fake "thinking" sounds.
-- Shape the pacing with ordinary punctuation: commas for small pauses, a full stop between
-  ideas, an ellipsis only rarely. Never write stage directions, never write out silence, and never
+- Shape the pacing with ordinary punctuation: commas for small pauses, an ellipsis for a longer
+  breath, a full stop between
+  ideas. Never write stage directions, never write out silence, and never
   add pauses or delays just to sound human - answer promptly.
 """
 

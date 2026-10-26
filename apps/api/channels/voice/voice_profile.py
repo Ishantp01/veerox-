@@ -45,9 +45,9 @@ logger = structlog.get_logger(__name__)
 
 # model id -> short note for the settings page / comparison table.
 ALLOWED_MODELS: dict[str, str] = {
-    "eleven_flash_v2_5": "lowest latency (no style support)",
+    "eleven_flash_v2_5": "lowest latency (no style support; platform default)",
     "eleven_turbo_v2_5": "low latency, usually better quality than flash",
-    "eleven_multilingual_v2": "most expressive, higher latency (platform default)",
+    "eleven_multilingual_v2": "most expressive, higher latency",
 }
 # Models for which ``style`` is forwarded (and accepted on save).
 STYLE_MODELS = frozenset({"eleven_multilingual_v2"})
@@ -65,10 +65,10 @@ _VOICE_ID_RE = re.compile(r"^[A-Za-z0-9]{10,40}$")
 # Private-use characters are reserved by the normalizer as placeholders.
 _BAD_TEXT_RE = re.compile(r"[\x00-\x1f\x7f\ue000-\uf8ff]")
 
-# Platform voice/model when ELEVENLABS_VOICE_ID / ELEVENLABS_MODEL_ID are not set in the environment. Naturalness
-# is preferred over speed, so the default is multilingual v2 (the model that honours ``style``) and candidate A5
-# (Reyaansh) from docs/pilot-8l-voice-candidates.json. An explicitly set env var still wins.
-DEFAULT_MODEL_ID = "eleven_multilingual_v2"
+# Platform voice/model when ELEVENLABS_VOICE_ID / ELEVENLABS_MODEL_ID are not set in the environment. Latency
+# wins for live calls, so the default is flash v2.5 (no ``style`` support); candidate A5 (Reyaansh) from
+# docs/pilot-8l-voice-candidates.json is the voice. An explicitly set env var still wins.
+DEFAULT_MODEL_ID = "eleven_flash_v2_5"
 DEFAULT_VOICE_ID = "cRtvZrGFUW6HAyaDM8xe"
 
 
