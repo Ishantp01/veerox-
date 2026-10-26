@@ -257,10 +257,20 @@ def _unfinished(words: list[str]) -> bool:
     return False
 
 
+def _stuttering(stripped: str, words: list[str]) -> bool:
+    """The caller is restarting a word or phrase ("m- mera", "mera mera budget"): they are still finding it.
+    A word cut off by a hyphen, or the same non-filler word / two-word phrase said twice at the end."""
+    if stripped.endswith(("-", "–", "—")):
+        return True
+    if len(words) >= 2 and words[-1] == words[-2] and not _is_backchannel_word(words[-1]):
+        return True
+    return len(words) >= 4 and words[-2:] == words[-4:-2] and not all(_is_backchannel_word(w) for w in words[-2:])
+
+
 def hold_decision(text: str, agent_was_busy: bool, smart: bool = False) -> tuple[float, str | None]:
     """How long to wait before answering, and why: ``(seconds, reason)``; ``(0.0, None)`` when the turn looks
     finished. Reasons: ``thinking_request``, ``lone_filler``, ``trailing_punctuation``, ``continuation_word``,
-    ``unfinished_phrase``. All timings are the ``HOLD_*`` constants above - the one place to tune them.
+    ``unfinished_phrase``, ``stutter`` (smart mode). All timings are the ``HOLD_*`` constants above - the one place to tune them.
 
     Turn end is otherwise decided by a fixed 0.3s silence, which cuts off a caller who pauses mid-sentence
     ("haan… mera matlab…"). Streamed text lags the audio by up to ~1s, so this looks at a *prefix*: callers
@@ -276,6 +286,8 @@ def hold_decision(text: str, agent_was_busy: bool, smart: bool = False) -> tuple
         return 0.0, None  # no text yet — don't guess, answer normally
     if smart and thinking_cue(stripped):
         return HOLD_THINKING_SECONDS, "thinking_request"
+    if smart and _stuttering(stripped, words):
+        return HOLD_CONTINUATION_SECONDS, "stutter"
     lone_filler = len(words) <= 2 and all(_is_backchannel_word(w) for w in words)
     if lone_filler and not agent_was_busy:
         # A bare "haan"/"ok" to an idle agent is very often followed by more.

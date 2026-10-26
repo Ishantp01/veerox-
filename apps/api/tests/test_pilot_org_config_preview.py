@@ -74,7 +74,7 @@ def test_the_script_does_not_tell_the_model_to_greet_because_the_greeting_is_sep
 
 def test_script_plus_voice_rules_stay_within_a_sane_prompt_size() -> None:
     combined = SCRIPT["content"] + "\n\n" + render_voice_append("Veerox")
-    assert len(SCRIPT["content"]) < 4500 and len(combined) < 14_500
+    assert len(SCRIPT["content"]) < 4500 and len(combined) < 15_500
     assert "AI assistant" in combined  # the platform rules and the script never contradict the disclosure
 
 

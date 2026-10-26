@@ -420,7 +420,9 @@ def test_flag_interactions_are_reported() -> None:
 
 
 def test_the_real_defaults_have_every_behaviour_flag_off_except_the_log_hygiene_ones() -> None:
-    snapshot = config_check.flag_snapshot()
+    # Code defaults only: a developer's .env / environment may legitimately turn flags on.
+    defaults = type(settings).model_construct()
+    snapshot = config_check.flag_snapshot(defaults)
     on = {k for k, v in snapshot.items() if v}
     assert on <= {"log_privacy_enabled", "log_transcripts", "voice_latency_tracking", "voice_greeting_ai_disclosure"}, on
 

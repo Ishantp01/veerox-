@@ -70,8 +70,8 @@ class ElevenLabsTTSSession:
     ) -> None:
         # ``profile`` is the call's org voice profile merged over the platform
         # settings (voice_profile.resolve_profile). None = exactly the
-        # pre-profile behaviour: platform voice/model, stability 0.42 and
-        # similarity_boost 0.8, no text rewriting.
+        # pre-profile behaviour: platform voice/model, stability 0.38 and
+        # similarity_boost 0.75, no text rewriting.
         self._profile = profile
         self._voice_id = voice_id or (profile.voice_id if profile else None) or platform_voice_id()
         self._model_id = model_id or (profile.model_id if profile else None) or platform_model_id()

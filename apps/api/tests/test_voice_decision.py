@@ -562,3 +562,13 @@ async def test_shadow_logging_does_not_open_a_session_for_non_shadow_orgs(
     for mode in ("none", "off", "live"):
         voice_decision.set_cached_voice_mode(ORG_ID, mode)
         await shadow._run_shadow(ORG_ID, USER_ID, uuid.uuid4(), "hello there")  # must return quietly
+
+
+def test_smart_mode_holds_for_a_stutter_but_not_a_plain_sentence() -> None:
+    from apps.api.channels.voice.turn_controller import HOLD_CONTINUATION_SECONDS, hold_decision
+
+    for text in ("mera bud-", "mera mera budget budget", "mujhe mujhe", "main chahta- "):
+        assert hold_decision(text, False, smart=True) == (HOLD_CONTINUATION_SECONDS, "stutter"), text
+        assert hold_decision(text, False, smart=False)[1] != "stutter"
+    assert hold_decision("price kya hai", False, smart=True)[1] != "stutter"
+    assert hold_decision("haan haan", True, smart=True)[1] != "stutter"
