@@ -917,11 +917,11 @@ async def _live_llm_check(oai_ws: Any, call_ws: WebSocket, state: CallState, log
     text = state.utterance_text
     token = turn_controller.ACTIVE_STATS.set(state.live_stats)
     try:
+        lean = settings.voice_smart_turn_taking and turn_controller.is_candidate_backchannel(
+            text, time.monotonic() - state.t_speech_started
+        )
         judgement = await turn_controller.judge_turn(
-            text,
-            state.openai_api_key,
-            lean_filler=settings.voice_smart_turn_taking
-            and turn_controller.is_candidate_backchannel(text, time.monotonic() - state.t_speech_started),
+            text, state.openai_api_key, **({"lean_filler": True} if lean else {})
         )
     finally:
         turn_controller.ACTIVE_STATS.reset(token)
