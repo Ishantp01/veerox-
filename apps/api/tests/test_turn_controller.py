@@ -652,7 +652,7 @@ def test_latency_defaults_favour_speed() -> None:
     from apps.api.config import Settings
 
     assert Settings.model_fields["voice_endpoint_hold"].default is False
-    assert Settings.model_fields["voice_vad_silence_ms"].default == 500
+    assert Settings.model_fields["voice_vad_silence_ms"].default == 1100
 
 
 def test_vad_silence_window_comes_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
