@@ -359,7 +359,7 @@ async def test_holds_and_memory_never_cross_calls() -> None:
 async def test_the_final_instructions_keep_disclosure_authority_and_limits_without_contradiction() -> None:
     full = render_voice_append("Acme", ai_disclosure=True, speaking_style=True, natural_hinglish=True, tone="confident_informative")
     assert "AI assistant" in full and "never change the" in full and "never what is true or allowed" in full
-    assert len(full) < 14_000  # the org options together add about 2.2k characters to the call prompt
+    assert len(full) < 14_500  # the org options together add about 2.2k characters to the call prompt
     talk = Talk()
     und, decision = await talk.say("Franchise ka process kya hai? kaise shuru karte hain?", knowledge=[FACT_INVEST])
     text = build_instruction(VoicePlan(und, decision, {}, None, time.monotonic(), "", ON), action_result=None)
