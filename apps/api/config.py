@@ -199,6 +199,9 @@ class Settings(BaseSettings):
     # unfinished sentence waits briefly for its end (same hold as VOICE_ENDPOINT_HOLD), and
     # the answer to an interruption is told to address it first without inventing facts.
     voice_smart_turn_taking: bool = False
+    # Play a short cached "जी..."/"हूँ..." the moment the caller stops talking (ElevenLabs path only), so the
+    # gap before the first TTS audio is not dead air. Off by default; see channels/voice/instant_ack.py.
+    voice_instant_ack: bool = False
 
     # Phase 5 - production reliability. Everything that changes what a call does is OFF until
     # it has been validated on a live call. Numeric knobs are clamped where they are used

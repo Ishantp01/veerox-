@@ -28,8 +28,13 @@ from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.channels.voice import elevenlabs_client
-from apps.api.channels.voice.voice_profile import ResolvedVoice
+from apps.api.channels.voice import elevenlabs_client, instant_ack
+from apps.api.channels.voice.voice_profile import (
+    LEGACY_VOICE_SETTINGS,
+    ResolvedVoice,
+    platform_model_id,
+    platform_voice_id,
+)
 from apps.api.channels.voice import language_detect
 from apps.api.channels.voice import call_control, recovery, turn_controller
 from apps.api.channels.voice.latency import LatencyTracker
@@ -113,6 +118,7 @@ class CallState:
     # before they hear any of it. Cleared to 0 once the greeting response
     # actually finishes, so normal barge-in resumes for the rest of the call.
     greeting_guard_until: float = 0.0
+    ack_clip_index: int = 0  # rotates the instant-reaction clips
     greeting_guard_extended: bool = False
     # True between a response.created and its matching response.done — lets
     # the speech_started handler below tell whether the caller started
@@ -1590,6 +1596,35 @@ async def _persist_voice_turn(
         state.pending_user_transcript = None
 
 
+def _ack_voice(state: CallState) -> tuple[str, str, dict[str, Any]] | None:
+    """(voice_id, model_id, voice_settings) for the instant reaction clip, or None when it does not apply."""
+    if not settings.voice_instant_ack or state.tts_provider != "elevenlabs":
+        return None
+    if state.voice is not None:
+        return state.voice.voice_id, state.voice.model_id, state.voice.voice_settings
+    return platform_voice_id(), platform_model_id(), dict(LEGACY_VOICE_SETTINGS)
+
+
+async def _send_instant_ack(call_ws: WebSocket, state: CallState, log: Any) -> None:
+    """Play a cached micro-reaction ("जी...") right after the caller stops. Best effort and silent on any
+    problem; deliberately does not touch playback/latency accounting, so it never looks like real reply audio."""
+    voice = _ack_voice(state)
+    if voice is None or state.suppress_response_audio or _agent_busy(state):
+        return
+    if state.utterance_text.strip() and _is_backchannel(state.utterance_text):
+        return  # "haan"/"ok" is not a turn that needs a reaction
+    clips = instant_ack.clips_for(voice[0], voice[1])
+    if not clips:
+        return
+    clip = clips[state.ack_clip_index % len(clips)]
+    state.ack_clip_index += 1
+    try:
+        await call_ws.send_text(json.dumps(_media_message(state.provider, state.stream_id, clip)))
+        log.info("voice_instant_ack_sent")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _media_message(provider: str, stream_id: str | None, payload: str) -> dict[str, Any]:
     """The provider-specific envelope for one chunk of mu-law audio (see ``_send_media``)."""
     if provider == "twilio":
@@ -2386,6 +2421,9 @@ async def handle_openai_event(
                 state.item_previous.pop(next(iter(state.item_previous)))
 
     elif etype == "input_audio_buffer.speech_started":
+        ack = _ack_voice(state)
+        if ack is not None:
+            instant_ack.warm(*ack)  # synthesize the clips while the caller is still talking
         # The caller started talking while the agent's current answer is
         # still playing (or before it's even started). This used to be
         # treated as a barge-in — clearing the provider's playback buffer
@@ -2454,6 +2492,8 @@ async def handle_openai_event(
         if not (state.greeting_guard_until and state.t_speech_stopped < state.greeting_guard_until):
             state.latency.begin_turn()
             state.latency.mark("speech_stopped")
+            if _ack_voice(state) is not None:
+                asyncio.create_task(_send_instant_ack(call_ws, state, log))
         if state.cut_eval_deadline:
             state.cut_eval_deadline = min(
                 state.cut_eval_deadline, time.monotonic() + LIVE_EVAL_TAIL_SECONDS

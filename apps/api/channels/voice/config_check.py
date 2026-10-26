@@ -27,6 +27,7 @@ BEHAVIOUR_FLAGS = (
     "voice_nonblocking_tts_finish",
     "voice_greeting_audio_cache",
     "voice_smart_turn_taking",
+    "voice_instant_ack",
     "voice_safe_cancel",
     "voice_trim_interrupted_context",
     "voice_end_call_enabled",

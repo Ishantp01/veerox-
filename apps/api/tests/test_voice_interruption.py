@@ -13,6 +13,7 @@ import asyncio
 import json
 import time
 import uuid
+import types
 from typing import Any
 
 import pytest
@@ -673,3 +674,16 @@ async def test_prewarm_and_safe_cancel_work_together(monkeypatch: pytest.MonkeyP
     await call.event("response.text.delta", delta="Jawab", response_id="resp_2")
     assert FakeSession.instances[1].sent == ["Jawab"] and call.state.eleven_session is FakeSession.instances[1]
     await adapter.cancel_pending_tasks(call.state)
+
+
+def test_instant_ack_is_off_by_default_and_only_for_elevenlabs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from apps.api.channels.voice import adapter
+    from apps.api.config import Settings
+
+    assert Settings.model_fields["voice_instant_ack"].default is False
+    monkeypatch.setattr(adapter.settings, "voice_instant_ack", False)
+    assert adapter._ack_voice(types.SimpleNamespace(tts_provider="elevenlabs", voice=None)) is None
+    monkeypatch.setattr(adapter.settings, "voice_instant_ack", True)
+    assert adapter._ack_voice(types.SimpleNamespace(tts_provider="openai", voice=None)) is None
+    voice, model, vs = adapter._ack_voice(types.SimpleNamespace(tts_provider="elevenlabs", voice=None))
+    assert voice and model and vs["similarity_boost"] == 0.75
