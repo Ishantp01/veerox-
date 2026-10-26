@@ -687,3 +687,79 @@ def test_instant_ack_is_off_by_default_and_only_for_elevenlabs(monkeypatch: pyte
     assert adapter._ack_voice(types.SimpleNamespace(tts_provider="openai", voice=None)) is None
     voice, model, vs = adapter._ack_voice(types.SimpleNamespace(tts_provider="elevenlabs", voice=None))
     assert voice and model and vs["similarity_boost"] == 0.75
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["hmm", "hmmm", "ok", "okay", "thik hai", "theek hai", "acha", "achha", "right", "haan", "ji",
+     "अच्छा", "हाँ", "जी", "haan ji", "जी हाँ", "ठीक है"],
+)
+def test_backchannels_never_count_as_a_real_turn(text: str) -> None:
+    assert turn_controller.is_backchannel(text)
+    assert turn_controller.classify_partial(text) == "filler"
+    assert turn_controller.is_short_burst(text)
+
+
+def test_a_backchannel_with_a_real_ask_is_still_a_turn() -> None:
+    assert turn_controller.classify_partial("haan lekin price kya hai") == "real"
+    assert not turn_controller.is_short_burst("haan lekin price kya hai")
+
+
+def test_filler_over_the_agent_is_marked_once_as_non_interruptive() -> None:
+    events: list[str] = []
+    state = types.SimpleNamespace(
+        caller_speaking=False, backchannel_marked=False,
+        latency=types.SimpleNamespace(event=lambda kind, **kw: events.append(kind)),
+        live_stats=types.SimpleNamespace(filler_ignored=0),
+        reply_pending=True, restate_next=False, interrupted_mid_response=True, priority_reply=False,
+    )
+    adapter._drop_filler_reply(state)
+    adapter._drop_filler_reply(state)
+    assert events == ["non_interruptive_backchannel"]
+    assert state.reply_pending is False
+
+
+def test_candidate_backchannel_is_short_quick_and_not_an_ask() -> None:
+    cand = turn_controller.is_candidate_backchannel
+    assert cand("sahi hai ji") and cand("arre wah", 0.6) and cand("achha ji", 0.9)
+    assert not cand("sahi hai ji", 1.2)  # spoke for over a second
+    assert not cand("haan ek baat batao")  # four words
+    assert not cand("price kya hai") and not cand("ruko")  # an ask / a stop
+    assert not cand("")
+
+
+async def test_judge_leans_filler_only_for_a_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
+    from apps.api.core import llm
+
+    seen: list[str] = []
+
+    async def fake_chat(messages: Any, **kw: Any) -> Any:
+        seen.append(messages[0]["content"])
+        return types.SimpleNamespace(content='{"label": "FILLER", "confidence": 0.9}', tokens_in=1, tokens_out=1)
+
+    monkeypatch.setattr(llm, "chat_completion", fake_chat)
+    await turn_controller.judge_turn("sahi hai ji", "k", lean_filler=True)
+    await turn_controller.judge_turn("sahi hai ji", "k")
+    assert "When unsure, choose FILLER" in seen[0]
+    assert "When unsure, choose FILLER" not in seen[1]
+    assert "choose the other label" in seen[1]
+
+
+async def test_fallback_keeps_talking_for_an_uncertain_short_snippet(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(adapter, "LIVE_FALLBACK_CUT_SECONDS", 0)
+    monkeypatch.setattr(adapter.settings, "voice_smart_turn_taking", True)
+    cut: list[str] = []
+
+    async def fake_cut(*a: Any, **k: Any) -> None:
+        cut.append("cut")
+
+    monkeypatch.setattr(adapter, "_cut_now", fake_cut)
+    state = types.SimpleNamespace(
+        caller_speaking=True, live_llm_said_filler=False, utterance_text="sahi hai ji",
+        t_speech_started=time.monotonic(), live_stats=types.SimpleNamespace(fallback_filler_kept=0),
+    )
+    await adapter._live_fallback_cut(None, None, state, adapter.structlog.get_logger() if hasattr(adapter, "structlog") else None)
+    assert cut == [] and state.live_stats.fallback_filler_kept == 1
+    state.utterance_text = "mujhe ek baat batao"  # four words: a real turn
+    await adapter._live_fallback_cut(None, None, state, None)
+    assert cut == ["cut"]

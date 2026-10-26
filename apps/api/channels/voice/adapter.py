@@ -118,6 +118,8 @@ class CallState:
     # before they hear any of it. Cleared to 0 once the greeting response
     # actually finishes, so normal barge-in resumes for the rest of the call.
     greeting_guard_until: float = 0.0
+    t_speech_started: float = 0.0
+    backchannel_marked: bool = False  # non_interruptive_backchannel already recorded for this overlap
     ack_clip_index: int = 0  # rotates the instant-reaction clips
     greeting_guard_extended: bool = False
     # True between a response.created and its matching response.done — lets
@@ -888,6 +890,11 @@ async def _live_fallback_cut(oai_ws: Any, call_ws: WebSocket, state: CallState, 
     if turn_controller.is_short_burst(state.utterance_text):
         state.live_stats.fallback_filler_kept += 1  # a murmur of agreement: keep talking, answer it afterwards
         return
+    if settings.voice_smart_turn_taking and turn_controller.is_candidate_backchannel(
+        state.utterance_text, time.monotonic() - state.t_speech_started
+    ):
+        state.live_stats.fallback_filler_kept += 1  # short, quick and not a clear ask: treat as a soft acknowledgement
+        return
     await _cut_now(oai_ws, call_ws, state, log, "live_fallback")
 
 
@@ -895,6 +902,10 @@ def _drop_filler_reply(state: CallState) -> None:
     """The caller's turn was only a filler: don't answer it after the agent
     finishes talking."""
     if not state.caller_speaking:
+        if not state.backchannel_marked:
+            # The agent kept talking through an "ok"/"haan": record it as a non-interruptive back-channel.
+            state.backchannel_marked = True
+            state.latency.event("non_interruptive_backchannel")
         state.live_stats.filler_ignored += 1
         state.reply_pending = False
         state.restate_next = False
@@ -906,7 +917,12 @@ async def _live_llm_check(oai_ws: Any, call_ws: WebSocket, state: CallState, log
     text = state.utterance_text
     token = turn_controller.ACTIVE_STATS.set(state.live_stats)
     try:
-        judgement = await turn_controller.judge_turn(text, state.openai_api_key)
+        judgement = await turn_controller.judge_turn(
+            text,
+            state.openai_api_key,
+            lean_filler=settings.voice_smart_turn_taking
+            and turn_controller.is_candidate_backchannel(text, time.monotonic() - state.t_speech_started),
+        )
     finally:
         turn_controller.ACTIVE_STATS.reset(token)
     if judgement is not None:
@@ -2421,6 +2437,7 @@ async def handle_openai_event(
                 state.item_previous.pop(next(iter(state.item_previous)))
 
     elif etype == "input_audio_buffer.speech_started":
+        state.t_speech_started = time.monotonic()
         ack = _ack_voice(state)
         if ack is not None:
             instant_ack.warm(*ack)  # synthesize the clips while the caller is still talking
@@ -2464,6 +2481,7 @@ async def handle_openai_event(
         # (interrupted_mid_response is cleared once the episode resolves —
         # see _on_real_turn/_cut_now/input_audio_buffer.committed).
         if not state.interrupted_mid_response:
+            state.backchannel_marked = False
             state.utterance_text = ""
             state.live_llm_calls = 0
             state.live_llm_last_words = 0

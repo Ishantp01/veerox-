@@ -155,6 +155,24 @@ def is_short_burst(text: str) -> bool:
     return len(words) <= _SHORT_BURST_WORDS or len(re.sub(r"\s+", "", stripped)) <= _SHORT_BURST_CHARS
 
 
+# VOICE_SMART_TURN_TAKING: a snippet this short and this quick is a *candidate* back-channel. It still has to pass
+# the check (rules, then the tiny LLM label) - but when that check is unsure, a candidate is NOT treated as a
+# turn: the agent keeps talking.
+CANDIDATE_MAX_WORDS = 3
+CANDIDATE_MAX_SECONDS = 1.0
+
+
+def is_candidate_backchannel(text: str, speech_seconds: float | None = None) -> bool:
+    """At most three words, spoken in under a second (when the duration is known), with nothing that asks, stops
+    or corrects. Unlike ``is_backchannel`` it does not need the words to be on a list ("sahi hai ji", "arre wah")."""
+    words = _tokens(text)
+    if not words or len(words) > CANDIDATE_MAX_WORDS:
+        return False
+    if speech_seconds is not None and speech_seconds >= CANDIDATE_MAX_SECONDS:
+        return False
+    return not any(w in QUESTION_CUES or w in CORRECTION_CUES for w in words)
+
+
 def classify_partial(text: str, smart: bool = False) -> Verdict:
     """Cheap first-pass verdict on the (possibly partial, possibly garbled)
     transcript of what the caller is saying over the agent.
@@ -446,6 +464,13 @@ _LLM_SYSTEM = (
     "FILLER and anything else, choose the other label."
 )
 
+# For a candidate back-channel the tie-break flips: unsure means keep talking, not stop.
+_LLM_SYSTEM_SHORT = _LLM_SYSTEM.replace(
+    "When unsure between FILLER and anything else, choose the other label.",
+    "This utterance is very short (three words or fewer). Is it just an agreement or acknowledgment, or a "
+    "brand-new question or interruption? When unsure, choose FILLER.",
+)
+
 _JSON_RE = re.compile(r"\{.*?\}", re.S)
 
 
@@ -467,7 +492,13 @@ def parse_judgement(content: str | None) -> TurnJudgement | None:
 
 
 async def judge_turn(
-    text: str, api_key: str | None, timeout: float = 0.8, *, stats: LiveTurnStats | None = None, warmup: bool = False
+    text: str,
+    api_key: str | None,
+    timeout: float = 0.8,
+    *,
+    stats: LiveTurnStats | None = None,
+    warmup: bool = False,
+    lean_filler: bool = False,
 ) -> TurnJudgement | None:
     """Ask a small, fast model to label ``text`` (any language) with a
     confidence, or None if it couldn't answer in time."""
@@ -483,7 +514,7 @@ async def judge_turn(
         result = await asyncio.wait_for(
             chat_completion(
                 [
-                    {"role": "system", "content": _LLM_SYSTEM},
+                    {"role": "system", "content": _LLM_SYSTEM_SHORT if lean_filler else _LLM_SYSTEM},
                     {"role": "user", "content": text},
                 ],
                 temperature=0.0,
