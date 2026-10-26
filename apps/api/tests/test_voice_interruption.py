@@ -763,3 +763,27 @@ async def test_fallback_keeps_talking_for_an_uncertain_short_snippet(monkeypatch
     state.utterance_text = "mujhe ek baat batao"  # four words: a real turn
     await adapter._live_fallback_cut(None, None, state, None)
     assert cut == ["cut"]
+
+
+async def test_fallback_waits_for_a_late_transcript_instead_of_cutting_on_empty_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(adapter, "LIVE_FALLBACK_CUT_SECONDS", 0.01)
+    cut: list[str] = []
+
+    async def fake_cut(*a: Any, **k: Any) -> None:
+        cut.append("cut")
+
+    monkeypatch.setattr(adapter, "_cut_now", fake_cut)
+    state = types.SimpleNamespace(
+        caller_speaking=True, live_llm_said_filler=False, utterance_text="",
+        t_speech_started=time.monotonic(), live=types.SimpleNamespace(healthy=True),
+        live_stats=types.SimpleNamespace(fallback_filler_kept=0),
+    )
+
+    async def transcript_arrives() -> None:
+        await asyncio.sleep(0.15)  # the text lags the audio: "hmm thik hai" shows up late
+        state.utterance_text = "hmm thik hai"
+
+    await asyncio.gather(adapter._live_fallback_cut(None, None, state, None), transcript_arrives())
+    assert cut == [] and state.live_stats.fallback_filler_kept == 1

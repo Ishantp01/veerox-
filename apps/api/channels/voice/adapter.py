@@ -320,7 +320,9 @@ def _answer_immediately() -> bool:
 # — real questions run longer than a filler ("ok", "haan ji"), and it means
 # the agent is already quiet by the time the caller finishes, so the answer
 # needn't wait for the transcript.
-EARLY_CUT_SECONDS = 0.8
+# 1.5s, not 0.8s: "hmm, theek hai" takes about a second to say, so a shorter window cut the agent off for
+# plain acknowledgements whenever there was no transcript to tell them apart.
+EARLY_CUT_SECONDS = 1.5
 # With the live transcriber up, the agent is cut off by what the caller SAYS
 # (see handle_live_delta), not by how long they talk. If no verdict has
 # formed after this long of overlapping speech, cut anyway unless the text
@@ -333,6 +335,9 @@ EARLY_CUT_SECONDS = 0.8
 # practice — below it, speed comes at the cost of exactly the false-cutoff
 # problem this classifier exists to prevent.
 LIVE_FALLBACK_CUT_SECONDS = 0.8
+# If NO text has arrived at all by the fallback time, the caller is probably mid-"hmm thik hai" and the transcript is
+# simply late: keep waiting for text (re-checking) up to this long after they started, then cut on duration alone.
+LIVE_NO_TEXT_CUT_SECONDS = 2.0
 # Live text lags speech by up to ~1s, so keep judging for this long after
 # the caller stops speaking.
 LIVE_EVAL_TAIL_SECONDS = 3.0
@@ -877,11 +882,23 @@ async def _cut_if_still_speaking(oai_ws: Any, call_ws: WebSocket, state: CallSta
     await _cut_now(oai_ws, call_ws, state, log, "duration")
 
 
+def _live_text_stalled(state: CallState) -> bool:
+    """The live transcriber is gone, so waiting for text is pointless."""
+    return not _live_ready(state)
+
+
 async def _live_fallback_cut(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
     """Live path safety net: the caller has been talking over the agent for
     LIVE_FALLBACK_CUT_SECONDS with no verdict — cut unless the text so far is
     known filler."""
     await asyncio.sleep(LIVE_FALLBACK_CUT_SECONDS)
+    while (
+        state.caller_speaking
+        and not state.utterance_text.strip()
+        and time.monotonic() - state.t_speech_started < LIVE_NO_TEXT_CUT_SECONDS
+        and not _live_text_stalled(state)
+    ):
+        await asyncio.sleep(0.1)  # no transcript yet: lag, not a turn
     if not state.caller_speaking or state.live_llm_said_filler:
         return
     if turn_controller.classify_partial(state.utterance_text, settings.voice_smart_turn_taking) == "filler":
