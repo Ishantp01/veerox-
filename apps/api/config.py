@@ -265,6 +265,8 @@ class Settings(BaseSettings):
     # Which engine speaks when voice_tts_provider == "elevenlabs": "elevenlabs" (default) or "sarvam"
     # (channels/voice/sarvam_client.py). A failed Sarvam turn is replayed on ElevenLabs by TTS recovery.
     voice_tts_engine: str = "elevenlabs"
+    # True: a failed Sarvam turn is replayed on ElevenLabs. False: Sarvam only, so its failures stay visible (testing).
+    sarvam_fallback_to_elevenlabs: bool = True
     sarvam_api_key: str | None = None
     sarvam_model: str = "bulbul:v4-flash"
     sarvam_speaker: str = "aparna_hi_customer"

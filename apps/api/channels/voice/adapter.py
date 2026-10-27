@@ -1776,9 +1776,13 @@ async def _open_elevenlabs_session(
     """Open this turn's socket. ``safe=True`` ignores the org's voice profile (platform voice/model
     and default settings, which are known to work) - used by TTS recovery after a failure."""
     state.latency.mark("tts_connect_started")
-    if settings.voice_tts_engine == "sarvam" and not safe and sarvam_client.is_configured():
+    if (
+        settings.voice_tts_engine == "sarvam"
+        and sarvam_client.is_configured()
+        and (not safe or not settings.sarvam_fallback_to_elevenlabs)
+    ):
         session_cm: Any = sarvam_client.SarvamTTSSession()
-    else:  # ``safe`` (recovery after a failure) always uses ElevenLabs
+    else:  # recovery after a failure (``safe``) goes to ElevenLabs unless Sarvam-only is requested
         session_cm = (
             elevenlabs_client.ElevenLabsTTSSession(profile=state.voice)
             if (state.voice is not None and not safe)

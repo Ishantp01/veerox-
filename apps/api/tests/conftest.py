@@ -43,6 +43,8 @@ def _no_platform_channel_credentials_leak(monkeypatch: pytest.MonkeyPatch) -> No
         "meta_verify_token",
     ):
         monkeypatch.setattr(settings, attr, None)
+    # Same reason: a developer testing Sarvam locally must not change how the suite's ElevenLabs tests run.
+    monkeypatch.setattr(settings, "voice_tts_engine", "elevenlabs")
 
 
 # Building an SSL context loads the CA bundle (~0.7 s on Windows). This autouse fixture used to do
