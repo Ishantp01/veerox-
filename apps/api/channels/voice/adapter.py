@@ -28,7 +28,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.channels.voice import elevenlabs_client, instant_ack
+from apps.api.channels.voice import elevenlabs_client, instant_ack, sarvam_client
 from apps.api.channels.voice.voice_profile import (
     LEGACY_VOICE_SETTINGS,
     ResolvedVoice,
@@ -1776,11 +1776,14 @@ async def _open_elevenlabs_session(
     """Open this turn's socket. ``safe=True`` ignores the org's voice profile (platform voice/model
     and default settings, which are known to work) - used by TTS recovery after a failure."""
     state.latency.mark("tts_connect_started")
-    session_cm = (
-        elevenlabs_client.ElevenLabsTTSSession(profile=state.voice)
-        if (state.voice is not None and not safe)
-        else elevenlabs_client.ElevenLabsTTSSession()
-    )
+    if settings.voice_tts_engine == "sarvam" and not safe and sarvam_client.is_configured():
+        session_cm: Any = sarvam_client.SarvamTTSSession()
+    else:  # ``safe`` (recovery after a failure) always uses ElevenLabs
+        session_cm = (
+            elevenlabs_client.ElevenLabsTTSSession(profile=state.voice)
+            if (state.voice is not None and not safe)
+            else elevenlabs_client.ElevenLabsTTSSession()
+        )
     session = await session_cm.__aenter__()
     # Characters sent are accounted when the session closes (a retry's are shown separately).
     session.on_close = lambda chars, _retry=retry: state.usage.add_tts_chars(chars, retry=_retry)

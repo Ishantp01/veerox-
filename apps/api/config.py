@@ -262,6 +262,14 @@ class Settings(BaseSettings):
     # max syntheses per org per minute, and the longest phrase accepted.
     voice_preview_per_minute: int = 6
     voice_preview_max_chars: int = 300
+    # Which engine speaks when voice_tts_provider == "elevenlabs": "elevenlabs" (default) or "sarvam"
+    # (channels/voice/sarvam_client.py). A failed Sarvam turn is replayed on ElevenLabs by TTS recovery.
+    voice_tts_engine: str = "elevenlabs"
+    sarvam_api_key: str | None = None
+    sarvam_model: str = "bulbul:v4-flash"
+    sarvam_speaker: str = "aparna_hi_customer"
+    sarvam_language_code: str = "hi-IN"
+    sarvam_pace: float = 1.0
     elevenlabs_api_key: str | None = None
     elevenlabs_voice_id: str = "CwhRBWXzGAHq8TQ4Fs17"
     # Low-latency model — eleven_multilingual_v2 sounds better but is too
