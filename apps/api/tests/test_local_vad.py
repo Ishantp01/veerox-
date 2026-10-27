@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 
-import numpy as np
+import math
 import pytest
 
 from apps.api.channels.voice import adapter, local_vad
@@ -13,21 +13,18 @@ from apps.api.config import settings
 from apps.api.tests.test_voice_interruption import Call, base  # noqa: F401 - base is an autouse fixture
 
 
-def _ulaw(samples: np.ndarray) -> str:
-    # encode int16 -> mu-law via nearest lookup in the decode table
+def _ulaw(samples: list[int]) -> str:
     table = local_vad._ULAW
-    idx = np.abs(samples[:, None].astype(np.float32) - table[None, :]).argmin(axis=1).astype(np.uint8)
-    return base64.b64encode(idx.tobytes()).decode()
+    return base64.b64encode(bytes(min(range(256), key=lambda i: abs(table[i] - x)) for x in samples)).decode()
 
 
 def _tone(amp: float, seconds: float) -> str:
-    t = np.arange(int(8000 * seconds)) / 8000
-    return _ulaw((amp * np.sin(2 * np.pi * 220 * t)).astype(np.int16))
+    return _ulaw([int(amp * math.sin(2 * math.pi * 220 * n / 8000)) for n in range(int(8000 * seconds))])
 
 
 def test_silence_is_not_speech() -> None:
     v = local_vad.LocalVAD()
-    v.feed(_ulaw(np.zeros(1600, dtype=np.int16)))
+    v.feed(_ulaw([0] * 1600))
     assert v.run_frames == 0 and not v.sustained(0.1)
 
 
@@ -44,7 +41,7 @@ def test_a_dropout_resets_the_run() -> None:
     v = local_vad.LocalVAD()
     v.feed(_tone(30, 0.3))
     v.feed(_tone(6000, 0.3))
-    v.feed(_ulaw(np.zeros(320, dtype=np.int16)))
+    v.feed(_ulaw([0] * 320))
     assert v.run_frames == 0
 
 

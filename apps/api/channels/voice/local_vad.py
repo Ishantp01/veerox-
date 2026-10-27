@@ -5,7 +5,7 @@ whether the caller has been speaking *confidently and continuously* for long eno
 agent off. Backchannels ("hmm", "acha") are short and soft, so they never reach that bar; a real interruption
 is louder and longer.
 
-This is an energy-over-adaptive-noise-floor classifier written in numpy, not Silero: ``onnxruntime`` has no wheel
+This is an energy-over-adaptive-noise-floor classifier written in plain Python (no numpy in the image), not Silero: ``onnxruntime`` has no wheel
 for this Python and torch would more than double the image. ``score_frame`` is the one place to swap in a Silero
 call later. It cannot tell "hmm" from a word by spectrum; the transcript check in adapter.py still does that.
 
@@ -15,8 +15,7 @@ UNVERIFIED on live calls: the thresholds are starting points to tune from ``voic
 from __future__ import annotations
 
 import base64
-
-import numpy as np
+import math
 
 FRAME_SAMPLES = 160  # 20 ms at 8 kHz
 FRAME_SECONDS = 0.02
@@ -27,45 +26,45 @@ _SNR_SPAN_DB = 10.0  # ... and reaches 1.0 this many dB later
 _MIN_RMS = 60.0  # below this a frame is silence whatever the noise floor says
 
 
-def _build_ulaw_table() -> np.ndarray:
-    u = (~np.arange(256, dtype=np.int32)) & 0xFF
-    sign = u & 0x80
-    exponent = (u >> 4) & 0x07
-    mantissa = u & 0x0F
-    magnitude = (((mantissa << 3) + 0x84) << exponent) - 0x84
-    return np.where(sign != 0, -magnitude, magnitude).astype(np.float32)
+def _build_ulaw_table() -> list[int]:
+    table = []
+    for byte in range(256):
+        u = ~byte & 0xFF
+        magnitude = (((u & 0x0F) << 3) + 0x84 << ((u >> 4) & 0x07)) - 0x84
+        table.append(-magnitude if u & 0x80 else magnitude)
+    return table
 
 
 _ULAW = _build_ulaw_table()
 
 
-def decode_ulaw(payload_b64: str) -> np.ndarray:
-    return _ULAW[np.frombuffer(base64.b64decode(payload_b64), dtype=np.uint8)]
+def decode_ulaw(payload_b64: str) -> list[int]:
+    return [_ULAW[b] for b in base64.b64decode(payload_b64)]
 
 
 class LocalVAD:
     """Feed it each caller media payload; ask ``sustained()`` when deciding whether to cut."""
 
     def __init__(self) -> None:
-        self._carry = np.zeros(0, dtype=np.float32)
+        self._carry: list[int] = []
         self._noise_db = 40.0  # adapts down quickly, up slowly, so speech does not raise the floor
         self.run_frames = 0
         self._run_prob_sum = 0.0
         self.last_prob = 0.0
 
-    def score_frame(self, frame: np.ndarray) -> float:
-        rms = float(np.sqrt(np.mean(frame * frame))) if frame.size else 0.0
+    def score_frame(self, frame: list[int]) -> float:
+        rms = math.sqrt(sum(x * x for x in frame) / len(frame)) if frame else 0.0
         if rms < _MIN_RMS:
-            self._noise_db = min(self._noise_db, 20.0 * np.log10(max(rms, 1.0)))
+            self._noise_db = min(self._noise_db, 20.0 * math.log10(max(rms, 1.0)))
             return 0.0
-        db = 20.0 * np.log10(rms)
+        db = 20.0 * math.log10(rms)
         rate = 0.2 if db < self._noise_db else 0.002
         self._noise_db += (db - self._noise_db) * rate
-        return float(np.clip((db - self._noise_db - _SNR_FLOOR_DB) / _SNR_SPAN_DB + 0.7, 0.0, 1.0))
+        return min(1.0, max(0.0, (db - self._noise_db - _SNR_FLOOR_DB) / _SNR_SPAN_DB + 0.7))
 
     def feed(self, payload_b64: str) -> None:
         try:
-            samples = np.concatenate([self._carry, decode_ulaw(payload_b64)])
+            samples = self._carry + decode_ulaw(payload_b64)
         except Exception:  # noqa: BLE001 - a bad frame must never touch the call
             return
         n = len(samples) // FRAME_SAMPLES
