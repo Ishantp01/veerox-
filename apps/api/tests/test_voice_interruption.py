@@ -787,3 +787,18 @@ async def test_fallback_waits_for_a_late_transcript_instead_of_cutting_on_empty_
 
     await asyncio.gather(adapter._live_fallback_cut(None, None, state, None), transcript_arrives())
     assert cut == [] and state.live_stats.fallback_filler_kept == 1
+
+
+@pytest.mark.parametrize(
+    "text", ["hmm thik hai ok", "ji haan achha sahi hai", "ok ok ok ok ok", "haan haan theek hai ji", "hmm"]
+)
+def test_chained_acknowledgments_are_an_extended_backchannel(text: str) -> None:
+    assert turn_controller.is_extended_backchannel(text)
+    assert turn_controller.classify_partial(text) == "filler"
+
+
+def test_one_unknown_word_breaks_the_chain() -> None:
+    assert not turn_controller.is_extended_backchannel("hmm thik hai lekin price")
+    assert not turn_controller.is_extended_backchannel("ok ok ok ok ok ok ok ok ok ok ok ok ok")  # over the cap
+    assert turn_controller.is_chained_backchannel("hmm thik hai ok")
+    assert not turn_controller.is_chained_backchannel("haan ji")  # two words may be a real "yes"

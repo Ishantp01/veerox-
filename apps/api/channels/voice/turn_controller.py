@@ -125,6 +125,26 @@ def is_backchannel(text: str, max_words: int = 4) -> bool:
     return len(words) <= max_words and all(_is_backchannel_word(w) for w in words)
 
 
+EXTENDED_BACKCHANNEL_MAX_WORDS = 12
+CHAINED_MIN_WORDS = 3
+
+
+def is_extended_backchannel(text: str) -> bool:
+    """Every word is a known acknowledgment, however many are chained ("hmm thik hai ok", "ji haan achha sahi hai").
+    Empty/noise counts, like ``is_backchannel``. Capped only so a long run of text is never waved through."""
+    words = _tokens(text)
+    if not words:
+        return True
+    return len(words) <= EXTENDED_BACKCHANNEL_MAX_WORDS and all(_is_backchannel_word(w) for w in words)
+
+
+def is_chained_backchannel(text: str) -> bool:
+    """An extended back-channel of several acknowledgments in a row. That is a murmur of "I'm with you", not an
+    answer to a question, so it needs no reply at all."""
+    words = _tokens(text)
+    return len(words) >= CHAINED_MIN_WORDS and is_extended_backchannel(text)
+
+
 def is_noise(text: str) -> bool:
     """Non-speech the transcriber emitted for background noise: only punctuation or
     symbols, or one letter repeated ("aaaa", "mmmm"). Empty text is NOT noise (it

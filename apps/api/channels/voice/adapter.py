@@ -382,7 +382,7 @@ def _agent_busy(state: CallState) -> bool:
 
 # The filler-word list and classifier live in turn_controller.py; kept under
 # the old name because the whisper-transcript path below still uses it.
-_is_backchannel = turn_controller.is_backchannel
+_is_backchannel = turn_controller.is_extended_backchannel
 
 
 async def _send_clear(ws: WebSocket, state: CallState) -> None:
@@ -2564,11 +2564,23 @@ async def handle_openai_event(
             state.interrupted_mid_response = False
             state.restate_next = not _answer_immediately()
         state.reply_pending = True
+        # "hmm thik hai ok": a chain of acknowledgments to an agent that has finished talking is the caller
+        # saying "I'm with you", not asking for anything. Stay silent and let them carry on.
+        absorbed = (
+            settings.voice_smart_turn_taking
+            and _live_ready(state)
+            and not _agent_busy(state)
+            and turn_controller.is_chained_backchannel(state.utterance_text)
+        )
+        if absorbed:
+            state.reply_pending = False
+            log.info("voice_extended_backchannel_absorbed", words=len(state.utterance_text.split()))
+            state.latency.event("extended_backchannel_absorbed")
         # Adaptive endpointing: if the text streamed so far looks unfinished,
         # wait a little before answering in case they carry on.
         hold, hold_reason = (
             turn_controller.hold_decision(state.utterance_text, _agent_busy(state), settings.voice_smart_turn_taking)
-            if _live_ready(state) and (settings.voice_endpoint_hold or settings.voice_smart_turn_taking)
+            if _live_ready(state) and not absorbed and (settings.voice_endpoint_hold or settings.voice_smart_turn_taking)
             else (0.0, None)
         )
         state.hold_until = time.monotonic() + hold if hold else 0.0
@@ -2587,7 +2599,7 @@ async def handle_openai_event(
             await _start_finish_first(oai_ws, call_ws, state, log)
         # Still speaking the earlier answer: hold the reply, response.done
         # below fires it once that answer has fully finished.
-        if not state.response_active:
+        if not state.response_active and not absorbed:
             _schedule_reply(oai_ws, state)
         if (
             _agent_busy(state)
