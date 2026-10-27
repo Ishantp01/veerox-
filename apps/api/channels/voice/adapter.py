@@ -188,6 +188,19 @@ class CallState:
     # yet — the ack waits briefly for these so a filler word ("ok") can be
     # recognised and ignored before the agent reacts to it.
     transcripts_outstanding: int = 0
+    # Turn stamping. ``assistant_turn_id`` counts the assistant's responses; each caller utterance gets a
+    # sequence number (``utt_seq``) when its audio is committed and remembers the assistant turn that was
+    # current when the caller started speaking. A transcript is matched to its utterance by item id (or commit
+    # order), so a late one can be recognised and dropped instead of landing on a newer turn.
+    assistant_turn_id: int = 0
+    speech_turn_id: int = 0
+    utt_seq: int = 0
+    utt_queue: list[tuple[str | None, int, int]] = field(default_factory=list)  # (item_id, utt, turn at speech start)
+    applied_utt: int = 0  # newest utterance whose transcript has been accepted
+    pending_utt: int = 0  # utterance behind ``pending_user_transcript``
+    answering_utt: int = 0  # newest utterance the reply being generated answers
+    consumed_utt: int = 0  # newest utterance already recorded in history: older transcripts are stale
+    history_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     # True from input_audio_buffer.speech_started to speech_stopped, so the
     # early-cut timer can tell whether the caller is still talking.
     caller_speaking: bool = False
@@ -687,9 +700,9 @@ def reset_after_reconnect(state: CallState) -> None:
     state.heard_snapshot = None
 
 
-async def _persist_quietly(state: CallState, text: str, pending: str | None, log: Any) -> None:
+async def _persist_quietly(state: CallState, text: str, pending: str | None, log: Any, utt: int = 0) -> None:
     try:
-        await _persist_voice_turn(state, text, pending=pending)
+        await _persist_voice_turn(state, text, pending=pending, utt=utt)
     except Exception:  # noqa: BLE001 - recording must never touch the call
         log.warning("voice_interrupted_turn_persist_failed", exc_info=True)
 
@@ -699,10 +712,11 @@ def _persist_interrupted(state: CallState, log: Any) -> None:
     was generated against that question. Otherwise the muted response is never
     persisted and the caller's turn silently vanishes from the history."""
     pending, state.answering_transcript = state.answering_transcript, None
+    utt, state.answering_utt = state.answering_utt, 0  # the utterance THIS answer was for, not whatever is answered next
     text = state.resp_text.strip()
     if pending is None or not text:
         return
-    asyncio.create_task(_persist_quietly(state, text, pending, log))
+    asyncio.create_task(_persist_quietly(state, text, pending, log, utt))
 
 
 async def _cancel_watchdog(oai_ws: Any, state: CallState, log: Any) -> None:
@@ -1223,6 +1237,7 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
             base = response.get("instructions") or state.base_instructions
             response["instructions"] = f"{base}\n\n{GREETING_CUT_INSTRUCTION}".strip()
         state.answering_transcript = state.pending_user_transcript
+        state.answering_utt = state.utt_seq
         if response is not None:
             payload["response"] = response
         state.latency.mark("response_requested")
@@ -1688,7 +1703,7 @@ NO_TRANSCRIPT_PLACEHOLDER = "(voice)"
 
 
 async def _persist_voice_turn(
-    state: CallState, assistant_text: str, *, pending: Any = _UNSET
+    state: CallState, assistant_text: str, *, pending: Any = _UNSET, utt: int | None = None
 ) -> None:
     """Persist one (user transcript, assistant transcript) pair mid-call.
 
@@ -1700,21 +1715,45 @@ async def _persist_voice_turn(
     """
     snapshot = state.pending_user_transcript if pending is _UNSET else pending
     state.answering_transcript = None
+    answered_utt = state.answering_utt if utt is None else utt
+    if utt is None:
+        state.answering_utt = 0
     user_text = snapshot or NO_TRANSCRIPT_PLACEHOLDER
-    async with AsyncSessionLocal() as db:
-        await persist_turn(
-            db,
-            conversation_id=state.conversation_id,
-            user_id=state.user_id,
-            org_id=state.org_id,
-            channel="voice",
-            user_text=user_text,
-            assistant_text=assistant_text,
-        )
+    # One writer at a time, in the order the turns finished: two persists racing (a late TTS finish and the next
+    # turn's transcript) could otherwise interleave the user and assistant lines out of order.
+    async with state.history_lock:
+        async with AsyncSessionLocal() as db:
+            await persist_turn(
+                db,
+                conversation_id=state.conversation_id,
+                user_id=state.user_id,
+                org_id=state.org_id,
+                channel="voice",
+                user_text=user_text,
+                assistant_text=assistant_text,
+            )
+        state.consumed_utt = max(state.consumed_utt, answered_utt)
     # Conversation engine, log-only: never awaited, never affects the call.
     schedule_voice_shadow(state.org_id, state.user_id, state.conversation_id, user_text)
     if state.pending_user_transcript == snapshot:
         state.pending_user_transcript = None
+
+
+def _claim_utterance(state: CallState, item_id: str | None) -> tuple[int, int]:
+    """(utterance number, assistant turn at the time the caller started speaking) for a finished transcript.
+
+    Matched by the Realtime item id when there is one, else by commit order. Entries that never get a
+    transcript (audio lost across a reconnect) age out of the bounded queue. (0, 0) when nothing is known: no stamp, no judgement."""
+    queue = state.utt_queue
+    if item_id:
+        for i, (qid, utt, turn) in enumerate(queue):
+            if qid == item_id:
+                del queue[i]
+                return utt, turn
+    if queue and (not item_id or queue[0][0] is None):
+        _, utt, turn = queue.pop(0)
+        return utt, turn
+    return 0, 0
 
 
 def _ack_voice(state: CallState) -> tuple[str, str, dict[str, Any]] | None:
@@ -2558,6 +2597,7 @@ async def handle_openai_event(
 
     elif etype == "input_audio_buffer.speech_started":
         state.t_speech_started = time.monotonic()
+        state.speech_turn_id = state.assistant_turn_id
         ack = _ack_voice(state)
         if ack is not None:
             instant_ack.warm(*ack)  # synthesize the clips while the caller is still talking
@@ -2652,6 +2692,7 @@ async def handle_openai_event(
             log.info("voice_duplicate_response_created_dropped")
             return
         state.response_active = True
+        state.assistant_turn_id += 1
         state.resp_text = ""
         state.resp_audio_seconds = 0.0
         state.response_id = (event.get("response") or {}).get("id")
@@ -2669,6 +2710,9 @@ async def handle_openai_event(
         # specific response without touching the persisted session
         # instructions used every other turn.
         state.transcripts_outstanding += 1
+        state.utt_seq += 1
+        state.utt_queue.append((event.get("item_id"), state.utt_seq, state.speech_turn_id))
+        del state.utt_queue[:-32]
         state.t_committed = time.monotonic()
         state.latency.mark("committed")
         state.latency.note(agent_was_busy=_agent_busy(state))
@@ -2723,6 +2767,20 @@ async def handle_openai_event(
             state.ack_task = asyncio.create_task(_ack_after_gap(oai_ws, call_ws, state, log))
 
     elif etype == "conversation.item.input_audio_transcription.completed":
+        utt, spoke_in_turn = _claim_utterance(state, event.get("item_id"))
+        if utt and (utt <= state.consumed_utt or utt < state.applied_utt):
+            # Older than a turn that is already in the history, or than a transcript already accepted: it belongs
+            # to a question the conversation has moved past, so it must not become the answer to the current one.
+            state.transcripts_outstanding = max(0, state.transcripts_outstanding - 1)
+            log.info(
+                "voice_stale_transcript_dropped", utt=utt, spoke_in_turn=spoke_in_turn,
+                current_turn=state.assistant_turn_id, consumed=state.consumed_utt, chars=len(event.get("transcript") or ""),
+            )
+            _trace(state, "stale_transcript_dropped", utt=utt)
+            return
+        if utt:
+            state.applied_utt = max(state.applied_utt, utt)
+            state.pending_utt = utt
         state.pending_user_transcript = (event.get("transcript") or "").strip()
         _trace(state, "transcript_arrived", ms_since_commit=_ms_since(state.t_committed), agent_busy=_agent_busy(state))
         if state.pending_user_transcript:

@@ -134,7 +134,7 @@ def base(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
 
     persisted: list[tuple[str, Any]] = []
 
-    async def fake_persist(state: Any, text: str, *, pending: Any = adapter._UNSET) -> None:
+    async def fake_persist(state: Any, text: str, *, pending: Any = adapter._UNSET, utt: int | None = None) -> None:
         persisted.append((text, state.pending_user_transcript if pending is adapter._UNSET else pending))
         state.answering_transcript = None
 

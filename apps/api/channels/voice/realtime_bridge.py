@@ -486,6 +486,7 @@ async def _system_instructions(
         speaking_style=speaking_style,
         tone=prompt_tone,
         natural_hinglish=natural_hinglish,
+        human_style=settings.voice_human_style,
     )
     tail = f"{current_datetime_block()}\n\n{voice_append.strip()}"
     if catalog:
