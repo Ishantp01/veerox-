@@ -17,14 +17,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import re
 import time
 from collections.abc import Callable
 from types import TracebackType
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
 import structlog
+import websockets
 
 from apps.api.config import settings
 
@@ -32,6 +34,7 @@ logger = structlog.get_logger(__name__)
 
 _URL = "https://api.sarvam.ai/text-to-speech"
 _BOUNDARY_RE = re.compile(r"(?<=[.?!।…])\s+|\n+")
+_BOUNDARY_END_RE = re.compile(r"[.?!।…]\s*$")
 _COMMA_RE = re.compile(r"(?<=,)\s+")
 _MIN_CLAUSE = 28  # a comma only ends a clause once this many characters are waiting
 _PLAYBACK_CHUNK = 1600  # bytes of mu-law (200 ms) per audio message sent to the phone
@@ -151,3 +154,144 @@ class SarvamTTSSession:
             for i in range(0, len(audio), _PLAYBACK_CHUNK):
                 self.audio_chunks_received += 1
                 yield base64.b64encode(audio[i : i + _PLAYBACK_CHUNK]).decode()
+
+
+_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
+_WS_MIN_BUFFER = 30  # characters Sarvam waits for before it starts synthesizing on its own
+_WS_CONNECT_TIMEOUT = 4.0
+_WS_IDLE_TIMEOUT = 6.0  # no frame this long while a turn is open: treat the socket as dead
+
+
+class SarvamWSTTSSession:
+    """Streaming variant (``SARVAM_STREAMING_WS=true``): text goes out as the model produces it and audio comes
+    back as soon as Sarvam has it, with no client-side clause buffering. Same interface as ``SarvamTTSSession``.
+
+    Sarvam has closed this socket silently before, so a close or a quiet gap without the ``final`` event marks the
+    session ``failed``; the adapter then replays the turn on ElevenLabs (TTS recovery).
+    """
+
+    def __init__(self) -> None:
+        self._ws: Any = None
+        self._finished = False
+        self._pending_flush = False
+        self.connect_ms: int | None = None
+        self.failed = False
+        self.fail_reason: str | None = None
+        self.final_seen = False
+        self.audio_chunks_received = 0
+        self.chars_sent = 0
+        self.on_close: Callable[[int], None] | None = None
+        self._closed_reported = False
+        self.first_audio_ms: int | None = None
+        self._opened = 0.0
+
+    async def __aenter__(self) -> "SarvamWSTTSSession":
+        started = time.monotonic()
+        try:
+            self._ws = await asyncio.wait_for(
+                websockets.connect(
+                    f"{_WS_URL}?model={settings.sarvam_model}&send_completion_event=true",
+                    additional_headers={"Api-Subscription-Key": settings.sarvam_api_key or ""},
+                    max_size=None,
+                ),
+                _WS_CONNECT_TIMEOUT,
+            )
+            await self._ws.send(
+                json.dumps(
+                    {
+                        "type": "config",
+                        "data": {
+                            "speaker": settings.sarvam_speaker,
+                            "target_language_code": settings.sarvam_language_code,
+                            "language_code": settings.sarvam_language_code,
+                            "pace": settings.sarvam_pace,
+                            "min_buffer_size": _WS_MIN_BUFFER,
+                            "max_chunk_length": 200,
+                            "output_audio_codec": "mulaw",
+                            "speech_sample_rate": 8000,
+                        },
+                    }
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - recovery replays the turn on ElevenLabs
+            self._fail(f"sarvam_ws_connect:{type(exc).__name__}")
+        self.connect_ms = round((time.monotonic() - started) * 1000)
+        self._opened = time.monotonic()
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
+        if self._ws is not None:
+            try:
+                await self._ws.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if self.on_close is not None and not self._closed_reported:
+            self._closed_reported = True
+            try:
+                self.on_close(self.chars_sent)
+            except Exception:  # noqa: BLE001 - accounting must never affect the call
+                pass
+
+    def _fail(self, reason: str) -> None:
+        if not self.failed:
+            self.failed = True
+            self.fail_reason = reason
+            logger.warning("sarvam_ws_failed", reason=reason)
+
+    async def _send(self, payload: dict[str, Any]) -> None:
+        if self._ws is None or self.failed:
+            return
+        try:
+            await self._ws.send(json.dumps(payload))
+        except Exception as exc:  # noqa: BLE001
+            self._fail(f"sarvam_ws_send:{type(exc).__name__}")
+
+    async def send_text(self, text: str) -> None:
+        if not text or self._finished:
+            return
+        self.chars_sent += len(text)
+        await self._send({"type": "text", "data": {"text": text}})
+        # A sentence end flushes at once so audio starts without waiting for the character threshold.
+        if _BOUNDARY_END_RE.search(text):
+            await self._send({"type": "flush"})
+
+    async def finish(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        await self._send({"type": "flush"})
+
+    async def audio_chunks(self) -> AsyncIterator[str]:
+        if self._ws is None or self.failed:
+            return
+        while True:
+            try:
+                raw = await asyncio.wait_for(self._ws.recv(), _WS_IDLE_TIMEOUT)
+            except asyncio.TimeoutError:
+                self._fail("sarvam_ws_idle")
+                return
+            except Exception as exc:  # noqa: BLE001 - closed without a final event
+                self._fail(f"sarvam_ws_closed:{type(exc).__name__}")
+                return
+            try:
+                msg = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            kind = msg.get("type")
+            data = msg.get("data") or {}
+            if kind == "audio":
+                audio = base64.b64decode(data.get("audio") or "")
+                if self.first_audio_ms is None and audio:
+                    self.first_audio_ms = round((time.monotonic() - self._opened) * 1000)
+                    logger.info("sarvam_ws_first_audio", ms=self.first_audio_ms, connect_ms=self.connect_ms)
+                for i in range(0, len(audio), _PLAYBACK_CHUNK):
+                    self.audio_chunks_received += 1
+                    yield base64.b64encode(audio[i : i + _PLAYBACK_CHUNK]).decode()
+            elif kind == "event" and data.get("event_type") == "final":
+                self.final_seen = True
+                return
+            elif kind == "error":
+                self._fail("sarvam_ws_error")
+                return

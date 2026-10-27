@@ -195,6 +195,7 @@ class CallState:
     # Live partial-transcript path (turn_controller.LiveTranscriber). ``live``
     # is None until (and unless) its connection comes up.
     live: Any = field(default=None, repr=False)
+    vad: Any = field(default=None, repr=False)  # local_vad.LocalVAD when VOICE_LOCAL_VAD is on
     oai_ws: Any = field(default=None, repr=False)
     openai_api_key: str | None = field(default=None, repr=False)
     # Text streamed for the caller's current utterance (reset on speech_started).
@@ -894,6 +895,14 @@ async def _native_barge_in(oai_ws: Any, call_ws: WebSocket, state: CallState, lo
             log.info("voice_native_barge_in_ignored", reason="backchannel")
             return
         await asyncio.sleep(0.15)
+    # Energy gate: a soft or patchy sound is not an interruption even when no transcript has arrived yet.
+    while state.vad is not None and not state.vad.sustained(NATIVE_BARGE_IN_MIN_SPEECH_SECONDS):
+        if not state.caller_speaking or time.monotonic() > deadline:
+            log.info("voice_vad_gate", cut=False, run_s=round(state.vad.run_seconds, 2), mean=round(state.vad.run_mean_prob, 2))
+            return
+        await asyncio.sleep(0.05)
+    if state.vad is not None:
+        log.info("voice_vad_gate", cut=True, run_s=round(state.vad.run_seconds, 2), mean=round(state.vad.run_mean_prob, 2))
     await _cut_now(oai_ws, call_ws, state, log, "native_barge_in")
 
 
@@ -1659,6 +1668,8 @@ def _ack_voice(state: CallState) -> tuple[str, str, dict[str, Any]] | None:
     """(voice_id, model_id, voice_settings) for the instant reaction clip, or None when it does not apply."""
     if not settings.voice_instant_ack or state.tts_provider != "elevenlabs":
         return None
+    if settings.voice_tts_engine == "sarvam" and sarvam_client.is_configured():
+        return instant_ack.SARVAM_PREFIX + settings.sarvam_speaker, settings.sarvam_model, {}
     if state.voice is not None:
         return state.voice.voice_id, state.voice.model_id, state.voice.voice_settings
     return platform_voice_id(), platform_model_id(), dict(LEGACY_VOICE_SETTINGS)
@@ -1668,7 +1679,11 @@ async def _send_instant_ack(call_ws: WebSocket, state: CallState, log: Any) -> N
     """Play a cached micro-reaction ("जी...") right after the caller stops. Best effort and silent on any
     problem; deliberately does not touch playback/latency accounting, so it never looks like real reply audio."""
     voice = _ack_voice(state)
-    if voice is None or state.suppress_response_audio or _agent_busy(state):
+    if voice is None:
+        return
+    # Short hold: if the reply is already starting, the reaction would only talk over it.
+    await asyncio.sleep(max(0, settings.voice_ack_hold_ms) / 1000)
+    if state.suppress_response_audio or _agent_busy(state):
         return
     if state.utterance_text.strip() and _is_backchannel(state.utterance_text):
         return  # "haan"/"ok" is not a turn that needs a reaction
@@ -1807,7 +1822,9 @@ async def _open_elevenlabs_session(
         and sarvam_client.is_configured()
         and (not safe or not settings.sarvam_fallback_to_elevenlabs)
     ):
-        session_cm: Any = sarvam_client.SarvamTTSSession()
+        session_cm: Any = (
+            sarvam_client.SarvamWSTTSSession() if settings.sarvam_streaming_ws else sarvam_client.SarvamTTSSession()
+        )
     else:  # recovery after a failure (``safe``) goes to ElevenLabs unless Sarvam-only is requested
         session_cm = (
             elevenlabs_client.ElevenLabsTTSSession(profile=state.voice)

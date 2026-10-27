@@ -210,7 +210,10 @@ class Settings(BaseSettings):
     voice_smart_turn_taking: bool = False
     # Play a short cached "जी..."/"हूँ..." the moment the caller stops talking (ElevenLabs path only), so the
     # gap before the first TTS audio is not dead air. Off by default; see channels/voice/instant_ack.py.
+    # VOICE_LOCAL_VAD: native barge-in additionally needs >=0.4 s of confident speech by the energy gate (local_vad.py).
+    voice_local_vad: bool = False
     voice_instant_ack: bool = False
+    voice_ack_hold_ms: int = 120  # wait this long after the caller stops; skip the reaction if the reply has started
 
     # Phase 5 - production reliability. Everything that changes what a call does is OFF until
     # it has been validated on a live call. Numeric knobs are clamped where they are used
@@ -271,6 +274,7 @@ class Settings(BaseSettings):
     voice_tts_engine: str = "elevenlabs"
     # True: a failed Sarvam turn is replayed on ElevenLabs. False: Sarvam only, so its failures stay visible (testing).
     sarvam_fallback_to_elevenlabs: bool = True
+    sarvam_streaming_ws: bool = False  # SARVAM_STREAMING_WS: stream text over Sarvam's WebSocket instead of REST clauses
     sarvam_api_key: str | None = None
     sarvam_model: str = "bulbul:v4-flash"
     sarvam_speaker: str = "aparna_hi_customer"

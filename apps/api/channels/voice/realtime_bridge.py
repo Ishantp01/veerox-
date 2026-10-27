@@ -35,7 +35,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from apps.api.channels.voice import adapter as voice_adapter
-from apps.api.channels.voice import call_control, capacity, compliance, metering, recovery, signature, turn_controller
+from apps.api.channels.voice import call_control, capacity, compliance, local_vad, metering, recovery, signature, turn_controller
 from apps.api.channels.voice.compliance import RecordingPolicy, resolve_recording_policy
 from apps.api.channels.voice.greeting import effective_brand, greeting_cache, greeting_instruction
 from apps.api.channels.voice.latency import LatencyTracker, startup_emit, startup_mark
@@ -1062,6 +1062,9 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                     )
                 log.info("openai_realtime_connected")
 
+                if settings.voice_local_vad and state.vad is None:
+                    state.vad = local_vad.LocalVAD()
+
                 async def pump_call_to_openai() -> None:
                     try:
                         while True:
@@ -1071,6 +1074,8 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                             if event == "media":
                                 payload = (msg.get("media") or {}).get("payload")
                                 if payload:
+                                    if state.vad is not None:
+                                        state.vad.feed(payload)
                                     if state.live is not None:
                                         state.live.feed(payload)
                                         if state.live.healthy:

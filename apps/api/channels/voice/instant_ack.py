@@ -24,6 +24,7 @@ logger = structlog.get_logger(__name__)
 
 CLIP_TEXTS = ("जी...", "हूँ...")
 _URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=ulaw_8000"
+_SARVAM_URL = "https://api.sarvam.ai/text-to-speech"
 _ULAW_BYTES_PER_SECOND = 8000
 MAX_CLIP_SECONDS = 1.2  # a longer clip is not a micro-reaction; drop it
 
@@ -36,21 +37,40 @@ def clips_for(voice_id: str, model_id: str) -> list[str]:
     return [c for t in CLIP_TEXTS if (c := _cache.get((voice_id, model_id, t)))]
 
 
+SARVAM_PREFIX = "sarvam:"  # voice_id prefix: the clip is synthesized with Sarvam, so it matches the call's voice
+
+
 async def _synthesize(voice_id: str, model_id: str, voice_settings: dict[str, Any], text: str) -> str | None:
-    if not settings.elevenlabs_api_key:
+    sarvam = voice_id.startswith(SARVAM_PREFIX)
+    if not (settings.sarvam_api_key if sarvam else settings.elevenlabs_api_key):
         return None
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.post(
-                _URL.format(voice_id=voice_id),
-                headers={"xi-api-key": settings.elevenlabs_api_key},
-                json={"text": text, "model_id": model_id, "voice_settings": voice_settings},
-            )
+            if sarvam:
+                resp = await client.post(
+                    _SARVAM_URL,
+                    headers={"api-subscription-key": settings.sarvam_api_key or ""},
+                    json={
+                        "text": text,
+                        "target_language_code": settings.sarvam_language_code,
+                        "speaker": voice_id[len(SARVAM_PREFIX):],
+                        "model": model_id,
+                        "pace": settings.sarvam_pace,
+                        "speech_sample_rate": 8000,
+                        "output_audio_codec": "mulaw",
+                    },
+                )
+            else:
+                resp = await client.post(
+                    _URL.format(voice_id=voice_id),
+                    headers={"xi-api-key": settings.elevenlabs_api_key},
+                    json={"text": text, "model_id": model_id, "voice_settings": voice_settings},
+                )
         resp.raise_for_status()
+        audio = base64.b64decode(resp.json()["audios"][0]) if sarvam else resp.content
     except Exception as exc:  # noqa: BLE001 - never affects the call
         logger.warning("instant_ack_synth_failed", error_type=type(exc).__name__)
         return None
-    audio = resp.content
     if not audio or len(audio) / _ULAW_BYTES_PER_SECOND > MAX_CLIP_SECONDS:
         logger.warning("instant_ack_clip_rejected", bytes=len(audio or b""))
         return None
