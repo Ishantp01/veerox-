@@ -871,6 +871,32 @@ async def _cut_now(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, 
         _schedule_reply(oai_ws, state)
 
 
+# VOICE_NATIVE_BARGE_IN: the caller must keep speaking this long over the agent before it is stopped, so a cough,
+# a click or a quick "hmm" never cuts it off.
+NATIVE_BARGE_IN_MIN_SPEECH_SECONDS = 0.4
+
+
+async def _native_barge_in(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
+    """Stop the agent once the caller has spoken over it for NATIVE_BARGE_IN_MIN_SPEECH_SECONDS, unless what they
+    said so far is only acknowledgments ("sahi hai", "haan ji", "hmm"). Anything with a question or command word
+    ("wait", "stop", "kya", "nahi") is not an acknowledgment, so it stops the agent as soon as the window passes."""
+    await asyncio.sleep(NATIVE_BARGE_IN_MIN_SPEECH_SECONDS)
+    if not state.caller_speaking:
+        log.info("voice_native_barge_in_ignored", reason="short_burst")
+        return
+    deadline = time.monotonic() + 8.0
+    while True:
+        text = state.utterance_text.strip()
+        if not (text and turn_controller.is_extended_backchannel(text)):
+            break
+        # Only acknowledgments so far: keep listening in case the caller carries on into a real question.
+        if not state.caller_speaking or time.monotonic() > deadline:
+            log.info("voice_native_barge_in_ignored", reason="backchannel")
+            return
+        await asyncio.sleep(0.15)
+    await _cut_now(oai_ws, call_ws, state, log, "native_barge_in")
+
+
 async def _cut_if_still_speaking(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
     """Duration-based fallback (no live transcript): stop the agent once the
     caller has spoken over it for EARLY_CUT_SECONDS. The answer itself is sent
@@ -2516,7 +2542,8 @@ async def handle_openai_event(
             state.latency.interruption_detected()
             log.info("voice_caller_spoke_over_response", live=_live_ready(state))
             if settings.voice_native_barge_in:
-                await _cut_now(oai_ws, call_ws, state, log, "native_barge_in")
+                if state.cut_task is None or state.cut_task.done():
+                    state.cut_task = asyncio.create_task(_native_barge_in(oai_ws, call_ws, state, log))
             elif _live_ready(state):
                 # Judge by the words as they stream in.
                 state.cut_eval_deadline = time.monotonic() + 60.0

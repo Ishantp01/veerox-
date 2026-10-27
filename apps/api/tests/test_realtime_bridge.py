@@ -10,10 +10,15 @@ import asyncio
 
 import pytest
 
-from apps.api.channels.voice import realtime_bridge
+from apps.api.channels.voice import adapter, realtime_bridge
 from apps.api.channels.voice.greeting import greeting_instruction
 from apps.api.config import Settings, settings
 from apps.api.tests.test_voice_interruption import Call, _interrupt, base  # noqa: F401 - base is an autouse fixture
+
+
+@pytest.fixture(autouse=True)
+def _short_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(adapter, "NATIVE_BARGE_IN_MIN_SPEECH_SECONDS", 0.05)
 
 
 def test_session_update_is_native_mulaw_with_server_vad(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,7 +50,47 @@ async def test_native_barge_in_cuts_immediately_on_speech_started(monkeypatch: p
     monkeypatch.setattr(settings, "voice_native_barge_in", True)
     call = Call()
     await call.agent_starts_answering()
-    await call.event("input_audio_buffer.speech_started")  # no wait: no duration / transcript judgement
+    await call.event("input_audio_buffer.speech_started")
+    await asyncio.sleep(0.15)
+    assert call.cleared()
+    assert len(call.cancels()) == 1
+
+
+async def test_native_barge_in_ignores_a_short_burst(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "voice_safe_cancel", True)
+    monkeypatch.setattr(settings, "voice_native_barge_in", True)
+    call = Call()
+    await call.agent_starts_answering()
+    await call.event("input_audio_buffer.speech_started")
+    await call.event("input_audio_buffer.speech_stopped")  # over before the 0.4 s window
+    await asyncio.sleep(0.15)
+    assert not call.cleared()
+    assert not call.cancels()
+
+
+@pytest.mark.parametrize("said", ["sahi hai", "theek", "got it", "hmm", "haan ji"])
+async def test_native_barge_in_lets_acknowledgments_finish(monkeypatch: pytest.MonkeyPatch, said: str) -> None:
+    monkeypatch.setattr(settings, "voice_safe_cancel", True)
+    monkeypatch.setattr(settings, "voice_native_barge_in", True)
+    call = Call()
+    await call.agent_starts_answering()
+    await call.event("input_audio_buffer.speech_started")
+    call.state.utterance_text = said
+    await asyncio.sleep(0.25)
+    await call.event("input_audio_buffer.speech_stopped")
+    await asyncio.sleep(0.3)
+    assert not call.cleared()
+    assert not call.cancels()
+
+
+async def test_native_barge_in_stops_for_a_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "voice_safe_cancel", True)
+    monkeypatch.setattr(settings, "voice_native_barge_in", True)
+    call = Call()
+    await call.agent_starts_answering()
+    await call.event("input_audio_buffer.speech_started")
+    call.state.utterance_text = "wait stop karo"
+    await asyncio.sleep(0.15)
     assert call.cleared()
     assert len(call.cancels()) == 1
 
@@ -78,7 +123,7 @@ async def test_backchannel_after_native_cut_triggers_no_reply(monkeypatch: pytes
     monkeypatch.setattr(settings, "voice_native_barge_in", True)
     call = Call()
     await call.agent_starts_answering()
-    await _interrupt(call, wait=0.0)
+    await _interrupt(call, wait=0.15)
     await call.event("input_audio_buffer.speech_stopped")
     await call.event("input_audio_buffer.committed")
     await call.event("conversation.item.input_audio_transcription.completed", transcript="hmm thik hai")
