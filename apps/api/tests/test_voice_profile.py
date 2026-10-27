@@ -109,7 +109,7 @@ def test_profile_merges_over_platform_settings() -> None:
     r = resolve_profile({"speed": 1.1})
     assert r is not None
     assert r.voice_id == "PlatformVoice0001" and r.model_id == "eleven_flash_v2_5"
-    assert r.voice_settings == {"stability": 0.36, "similarity_boost": 0.75, "speed": 1.1}
+    assert r.voice_settings == {"stability": 0.45, "similarity_boost": 0.80, "speed": 1.1}
     r2 = resolve_profile(
         {"voice_id": "OrgVoice123456", "model_id": "eleven_multilingual_v2", "style": 0.2,
          "stability": 0.3, "similarity_boost": 0.9, "use_speaker_boost": True}
@@ -163,9 +163,9 @@ async def test_no_profile_sends_the_exact_legacy_handshake(monkeypatch: pytest.M
         "?model_id=eleven_flash_v2_5&output_format=ulaw_8000"
     )
     assert first == json.dumps(
-        {"text": " ", "voice_settings": {"stability": 0.36, "similarity_boost": 0.75}, "xi_api_key": "sk_test"}
+        {"text": " ", "voice_settings": {"stability": 0.45, "similarity_boost": 0.80}, "xi_api_key": "sk_test"}
     )
-    assert LEGACY_VOICE_SETTINGS == {"stability": 0.36, "similarity_boost": 0.75}
+    assert LEGACY_VOICE_SETTINGS == {"stability": 0.45, "similarity_boost": 0.80}
 
 
 async def test_profile_changes_voice_model_and_settings_in_the_handshake(
@@ -177,7 +177,7 @@ async def test_profile_changes_voice_model_and_settings_in_the_handshake(
     url, first = await _handshake(monkeypatch, profile=profile)
     assert "/OrgVoice123456/stream-input" in url and "model_id=eleven_turbo_v2_5" in url
     assert json.loads(first)["voice_settings"] == {
-        "stability": 0.7, "similarity_boost": 0.75, "speed": 0.9,
+        "stability": 0.7, "similarity_boost": 0.80, "speed": 0.9,
     }
 
 
@@ -351,7 +351,7 @@ async def test_profile_defaults_to_none_with_platform_effective(
     body = (await client.get("/admin/settings/voice-profile", headers=ADMIN_HEADERS)).json()
     assert body["profile"] is None
     assert body["effective"]["voice_id"] == "PlatformVoice0001"
-    assert body["effective"]["voice_settings"] == {"stability": 0.36, "similarity_boost": 0.75}
+    assert body["effective"]["voice_settings"] == {"stability": 0.45, "similarity_boost": 0.80}
     assert "eleven_turbo_v2_5" in body["allowed_models"]
 
 

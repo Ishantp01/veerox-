@@ -2,7 +2,7 @@
 
 Stored as a nullable JSON document on ``Org.voice_profile``. **NULL (every
 existing org) means "no profile": the call uses the platform settings and the
-default handshake** (``stability 0.36``, ``similarity_boost 0.75``,
+default handshake** (``stability 0.45``, ``similarity_boost 0.80``,
 ``settings.elevenlabs_voice_id`` / ``settings.elevenlabs_model_id``).
 ``resolve_profile`` returns ``None`` in that case so callers can keep their
 pre-existing code path untouched.
@@ -81,11 +81,11 @@ def platform_voice_id() -> str:
 
 
 # What a NULL profile sends — kept here so a test can pin it.
-# Stability sits in 0.35-0.42 for natural variance and breath; similarity 0.75 keeps speech clear.
-LEGACY_VOICE_SETTINGS: dict[str, float] = {"stability": 0.36, "similarity_boost": 0.75}
+# Stability 0.45 allows natural conversational variation; similarity 0.80 holds the custom voice's identity.
+LEGACY_VOICE_SETTINGS: dict[str, float] = {"stability": 0.45, "similarity_boost": 0.80}
 # Added on top of the above, but only for ``STYLE_MODELS`` (the provider ignores it elsewhere, and a profile
 # that sets ``style`` on another model is rejected on save).
-DEFAULT_STYLE = 0.18
+DEFAULT_STYLE = 0.15
 
 
 class VoiceProfileError(ValueError):

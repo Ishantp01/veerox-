@@ -686,7 +686,7 @@ def test_instant_ack_is_off_by_default_and_only_for_elevenlabs(monkeypatch: pyte
     monkeypatch.setattr(adapter.settings, "voice_instant_ack", True)
     assert adapter._ack_voice(types.SimpleNamespace(tts_provider="openai", voice=None)) is None
     voice, model, vs = adapter._ack_voice(types.SimpleNamespace(tts_provider="elevenlabs", voice=None))
-    assert voice and model and vs["similarity_boost"] == 0.75
+    assert voice and model and vs["similarity_boost"] == 0.80
 
 
 @pytest.mark.parametrize(
