@@ -195,6 +195,7 @@ class CallState:
     # Live partial-transcript path (turn_controller.LiveTranscriber). ``live``
     # is None until (and unless) its connection comes up.
     live: Any = field(default=None, repr=False)
+    disclosure_owed: bool = False  # the opening greeting was cut short: the next reply must say it is an AI
     vad: Any = field(default=None, repr=False)  # local_vad.LocalVAD when VOICE_LOCAL_VAD is on
     oai_ws: Any = field(default=None, repr=False)
     openai_api_key: str | None = field(default=None, repr=False)
@@ -830,6 +831,13 @@ def _with_priority(response: dict[str, Any] | None, state: CallState) -> dict[st
     return out
 
 
+GREETING_CUT_INSTRUCTION = (
+    "Your opening greeting was cut off by the caller before it finished, so they may not have heard that you are an "
+    "AI assistant. Begin your reply with a few words saying so (in the caller's language), then answer what they "
+    "asked directly. Do not repeat the rest of the greeting."
+)
+
+
 async def _cut_now(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, reason: str) -> None:
     """Stop the agent mid-speech: drop queued audio and make sure the
     caller's turn gets answered.
@@ -839,7 +847,10 @@ async def _cut_now(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, 
     """
     if not _agent_busy(state):
         return
-    if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
+    if reason == "greeting_barge_in":
+        state.greeting_guard_until = 0.0  # the caller has something to say: the greeting stops here
+        state.disclosure_owed = settings.voice_greeting_ai_disclosure
+    elif state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
         return
     state.cut_eval_deadline = 0.0
     state.live_stats.count_cut(reason)
@@ -904,6 +915,43 @@ async def _native_barge_in(oai_ws: Any, call_ws: WebSocket, state: CallState, lo
     if state.vad is not None:
         log.info("voice_vad_gate", cut=True, run_s=round(state.vad.run_seconds, 2), mean=round(state.vad.run_mean_prob, 2))
     await _cut_now(oai_ws, call_ws, state, log, "native_barge_in")
+
+
+# VOICE_GREETING_BARGE_IN: the caller speaks while the opening greeting plays. A reflexive "hello?" must not cut it,
+# but a real question stops it so the caller is answered at once.
+GREETING_BARGE_IN_MIN_SPEECH_SECONDS = 0.4
+GREETING_BARGE_IN_NO_TEXT_SECONDS = 1.2  # no live transcript yet: this much unbroken speech is not a "hello?"
+_GREETING_REFLEX = frozenset({"hello", "hallo", "helo", "hi", "hey", "namaste", "namaskar", "kaun", "kon", "bol", "boliye", "bolo"})
+
+
+def _is_greeting_reflex(text: str) -> bool:
+    """Only acknowledgments or a "hello?" so far: not a question the greeting must make way for."""
+    words = re.findall(r"[\w']+", text.lower())
+    if not words or turn_controller.is_extended_backchannel(text):
+        return True
+    return len(words) <= 4 and all(w in _GREETING_REFLEX or turn_controller.is_extended_backchannel(w) for w in words)
+
+
+async def _greeting_barge_in(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
+    await asyncio.sleep(GREETING_BARGE_IN_MIN_SPEECH_SECONDS)
+    if not state.caller_speaking:
+        log.info("voice_greeting_barge_in_ignored", reason="short_burst")
+        return
+    started = time.monotonic() - GREETING_BARGE_IN_MIN_SPEECH_SECONDS
+    deadline = started + 8.0
+    while True:
+        text = state.utterance_text.strip()
+        if text and not _is_greeting_reflex(text):
+            break
+        if not text and time.monotonic() - started >= GREETING_BARGE_IN_NO_TEXT_SECONDS:
+            break
+        if not state.caller_speaking or time.monotonic() > deadline:
+            log.info("voice_greeting_barge_in_ignored", reason="reflex")
+            return
+        await asyncio.sleep(0.1)
+    if not (state.greeting_guard_until and time.monotonic() < state.greeting_guard_until):
+        return  # the greeting finished while we waited
+    await _cut_now(oai_ws, call_ws, state, log, "greeting_barge_in")
 
 
 async def _cut_if_still_speaking(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
@@ -1169,6 +1217,11 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
             state.priority_reply = False
             if settings.voice_smart_turn_taking:
                 response = _with_priority(response, state)
+        if state.disclosure_owed:
+            state.disclosure_owed = False
+            response = dict(response or {})
+            base = response.get("instructions") or state.base_instructions
+            response["instructions"] = f"{base}\n\n{GREETING_CUT_INSTRUCTION}".strip()
         state.answering_transcript = state.pending_user_transcript
         if response is not None:
             payload["response"] = response
@@ -2522,6 +2575,12 @@ async def handle_openai_event(
         # interrupt_response setting but left in place as a harmless no-op
         # safety net.
         if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
+            if settings.voice_greeting_barge_in:
+                state.caller_speaking = True
+                state.utterance_text = ""
+                if state.cut_task is None or state.cut_task.done():
+                    state.cut_task = asyncio.create_task(_greeting_barge_in(oai_ws, call_ws, state, log))
+                return
             log.info("voice_greeting_barge_in_suppressed")
             return
         state.caller_speaking = True

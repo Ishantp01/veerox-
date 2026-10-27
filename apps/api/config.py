@@ -212,6 +212,8 @@ class Settings(BaseSettings):
     # gap before the first TTS audio is not dead air. Off by default; see channels/voice/instant_ack.py.
     # VOICE_LOCAL_VAD: native barge-in additionally needs >=0.4 s of confident speech by the energy gate (local_vad.py).
     voice_local_vad: bool = False
+    # VOICE_GREETING_BARGE_IN: a real question (not "hello?") spoken for 0.4 s+ stops the opening greeting.
+    voice_greeting_barge_in: bool = False
     voice_instant_ack: bool = False
     voice_ack_hold_ms: int = 120  # wait this long after the caller stops; skip the reaction if the reply has started
 

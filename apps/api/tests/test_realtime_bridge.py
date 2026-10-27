@@ -128,3 +128,82 @@ async def test_backchannel_after_native_cut_triggers_no_reply(monkeypatch: pytes
     await call.event("input_audio_buffer.committed")
     await call.event("conversation.item.input_audio_transcription.completed", transcript="hmm thik hai")
     assert call.state.reply_pending is False
+
+
+# --- VOICE_GREETING_BARGE_IN: a real question stops the opening greeting, "hello?" does not ---
+
+
+@pytest.fixture
+def _greeting_barge(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "voice_safe_cancel", True)
+    monkeypatch.setattr(settings, "voice_greeting_barge_in", True)
+    monkeypatch.setattr(adapter, "GREETING_BARGE_IN_MIN_SPEECH_SECONDS", 0.05)
+    monkeypatch.setattr(adapter, "GREETING_BARGE_IN_NO_TEXT_SECONDS", 0.3)
+
+
+async def _greeting_call() -> Call:
+    import time
+
+    call = Call(greeting_guard_until=time.monotonic() + 10.0)
+    await call.agent_starts_answering()
+    return call
+
+
+async def test_greeting_barge_in_off_keeps_the_greeting_protected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "voice_greeting_barge_in", False)
+    call = await _greeting_call()
+    await call.event("input_audio_buffer.speech_started")
+    call.state.utterance_text = "mujhe pricing ke baare mein janna hai"
+    await asyncio.sleep(0.2)
+    assert not call.cleared()
+
+
+async def test_a_question_stops_the_greeting_and_owes_the_ai_disclosure(_greeting_barge: None) -> None:
+    call = await _greeting_call()
+    await call.event("input_audio_buffer.speech_started")
+    call.state.utterance_text = "mujhe pricing ke baare mein janna hai"
+    await asyncio.sleep(0.25)
+    assert call.cleared()
+    assert len(call.cancels()) == 1
+    assert call.state.greeting_guard_until == 0.0
+    assert call.state.disclosure_owed is True
+
+
+@pytest.mark.parametrize("said", ["hello", "hello hello", "haan ji", "hmm"])
+async def test_a_reflexive_hello_does_not_stop_the_greeting(_greeting_barge: None, said: str) -> None:
+    call = await _greeting_call()
+    await call.event("input_audio_buffer.speech_started")
+    call.state.utterance_text = said
+    await asyncio.sleep(0.15)
+    await call.event("input_audio_buffer.speech_stopped")
+    await asyncio.sleep(0.3)
+    assert not call.cleared()
+    assert not call.state.disclosure_owed
+
+
+async def test_a_short_burst_during_the_greeting_is_ignored(_greeting_barge: None) -> None:
+    call = await _greeting_call()
+    await call.event("input_audio_buffer.speech_started")
+    await call.event("input_audio_buffer.speech_stopped")
+    await asyncio.sleep(0.2)
+    assert not call.cleared()
+
+
+async def test_long_speech_without_a_transcript_stops_the_greeting(_greeting_barge: None) -> None:
+    call = await _greeting_call()
+    await call.event("input_audio_buffer.speech_started")
+    await asyncio.sleep(0.6)
+    assert call.cleared()
+
+
+async def test_the_reply_after_a_cut_greeting_carries_the_disclosure(_greeting_barge: None) -> None:
+    call = await _greeting_call()
+    await call.event("input_audio_buffer.speech_started")
+    call.state.utterance_text = "pricing kya hai"
+    await asyncio.sleep(0.25)
+    await call.event("input_audio_buffer.speech_stopped")
+    await call.event("response.done", response={"id": "resp_1"})
+    await call.event("input_audio_buffer.committed")
+    await asyncio.sleep(0.2)
+    texts = [str(m.get("response", {}).get("instructions", "")) for m in call.replies()]
+    assert any("AI assistant" in t for t in texts)
