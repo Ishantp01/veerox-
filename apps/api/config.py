@@ -212,6 +212,16 @@ class Settings(BaseSettings):
     # gap before the first TTS audio is not dead air. Off by default; see channels/voice/instant_ack.py.
     # VOICE_LOCAL_VAD: native barge-in additionally needs >=0.4 s of confident speech by the energy gate (local_vad.py).
     voice_local_vad: bool = False
+    # VOICE_ASYNC_TOOLS: run a tool call in the background so the Realtime event loop (caller speech, barge-in, audio)
+    # keeps moving while a slow webhook/API call finishes; the model continues as soon as the result is in.
+    voice_async_tools: bool = False
+    # send_whatsapp_details (core/whatsapp_trigger.py): message text per interest, sent through our own WhatsApp
+    # service. Offered to the voice agent only when at least one is set. The template (one body variable) is the
+    # fallback when the caller has no open 24 h session, which is the normal case for a phone call.
+    whatsapp_details_demo_link: str | None = None
+    whatsapp_details_pricing: str | None = None
+    whatsapp_details_features: str | None = None
+    whatsapp_details_template: str | None = None
     # VOICE_HUMAN_STYLE: append the spoken-Hindi habits block (back-channels, spoken emails/codes, info anchor) to the prompt.
     voice_human_style: bool = False
     # VOICE_GREETING_BARGE_IN: a real question (not "hello?") spoken for 0.4 s+ stops the opening greeting.

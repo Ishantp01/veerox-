@@ -24,6 +24,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+import websockets
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +47,8 @@ from apps.api.core.conversation.silence import SilenceMonitor
 from apps.api.core.conversation.shadow import schedule_voice_shadow
 from apps.api.core.memory import persist_turn
 from apps.api.core.tools import DISPATCH_TABLE, TOOL_DEFINITIONS, get_or_create_lead_for_user
+from apps.api.core.whatsapp_trigger import SEND_WHATSAPP_DETAILS_TOOL
+from apps.api.core.whatsapp_trigger import is_enabled as is_whatsapp_details_enabled
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.message import Message
@@ -128,6 +131,9 @@ class CallState:
     response_active: bool = False
     reconnecting: bool = False
     tool_response_pending: bool = False
+    tools_in_flight: int = 0  # VOICE_ASYNC_TOOLS: tool calls running in the background
+    tool_tasks: set[Any] = field(default_factory=set, repr=False)
+    tool_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)  # one tool at a time, in call order
     tool_goodbye_pending: bool = False
     completed_response_ids: set[str] = field(default_factory=set)
     seen_tool_call_ids: set[str] = field(default_factory=set)
@@ -1499,7 +1505,7 @@ _STATE_CHANGING_TOOLS = frozenset(
     {
         "book_appointment", "request_callback", "transfer_to_human", "mark_not_interested",
         "initiate_ai_call", "qualify_lead", "capture_lead", "send_whatsapp_message",
-        "send_whatsapp_file", "send_whatsapp_template",
+        "send_whatsapp_file", "send_whatsapp_template", "send_whatsapp_details",
     }
 )
 
@@ -1523,6 +1529,8 @@ def realtime_tools(*, consent: bool = False) -> list[dict[str, Any]]:
                 "parameters": fn.get("parameters"),
             }
         )
+    if is_whatsapp_details_enabled():
+        tools.append(SEND_WHATSAPP_DETAILS_TOOL)
     if settings.voice_end_call_enabled:
         tools.append(END_CALL_TOOL)
     if consent:
@@ -2331,6 +2339,42 @@ async def _dispatch_deduped(state: CallState, name: str, args_json: str, log: An
     return result
 
 
+async def _run_tool_async(
+    name: str, args_json: str, call_id: str | None, oai_ws: Any, state: CallState, log: Any
+) -> None:
+    """VOICE_ASYNC_TOOLS: run one tool call off the Realtime event loop. Tools still run one at a time and in call
+    order (``tool_lock``), so the duplicate-suppression and holds behave as before; only the event loop is freed.
+    Whatever the model said before calling the tool keeps playing; it continues once the result is back."""
+    try:
+        started = time.monotonic()
+        async with state.tool_lock:
+            result = await _dispatch_deduped(state, name, args_json, log)
+        await oai_ws.send(
+            json.dumps(
+                {
+                    "type": "conversation.item.create",
+                    "item": {"type": "function_call_output", "call_id": call_id, "output": json.dumps(result)},
+                }
+            )
+        )
+        state.tool_response_pending = True
+        log.info("voice_tool_dispatched", tool=name, background=True, ms=round((time.monotonic() - started) * 1000))
+    except websockets.ConnectionClosed:
+        log.warning("voice_tool_result_not_delivered", tool=name)
+        return
+    except Exception:  # noqa: BLE001 - one bad tool call must not end the call
+        log.warning("voice_tool_background_failed", tool=name, exc_info=True)
+        return
+    finally:
+        state.tools_in_flight = max(0, state.tools_in_flight - 1)
+    # The function-calling response normally finishes first (its response.done then continues the conversation). If
+    # the tool outlasted it, nothing else will, so continue here.
+    if state.tool_response_pending and not state.response_active and state.tools_in_flight == 0 and state.ack_stage is None:
+        state.tool_response_pending = False
+        state.reply_pending = True
+        await _fire_pending_reply(oai_ws, state)
+
+
 async def _handle_call_control_tool(
     name: str, args_json: str, call_id: str | None, oai_ws: Any, state: CallState, log: Any
 ) -> None:
@@ -2938,6 +2982,12 @@ async def handle_openai_event(
         if name in _CALL_CONTROL_TOOLS:
             await _handle_call_control_tool(name, args_json, call_id, oai_ws, state, log)
             return
+        if settings.voice_async_tools:
+            state.tools_in_flight += 1
+            task = asyncio.create_task(_run_tool_async(name, args_json, call_id, oai_ws, state, log))
+            state.tool_tasks.add(task)
+            task.add_done_callback(state.tool_tasks.discard)
+            return
         result = await _dispatch_deduped(state, name, args_json, log)
         # Feed the tool result back into the session, then ask the model to
         # continue speaking with that result in context.
@@ -3010,7 +3060,7 @@ async def handle_openai_event(
                 _GOODBYE_REQUEST, f"Language sample of the call so far: {_language_sample(state)!r}"
             ))
             return
-        if state.tool_response_pending:
+        if state.tool_response_pending and state.tools_in_flight == 0:
             state.tool_response_pending = False
             # Coalesce parallel tool outputs into one continuation after the
             # function-calling response has actually completed.

@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.channels.voice import failover as voice_failover
 from apps.api.channels.voice.org_numbers import get_default_whatsapp_number_id, get_rotating_numbers
 from apps.api.channels.whatsapp import client as wa_client
+from apps.api.core.whatsapp_trigger import send_whatsapp_details
 from apps.api.config import settings
 from apps.api.core.phone import normalize_phone
 from apps.api.core.org_credentials import (
@@ -2301,5 +2302,6 @@ DISPATCH_TABLE: dict[str, ToolHandler] = {
     "send_whatsapp_message": send_whatsapp_message,
     "send_whatsapp_file": send_whatsapp_file,
     "send_whatsapp_template": send_whatsapp_template,
+    "send_whatsapp_details": send_whatsapp_details,
     "initiate_ai_call": initiate_ai_call,
 }
