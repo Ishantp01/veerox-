@@ -37,7 +37,7 @@ from apps.api.channels.voice import plivo_client as voice_plivo
 from apps.api.channels.voice import signature
 from apps.api.channels.voice import twilio_client as voice_twilio
 from apps.api.channels.voice.latency import startup_mark
-from apps.api.channels.voice.realtime_bridge import start_precall_connect
+from apps.api.channels.voice.realtime_bridge import mark_inbound_call, start_precall_connect
 from apps.api.config import settings
 from apps.api.core.org_credentials import resolve_plivo_credentials, resolve_twilio_credentials
 from apps.api.core.usage import deterministic_event_id, record_usage
@@ -330,6 +330,8 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
     # additive: harmless if never claimed (self-expires), and voice_stream
     # falls back to connecting fresh exactly as before if this wasn't
     # called or didn't finish in time.
+    if not is_outbound and settings.voice_listen_first_inbound:
+        mark_inbound_call(call_uuid)
     start_precall_connect(
         call_uuid,
         UUID(campaign_target_id) if campaign_target_id else None,

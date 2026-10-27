@@ -176,6 +176,10 @@ class Settings(BaseSettings):
     # judgement. Short acknowledgements are still dropped as backchannel once their transcript arrives, so they
     # never trigger a full reply. Off by default: no live-call validation yet.
     voice_native_barge_in: bool = False
+    # Listen-first: on INBOUND calls only, the agent stays quiet until the caller speaks, then introduces itself
+    # (including that it is an AI) in its first reply. Outbound calls always greet first, so a callee's "hello?" is
+    # answered. Never applies when a recording notice or consent question must be spoken first.
+    voice_listen_first_inbound: bool = False
     # Adaptive endpointing: hold the reply up to ~1s when the caller's text looks
     # unfinished ("haan, mera matlab..."). Off by default — it adds a second of
     # latency whenever a sentence happens to end on a connective word.

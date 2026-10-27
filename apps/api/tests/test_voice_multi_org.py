@@ -100,6 +100,7 @@ PROCESS_LOCAL = {
         "_pending_precalls",       # a pre-connected OpenAI session: the media stream must reach the SAME process
         "_pending_precall_orgs",   # which org it was prepared for (checked on claim)
         "greeting_cache",          # greeting audio; a miss just means synthesizing again
+        "_inbound_calls",          # VOICE_LISTEN_FIRST_INBOUND marks; a miss just means the agent greets first
     },
     "apps.api.channels.voice.greeting": {"greeting_cache"},
     "apps.api.channels.voice.recovery": {"fallback_audio"},       # apology audio; a miss means no spoken apology

@@ -323,6 +323,33 @@ async def claim_precall_connect(
     return claimed
 
 
+# Calls the answer webhook saw as genuinely inbound (VOICE_LISTEN_FIRST_INBOUND), keyed by call id. The stream URL
+# looks the same for an inbound call and a dashboard-placed outbound one once the org is resolved, so the webhook
+# says which this is. In-process only: a miss means "greet first", the safe default.
+_INBOUND_TTL_SECONDS = 120.0
+_inbound_calls: dict[str, float] = {}
+
+
+def mark_inbound_call(call_uuid: str) -> None:
+    if not call_uuid:
+        return
+    now = time.monotonic()
+    for key in [k for k, t in _inbound_calls.items() if now - t > _INBOUND_TTL_SECONDS]:
+        _inbound_calls.pop(key, None)
+    _inbound_calls[call_uuid] = now
+
+
+def take_inbound_call(call_uuid: str) -> bool:
+    marked = _inbound_calls.pop(call_uuid, None) if call_uuid else None
+    return marked is not None and time.monotonic() - marked <= _INBOUND_TTL_SECONDS
+
+
+LISTEN_FIRST_NOTE = (
+    "The caller dialled you and will speak first; do not speak until they do. In your first reply, greet them "
+    "warmly, say who you are and that you are an AI assistant, then answer what they said."
+)
+
+
 _NOT_GIVEN: Any = object()
 
 
@@ -873,6 +900,7 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
         try:
             # Everything that needs the database starts together instead of one round trip after another (each is
             # awaited only where its result is needed). On a slow link the serial version cost ~4 s before the greeting.
+            inbound_marked = settings.voice_listen_first_inbound and take_inbound_call(call_uuid)
             conv_task = asyncio.create_task(
                 voice_adapter.open_voice_conversation(caller, call_uuid, org_id=org_id)
             )
@@ -886,8 +914,12 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
             voice_task = asyncio.create_task(_from_org(_load_org_voice, resolved_org_id))
             # A reviewed, fixed greeting whose audio is already cached needs neither the model nor the conversation row:
             # send it now. (Only when the cache flag is on and the entry exists; otherwise the live path below.)
-            early = await _send_early_cached_greeting(
-                ws, provider, stream_id, call_uuid, resolved_org_id, ctx_task, greeting_task, voice_task, log
+            early = (
+                None
+                if inbound_marked
+                else await _send_early_cached_greeting(
+                    ws, provider, stream_id, call_uuid, resolved_org_id, ctx_task, greeting_task, voice_task, log
+                )
             )
             startup_mark(call_uuid, "context_loaded")
             user_id, conversation_id = await conv_task
@@ -915,6 +947,10 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                 watchdog_task = asyncio.create_task(_max_duration_watchdog(state, log, call_started))
             brand, policy = await ctx_task
             state.consent_tool = policy.mode == "consent"
+            # A notice or consent question has to be spoken first, so those calls still open with the agent.
+            listen_first = inbound_marked and not policy.spoken_notice and policy.mode != "consent"
+            if listen_first:
+                log.info("voice_listen_first")
             state.latency = LatencyTracker(
                 org_id=resolved_org_id, call_uuid=call_uuid or None, provider=provider
             )
@@ -953,6 +989,10 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                     instructions = f"{instructions}\n\n{compliance.CONSENT_PROMPT}"
                     state.base_instructions = instructions
                     session_update_needed = True
+                if listen_first and LISTEN_FIRST_NOTE not in instructions:
+                    instructions = f"{instructions}\n\n{LISTEN_FIRST_NOTE}"
+                    state.base_instructions = instructions
+                    session_update_needed = True
                 if session_update_needed:
                     await oai.send(
                         json.dumps(_session_update_event(instructions, consent_tool=state.consent_tool))
@@ -971,6 +1011,8 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                     # and persist it. Nothing is spoken a second time.
                     await voice_adapter.adopt_early_greeting(state, oai, early, log)
                     played_cached = True
+                elif listen_first:
+                    pass  # the caller speaks first; the first reply introduces the agent (LISTEN_FIRST_NOTE)
                 elif (
                     org_greeting
                     and not notice  # cached audio is fixed: it cannot carry a per-region notice
@@ -992,7 +1034,7 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                             # Anything already sent can't be taken back: only fall
                             # back to the spoken greeting if the caller heard nothing.
                             played_cached = state.playback_end > 0
-                if not played_cached:
+                if not played_cached and not listen_first:
                     startup_mark(call_uuid, "greeting_started")
                     state.greeting_guard_until = time.monotonic() + 10.0
                     state.latency.begin_turn(kind="greeting")
