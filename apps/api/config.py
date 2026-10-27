@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_chat_model: str = "gpt-4o-mini"
     openai_realtime_model: str = "gpt-4o-realtime-preview"
-    openai_realtime_voice: str = "alloy"
+    openai_realtime_voice: str = "coral"
 
     # Symmetric key (Fernet, see core/crypto.py) used to encrypt/decrypt
     # per-org secrets stored in the DB — currently just Org.
@@ -171,6 +171,11 @@ class Settings(BaseSettings):
     # room to pause 1-2s mid-thought without being cut off; lower = faster replies but more
     # cut-offs (500 cut people off mid-sentence in test calls).
     voice_vad_silence_ms: int = 1100
+    # Native barge-in: the moment the caller starts speaking over the agent (after the greeting guard), stop the
+    # agent (response.cancel + clear the provider's playback buffer) instead of running the live-transcript / early-cut
+    # judgement. Short acknowledgements are still dropped as backchannel once their transcript arrives, so they
+    # never trigger a full reply. Off by default: no live-call validation yet.
+    voice_native_barge_in: bool = False
     # Adaptive endpointing: hold the reply up to ~1s when the caller's text looks
     # unfinished ("haan, mera matlab..."). Off by default — it adds a second of
     # latency whenever a sentence happens to end on a connective word.

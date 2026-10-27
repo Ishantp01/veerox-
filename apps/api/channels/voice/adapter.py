@@ -2508,7 +2508,9 @@ async def handle_openai_event(
             state.interrupted_mid_response = True
             state.latency.interruption_detected()
             log.info("voice_caller_spoke_over_response", live=_live_ready(state))
-            if _live_ready(state):
+            if settings.voice_native_barge_in:
+                await _cut_now(oai_ws, call_ws, state, log, "native_barge_in")
+            elif _live_ready(state):
                 # Judge by the words as they stream in.
                 state.cut_eval_deadline = time.monotonic() + 60.0
                 if _answer_immediately() and (state.cut_task is None or state.cut_task.done()):
