@@ -112,8 +112,24 @@ def _tokens(text: str) -> list[str]:
 _HUM_RE = re.compile(r"^(?:h?m{2,}|u+h*m+|u+h+|a+h+|o+h+|e+h+)$")
 
 
+_STRETCH_RE = re.compile(r"([a-z])\1{2,}")
+
+
+def _unstretched(word: str) -> tuple[str, ...]:
+    """Candidate spellings of a word whose letters were drawn out ("achaaa", "okkk", "haiiii"): every run of THREE
+    OR MORE equal letters collapsed to one letter, and to two ("hmmmm" -> "hm" / "hmm"). A word with no such run
+    ("haan", "achha", "book") has no candidates, so ordinary double letters are never touched."""
+    if not _STRETCH_RE.search(word):
+        return ()
+    return (re.sub(r"([a-z])\1{2,}", r"\1", word), re.sub(r"([a-z])\1{2,}", r"\1\1", word))
+
+
 def _is_backchannel_word(word: str) -> bool:
-    return word in BACKCHANNEL_WORDS or bool(_HUM_RE.match(word))
+    """Exact token match against the acknowledgment list (never a substring: "ok" is not in "book"), after
+    undoing letter stretching. The stretched form must itself be a listed acknowledgment, so "nahiii" stays "nahi"."""
+    if word in BACKCHANNEL_WORDS or _HUM_RE.match(word):
+        return True
+    return any(c in BACKCHANNEL_WORDS for c in _unstretched(word))
 
 
 def is_backchannel(text: str, max_words: int = 4) -> bool:

@@ -746,6 +746,28 @@ def test_more_backchannel_variants_are_filler(text: str) -> None:
     assert turn_controller.classify_partial(text) == "filler"
 
 
+@pytest.mark.parametrize("text", ["achaaa", "okkk", "hmmmm", "haanji", "thik haiiii", "haaaan", "Okkkk!"])
+def test_stretched_spellings_are_backchannel(text: str) -> None:
+    assert turn_controller.is_extended_backchannel(text)
+    assert turn_controller.is_backchannel(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["book kar do", "jitna lagega", "haan batao", "right now nahi", "nahiii", "kyaaa", "bookkk", "waitttt"],
+)
+def test_real_short_turns_are_never_backchannel(text: str) -> None:
+    assert not turn_controller.is_extended_backchannel(text)
+    assert not turn_controller.is_backchannel(text)
+
+
+def test_stretching_is_only_undone_for_runs_of_three_or_more() -> None:
+    assert turn_controller._unstretched("haan") == ()
+    assert turn_controller._unstretched("achha") == ()
+    assert turn_controller._unstretched("book") == ()
+    assert "acha" in turn_controller._unstretched("achaaa")
+
+
 async def test_a_short_burst_never_reaches_the_live_llm_check(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
