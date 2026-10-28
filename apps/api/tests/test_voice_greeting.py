@@ -114,6 +114,30 @@ def test_without_a_custom_script_or_with_a_fixed_greeting_nothing_changes() -> N
     assert greeting_instruction(fixed, "x", True, from_script=True) == greeting_instruction(fixed, "x", True)
 
 
+def test_the_prompt_tail_defers_to_a_custom_scripts_opening() -> None:
+    from apps.api.core.prompts import VOICE_APPEND, render_voice_append
+
+    assert render_voice_append("WorkAssign AI") == VOICE_APPEND  # default unchanged
+    assert "Veer bol raha hoon" in VOICE_APPEND
+    for disclosure in (True, False):
+        tail = render_voice_append("WorkAssign AI", ai_disclosure=disclosure, from_script=True)
+        assert "Veer" not in tail and "something like" not in tail.split("Language:")[1][:300]
+        assert "exactly as your script says to start it" in tail and "ONLY that opening" in tail
+
+
+def test_the_greeting_turn_carries_the_script_it_refers_to() -> None:
+    from apps.api.channels.voice import realtime_bridge as bridge
+
+    session = "SANA SCRIPT BODY\n\nVOICE TAIL"
+    opening = greeting_instruction(None, "WorkAssign AI", True, from_script=True)
+    assert bridge._greeting_response_instructions(session, opening, None).startswith("SANA SCRIPT BODY")
+    # fixed org greeting and the built-in prompt are self-contained: unchanged
+    assert bridge._greeting_response_instructions(session, "FIXED", "Namaste") == "FIXED"
+    from apps.api.core.prompts import OUTBOUND_CALL_PROMPT
+
+    assert bridge._greeting_response_instructions(OUTBOUND_CALL_PROMPT.strip() + "\n\nx", "G", None) == "G"
+
+
 async def test_the_bridge_tells_a_custom_script_from_the_built_in_prompt() -> None:
     from apps.api.channels.voice import realtime_bridge as bridge
     from apps.api.core.prompts import OUTBOUND_CALL_PROMPT

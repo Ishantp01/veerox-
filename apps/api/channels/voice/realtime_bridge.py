@@ -450,6 +450,14 @@ def _runs_a_custom_script(instructions: str) -> bool:
     return not instructions.lstrip().startswith(OUTBOUND_CALL_PROMPT.strip())
 
 
+def _greeting_response_instructions(session_instructions: str, greeting: str, org_greeting: str | None) -> str:
+    """The first response's instructions replace the session's for that turn, so an opening that refers to "your
+    script" must carry the script with it. Fixed org greetings and the generic example are self-contained."""
+    if org_greeting or not _runs_a_custom_script(session_instructions):
+        return greeting
+    return f"{session_instructions.rstrip()}\n\n{greeting}"
+
+
 async def _system_instructions(
     campaign_target_id: UUID | None, org_id: UUID | None, remote_number: str | None = None
 ) -> str:
@@ -531,6 +539,7 @@ async def _system_instructions(
         natural_hinglish=natural_hinglish,
         human_style=settings.voice_human_style,
         authority=settings.voice_script_authority,
+        from_script=picked is not None,
     )
     tail = f"{current_datetime_block()}\n\n{voice_append.strip()}"
     if catalog:
@@ -1115,12 +1124,16 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                                     # model to fall back on. An org's own greeting is spoken
                                     # verbatim; otherwise the default wording (see
                                     # channels/voice/greeting.py).
-                                    "instructions": greeting_instruction(
+                                    "instructions": _greeting_response_instructions(
+                                        instructions,
+                                        greeting_instruction(
+                                            org_greeting,
+                                            brand,
+                                            settings.voice_greeting_ai_disclosure,
+                                            notice=notice,
+                                            from_script=_runs_a_custom_script(instructions),
+                                        ),
                                         org_greeting,
-                                        brand,
-                                        settings.voice_greeting_ai_disclosure,
-                                        notice=notice,
-                                        from_script=_runs_a_custom_script(instructions),
                                     ),
                                 },
                             }

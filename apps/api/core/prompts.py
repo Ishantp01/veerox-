@@ -299,12 +299,14 @@ def render_voice_append(
     natural_hinglish: bool = False,
     human_style: bool = False,
     authority: bool = False,
+    from_script: bool = False,
 ) -> str:
     """The voice-channel prompt tail with the example greeting for ``brand``.
 
     ``ai_disclosure`` makes the example greeting say the agent is an AI
     assistant (the default); False reproduces the previous wording, with only
-    the brand name made configurable.
+    the brand name made configurable. ``from_script``: the call runs on an org/campaign script, so the
+    tail points to that script's own opening instead of an example greeting that names a different agent.
     """
     if ai_disclosure:
         example = (
@@ -314,6 +316,12 @@ def render_voice_append(
     else:
         example = f"Namaste, {brand} se baat kar rahe hain, main aapki kaise madad kar sakta hoon?"
     rendered = _VOICE_APPEND_TEMPLATE.replace("__VOICE_GREETING_EXAMPLE__", example)
+    if from_script:
+        rendered = rendered.replace(
+            'Open with a warm, natural greeting in Hindi - something like\n"' + example + '" Do NOT open by asking which',
+            "Open the call exactly as your script says to start it - its own opening line, name and persona, "
+            "never a different name or a generic greeting. Do NOT open by asking which",
+        ).replace("Your opening turn is ONLY that greeting -", "Your opening turn is ONLY that opening -")
     if speaking_style:
         # Opt-in per org (voice profile); off renders byte-identically to before.
         rendered = rendered.rstrip("\n") + "\n" + VOICE_SPEAKING_STYLE
