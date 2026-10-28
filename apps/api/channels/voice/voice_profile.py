@@ -80,6 +80,24 @@ def platform_voice_id() -> str:
     return settings.elevenlabs_voice_id if "elevenlabs_voice_id" in settings.model_fields_set else DEFAULT_VOICE_ID
 
 
+def platform_chunk_schedule() -> tuple[int, ...] | None:
+    """VOICE_TTS_CHUNK_SCHEDULE ("50,120,160"): the schedule for calls whose org profile sets none.
+
+    Held to the same documented limits as a profile's; anything out of range or unparsable is ignored (the provider
+    default applies) rather than sent to the provider."""
+    raw = (getattr(settings, "voice_tts_chunk_schedule", "") or "").strip()
+    if not raw:
+        return None
+    lo, hi = CHUNK_SCHEDULE_RANGE
+    try:
+        values = tuple(int(part) for part in raw.split(",") if part.strip())
+    except ValueError:
+        return None
+    if not 1 <= len(values) <= MAX_CHUNK_SCHEDULE_LEN or any(not lo <= v <= hi for v in values):
+        return None
+    return values
+
+
 # What a NULL profile sends — kept here so a test can pin it.
 # Stability 0.45 allows natural conversational variation; similarity 0.80 holds the custom voice's identity.
 LEGACY_VOICE_SETTINGS: dict[str, float] = {"stability": 0.45, "similarity_boost": 0.80}

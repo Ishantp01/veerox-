@@ -19,7 +19,11 @@ import re
 import sys
 from collections.abc import Iterable, Iterator
 
-from apps.api.channels.voice.latency import summarize_events, turn_event_counts
+from apps.api.channels.voice.latency import (
+    endpoint_category_counts,
+    summarize_events,
+    turn_event_counts,
+)
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -55,6 +59,11 @@ def main(argv: list[str]) -> int:
         lines = sys.stdin
     events = list(iter_events(lines))
     print(format_report(summarize_events(events)))
+    categories = endpoint_category_counts(events)
+    if categories:
+        print()
+        shown = ", ".join(f"{k}={v}" for k, v in sorted(categories.items()))
+        print("endpoint categories (adaptive endpointing):", shown)
     extra = turn_event_counts(events)
     if extra["counts"]:
         print()

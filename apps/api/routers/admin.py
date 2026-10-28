@@ -32,6 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from apps.api import pilot
 from apps.api.channels.voice import elevenlabs_client
 from apps.api.channels.voice import compliance as voice_compliance
 from apps.api.channels.voice import greeting as voice_greeting
@@ -3482,6 +3483,7 @@ async def create_script(
     body: ScriptCreateIn,
     db: DbDep,
     org: RequestOrgDep,
+    member_scope: MemberScopeDep,
     x_admin_token: str | None = Header(None),
 ) -> ScriptLibraryOut:
     """Add a script to this org's library, under `body.channel` (default
@@ -3490,6 +3492,9 @@ async def create_script(
     default scripts for a channel once it has at least one there.
     Otherwise, marking this one default unsets whichever script on the same
     channel previously held it."""
+    # As for voice-profile settings: a role=member session may not change what the agent says.
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change scripts")
     has_any = (
         await db.execute(
             select(Script.id).where(Script.org_id == org, Script.channel == body.channel).limit(1)
@@ -3526,10 +3531,14 @@ async def update_script_library_item(
     body: ScriptUpdateIn,
     db: DbDep,
     org: RequestOrgDep,
+    member_scope: MemberScopeDep,
     x_admin_token: str | None = Header(None),
 ) -> ScriptLibraryOut:
     """Rename and/or edit a script's content. Use POST
     /admin/scripts/{id}/set-default to change which script is the default."""
+    # As for voice-profile settings: a role=member session may not change what the agent says.
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change scripts")
     script = await db.get(Script, script_id)
     if script is None or script.org_id != org:
         raise HTTPException(status_code=404, detail="Script not found")
@@ -3556,10 +3565,14 @@ async def set_default_script(
     script_id: UUID,
     db: DbDep,
     org: RequestOrgDep,
+    member_scope: MemberScopeDep,
     x_admin_token: str | None = Header(None),
 ) -> ScriptLibraryOut:
     """Make this the org's default script for its channel, atomically
     unsetting whichever one previously held that flag on the same channel."""
+    # As for voice-profile settings: a role=member session may not change what the agent says.
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change scripts")
     script = await db.get(Script, script_id)
     if script is None or script.org_id != org:
         raise HTTPException(status_code=404, detail="Script not found")
@@ -3579,6 +3592,7 @@ async def delete_script(
     script_id: UUID,
     db: DbDep,
     org: RequestOrgDep,
+    member_scope: MemberScopeDep,
     x_admin_token: str | None = Header(None),
 ) -> dict[str, bool]:
     """Remove a script from the library. Deleting the current default
@@ -3586,6 +3600,9 @@ async def delete_script(
     (to the platform default) until a new default is set. Any campaign that
     referenced this script keeps working: its script_id is cleared (ON
     DELETE SET NULL), falling back to the org default at call time."""
+    # As for voice-profile settings: a role=member session may not change what the agent says.
+    if member_scope is not None:
+        raise HTTPException(status_code=403, detail="Only org admins can change scripts")
     script = await db.get(Script, script_id)
     if script is None or script.org_id != org:
         raise HTTPException(status_code=404, detail="Script not found")
@@ -4372,6 +4389,23 @@ async def outbound_call(
     org_id = org
     payload.to_phone = normalize_phone(payload.to_phone, await _org_country_code(db, org_id))
 
+    # Refused BEFORE anything is written: a number outside the allowlist must not even create a
+    # lead, and a voice the provider rejects would connect a call in which the agent can never
+    # speak.
+    try:
+        pilot.check_number_allowed(payload.to_phone, what="call")
+    except pilot.PilotBlocked as exc:
+        raise HTTPException(
+            status_code=403, detail="That number is not on the allowlist; no call was placed."
+        ) from exc
+    if settings.voice_preflight_voice_check and settings.voice_tts_provider == "elevenlabs":
+        org_for_voice = await db.get(Org, org_id)
+        refusal = await elevenlabs_client.preflight_error(
+            org_for_voice.voice_profile if org_for_voice else None
+        )
+        if refusal:
+            raise HTTPException(status_code=503, detail=refusal)
+
     # Whoever's calling this customer takes ownership of their lead — shows up
     # in a member's scoped Conversations list, and attributes the call to them
     # (admin included) in the Conversations table's Staff column. The voice
@@ -4418,6 +4452,7 @@ async def outbound_call(
             twilio_creds,
             payload.to_phone,
             answer_url,
+            hangup_url=pilot.outbound_hangup_url(),
             plivo_from_number=plivo_from,
             twilio_from_number=twilio_from,
             preferred_provider=preferred_provider,

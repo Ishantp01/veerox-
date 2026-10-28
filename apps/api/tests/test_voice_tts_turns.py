@@ -89,6 +89,7 @@ class _Log:
         return None
 
     warning = info
+    error = info
 
 
 class Call:
@@ -219,6 +220,45 @@ async def test_a_slow_connect_is_waited_for_not_duplicated(monkeypatch: pytest.M
     await call.event("response.text.delta", delta="Hi")  # arrives before the socket is ready
     assert len(FakeSession.instances) == 1
     assert FakeSession.instances[0].sent == ["Hi"]
+    await adapter.cancel_pending_tasks(call.state)
+
+
+async def test_a_stale_prewarmed_socket_is_replaced_not_spoken_into(monkeypatch: pytest.MonkeyPatch) -> None:
+    _flags(monkeypatch, prewarm=True, nonblocking=False)
+    call = Call()
+    await call.event("response.created")
+    await asyncio.sleep(0.01)
+    warmed = FakeSession.instances[0]
+    warmed.opened_at = time.monotonic() - (adapter._PREWARM_MAX_AGE_S + 5)  # idle past the provider's timeout
+    await call.event("response.text.delta", delta="Namaste")
+    assert warmed.closed and warmed.sent == []
+    fresh = call.state.eleven_session
+    assert fresh is not warmed and fresh.sent == ["Namaste"]
+    await adapter.cancel_pending_tasks(call.state)
+
+
+async def test_a_prewarmed_socket_the_provider_already_rejected_is_replaced(monkeypatch: pytest.MonkeyPatch) -> None:
+    _flags(monkeypatch, prewarm=True, nonblocking=False)
+    call = Call()
+    await call.event("response.created")
+    await asyncio.sleep(0.01)
+    warmed = FakeSession.instances[0]
+    warmed.failed = True
+    await call.event("response.text.delta", delta="Namaste")
+    assert warmed.closed and call.state.eleven_session is not warmed
+    assert call.state.eleven_session.sent == ["Namaste"]
+    await adapter.cancel_pending_tasks(call.state)
+
+
+async def test_a_fresh_prewarmed_socket_is_still_reused(monkeypatch: pytest.MonkeyPatch) -> None:
+    _flags(monkeypatch, prewarm=True, nonblocking=False)
+    call = Call()
+    await call.event("response.created")
+    await asyncio.sleep(0.01)
+    warmed = FakeSession.instances[0]
+    warmed.opened_at = time.monotonic()
+    await call.event("response.text.delta", delta="Namaste")
+    assert call.state.eleven_session is warmed and len(FakeSession.instances) == 1
     await adapter.cancel_pending_tasks(call.state)
 
 
@@ -468,6 +508,7 @@ class _Recorder:
         self.events.append((event, kw))
 
     warning = info
+    error = info
 
     def named(self, name: str) -> list[dict[str, Any]]:
         return [kw for n, kw in self.events if n == name]

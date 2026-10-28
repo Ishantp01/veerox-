@@ -363,6 +363,111 @@ def endpoint_hold_seconds(text: str, agent_was_busy: bool, smart: bool = False) 
 
 
 # ---------------------------------------------------------------------------
+# VOICE_ADAPTIVE_ENDPOINTING: classify a committed turn instead of always waiting the same silence
+# ---------------------------------------------------------------------------
+
+# A caller who ends on one of these is searching for the next word, not finished: wait longer than
+# for an ordinary mid-sentence pause.
+HESITATION_WORDS = frozenset(
+    {
+        "um", "umm", "uh", "uhh", "uhm", "hmm", "hmmm", "hm", "err", "arre", "actually", "well",
+        "matlab",
+        "yaani", "basically", "अं", "हम्म", "मतलब", "यानी",
+    }
+)
+# Verbs and closers a request ends on: the sentence is whole even though it opens like an
+# unfinished one.
+COMPLETING_ENDERS = frozenset(
+    {
+        "batao", "bataiye", "bataiyega", "bataye", "chahiye", "chahiyega", "karo", "kijiye",
+        "kariye", "dijiye", "do", "bhejo", "bhejiye", "bolo", "boliye", "dikhao", "dikhaiye",
+        "tell", "show", "send", "please", "thanks",
+        "बताओ", "बताइए", "चाहिए", "करो", "कीजिए", "दीजिए", "भेजो", "बोलो", "दिखाओ",
+    }
+)
+HOLD_HESITATION_SECONDS = 1.5
+# A committed turn with no transcript at all, spoken for less than this, is treated as noise or
+# echo (only once the live transcriber has had time to produce text, see NOISE_CHECK_SECONDS).
+NOISE_MAX_SPEECH_SECONDS = 0.5
+NOISE_CHECK_SECONDS = 0.8
+
+
+@dataclass(frozen=True)
+class EndpointDecision:
+    """``category``: complete, unfinished, hesitation, thinking, backchannel or pending."""
+
+    category: str
+    hold_seconds: float
+    reason: str | None
+
+
+def endpoint_decision(text: str, agent_was_busy: bool) -> EndpointDecision:
+    """What a committed turn is, from the live partial transcript, and how long to keep waiting.
+
+    Uses the smart-mode rules (thinking requests, stutters, unfinished phrases) on top of
+    ``hold_decision``'s base rules, and adds ``hesitation`` ("... matlab", "hmm"), which waits
+    longer than a plain unfinished sentence. ``hold_seconds`` is the wait ON TOP of the silence
+    the voice activity detector already waited."""
+    words = _tokens(text.strip())
+    if not words:
+        return EndpointDecision("pending", 0.0, None)
+    hold, reason = hold_decision(text, agent_was_busy, True)
+    if reason is None:
+        return EndpointDecision("complete", 0.0, None)
+    if reason == "thinking_request":
+        return EndpointDecision("thinking", hold, reason)
+    if reason == "lone_filler":
+        return EndpointDecision("backchannel", hold, reason)
+    if words[-1] in HESITATION_WORDS:
+        return EndpointDecision("hesitation", max(hold, HOLD_HESITATION_SECONDS), "hesitation")
+    whole_request = words[-1] in COMPLETING_ENDERS or any(w in QUESTION_CUES for w in words)
+    if reason == "unfinished_phrase" and whole_request:
+        # "mujhe price batao" starts like "mujhe ..." but is a whole request: the smart-mode
+        # phrase rule is too eager.
+        return EndpointDecision("complete", 0.0, None)
+    return EndpointDecision("unfinished", hold, reason)
+
+
+def adaptive_silence_ms() -> int:
+    """The silence the VAD waits when adaptive endpointing is on (clamped to a safe range)."""
+    try:
+        value = float(settings.voice_adaptive_vad_silence_ms)
+    except (TypeError, ValueError):
+        value = 700.0
+    # Never above the baseline, which an operator may already have lowered.
+    return int(min(float(baseline_silence_ms()), 1100.0, max(400.0, value)))
+
+def baseline_silence_ms() -> int:
+    try:
+        return int(float(settings.voice_vad_silence_ms))
+    except (TypeError, ValueError):
+        return 1100
+
+
+def compensation_seconds() -> float:
+    """How much earlier adaptive endpointing commits a turn than the baseline does.
+
+    Every hold is lengthened by this, so a caller who pauses mid-thought gets at least the
+    patience they get today."""
+    return max(0.0, (baseline_silence_ms() - adaptive_silence_ms()) / 1000.0)
+
+
+def settle_seconds() -> float:
+    """A short wait for the live transcript to catch up when a turn commits before any text."""
+    try:
+        value = float(settings.voice_adaptive_settle_ms)
+    except (TypeError, ValueError):
+        value = 250.0
+    return min(600.0, max(0.0, value)) / 1000.0
+
+
+def is_noise_turn(text: str, speech_seconds: float | None) -> bool:
+    """No words at all, from a burst too short to be speech: a click, a cough or echo."""
+    short = speech_seconds is not None and 0 < speech_seconds < NOISE_MAX_SPEECH_SECONDS
+    return not text.strip() and short
+
+
+# ---------------------------------------------------------------------------
 # LLM turn judgement (any language)
 # ---------------------------------------------------------------------------
 

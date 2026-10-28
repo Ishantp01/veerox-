@@ -236,6 +236,23 @@ async def test_a_schedule_is_sent_once_in_the_handshake_only(monkeypatch: pytest
     assert first["generation_config"] == {"chunk_length_schedule": [50, 90, 160, 250]}
 
 
+async def test_the_platform_schedule_applies_when_no_profile_sets_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "voice_tts_chunk_schedule", "50, 120,160")
+    assert (await _handshake(None, monkeypatch))["generation_config"] == {"chunk_length_schedule": [50, 120, 160]}
+    assert (await _handshake(resolve_profile({"speed": 1.1}), monkeypatch))["generation_config"] == {
+        "chunk_length_schedule": [50, 120, 160]
+    }
+    # an org's own schedule wins
+    own = await _handshake(resolve_profile({"chunk_schedule": [80, 200]}), monkeypatch)
+    assert own["generation_config"] == {"chunk_length_schedule": [80, 200]}
+
+
+@pytest.mark.parametrize("raw", ["", "  ", "49,120", "120,501", "abc", "50,,x", "50,60,70,80,90,100,110", "-5"])
+async def test_an_invalid_platform_schedule_is_ignored_not_sent(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    monkeypatch.setattr(settings, "voice_tts_chunk_schedule", raw)
+    assert "generation_config" not in await _handshake(None, monkeypatch)
+
+
 # --- prompt options -----------------------------------------------------------------------------------------------------------------
 
 

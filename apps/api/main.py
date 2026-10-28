@@ -107,9 +107,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         import structlog
 
         structlog.get_logger("pilot").warning("pilot_background_workers_disabled")
+    async def _startup_voice_check() -> None:
+        from apps.api.channels.voice import elevenlabs_client
+        from apps.api.channels.voice.voice_profile import platform_voice_id
+
+        import structlog
+
+        result = await elevenlabs_client.validate_voice(platform_voice_id())
+        log = structlog.get_logger("voice_config")
+        if result.ok is False:
+            log.error(
+                "voice_preflight_failed",
+                reason=result.reason,
+                hint="fix ELEVENLABS_VOICE_ID: calls would be silent",
+            )
+        elif result.ok is None:
+            log.warning("voice_preflight_unavailable", reason=result.reason)
+        else:
+            log.info("voice_preflight_ok")
+
+    voice_check_task = (
+        asyncio.create_task(_startup_voice_check())
+        if settings.voice_preflight_voice_check and settings.voice_tts_provider == "elevenlabs"
+        else None
+    )
     try:
         yield
     finally:
+        if voice_check_task is not None:
+            voice_check_task.cancel()
         for task in background_tasks:
             task.cancel()
         for task in background_tasks:

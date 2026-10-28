@@ -272,7 +272,7 @@ function EditScriptDialog({ script }: { script: ScriptLibraryItem }) {
   );
 }
 
-function ScriptRow({ script }: { script: ScriptLibraryItem }) {
+function ScriptRow({ script, canEdit }: { script: ScriptLibraryItem; canEdit: boolean }) {
   const setDefaultScript = useSetDefaultScript();
   const deleteScript = useDeleteScript();
   const confirm = useConfirm();
@@ -317,6 +317,8 @@ function ScriptRow({ script }: { script: ScriptLibraryItem }) {
           <Badge variant="success" icon={null}>
             Default
           </Badge>
+        ) : !canEdit ? (
+          <span className="text-xs text-slate-400">—</span>
         ) : (
           <Button
             variant="outline"
@@ -338,17 +340,21 @@ function ScriptRow({ script }: { script: ScriptLibraryItem }) {
         )}
       </TableCell>
       <TableCell>
-        <div className="flex items-center gap-1">
-          <EditScriptDialog script={script} />
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={`Delete ${script.name}`}
-            onClick={handleDelete}
-          >
-            <Trash2 size={14} aria-hidden />
-          </Button>
-        </div>
+        {canEdit ? (
+          <div className="flex items-center gap-1">
+            <EditScriptDialog script={script} />
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={`Delete ${script.name}`}
+              onClick={handleDelete}
+            >
+              <Trash2 size={14} aria-hidden />
+            </Button>
+          </div>
+        ) : (
+          <span className="text-xs text-slate-400">View only</span>
+        )}
       </TableCell>
     </TableRow>
   );
@@ -361,7 +367,14 @@ function ScriptRow({ script }: { script: ScriptLibraryItem }) {
  * the one marked default is the fallback every campaign without its own
  * pick uses, for that channel.
  */
-export function ScriptLibrary({ channel = "voice" }: { channel?: ScriptChannel }) {
+export function ScriptLibrary({
+  channel = "voice",
+  canEdit = true,
+}: {
+  channel?: ScriptChannel;
+  /** False for a plain org member: the list stays readable, every write control is hidden. The API enforces this too. */
+  canEdit?: boolean;
+}) {
   const scripts = useScripts(channel);
   const data = scripts.data ?? [];
 
@@ -369,12 +382,15 @@ export function ScriptLibrary({ channel = "voice" }: { channel?: ScriptChannel }
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="min-w-[240px] flex-1 text-sm text-slate-500 dark:text-slate-400">
-          Create as many scripts as you need — pick one per campaign, or leave the default in
-          place as the fallback.
+          {canEdit
+            ? "Create as many scripts as you need — pick one per campaign, or leave the default in place as the fallback."
+            : "Only an org admin can add or change scripts. You can read them here."}
         </p>
-        <div className="shrink-0">
-          <NewScriptDialog channel={channel} />
-        </div>
+        {canEdit && (
+          <div className="shrink-0">
+            <NewScriptDialog channel={channel} />
+          </div>
+        )}
       </div>
       <QueryBoundary
         isLoading={scripts.isLoading}
@@ -411,7 +427,7 @@ export function ScriptLibrary({ channel = "voice" }: { channel?: ScriptChannel }
             </thead>
             <tbody>
               {data.map((script) => (
-                <ScriptRow key={script.id} script={script} />
+                <ScriptRow key={script.id} script={script} canEdit={canEdit} />
               ))}
             </tbody>
           </Table>

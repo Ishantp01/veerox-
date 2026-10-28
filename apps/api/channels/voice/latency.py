@@ -386,6 +386,17 @@ class LatencyTracker:
             STATS.add(f"kind.{turn.kind}.total", segments["total"])
 
 
+# Numeric facts a turn's latency line carries beside its segments (see adapter.py), summarised
+# as ``note.<name>``.
+_NOTE_METRICS = (
+    "vad_silence_ms",
+    "endpoint_hold_ms",
+    "tts_phrase_buffer_ms",
+    "tts_send_to_audio_ms",
+    "tts_chars_at_first_chunk",
+)
+
+
 def summarize_events(events: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
     """Aggregate parsed ``voice_turn_latency`` / ``voice_interruption_latency``
     log events (used by scripts/voice_latency_report.py)."""
@@ -396,6 +407,9 @@ def summarize_events(events: Iterable[Mapping[str, Any]]) -> dict[str, dict[str,
             for seg, value in (ev.get("segments_ms") or {}).items():
                 if isinstance(value, (int, float)):
                     stats.add("total" if seg == "total" else f"seg.{seg}", value)
+            for key in _NOTE_METRICS:
+                if isinstance(ev.get(key), (int, float)):
+                    stats.add(f"note.{key}", ev[key])
         elif name == "voice_interruption_latency":
             for key, value in ev.items():
                 if key.endswith("_ms") and isinstance(value, (int, float)):
@@ -413,6 +427,15 @@ def summarize_events(events: Iterable[Mapping[str, Any]]) -> dict[str, dict[str,
             if isinstance(value, (int, float)):
                 stats.add("est_playback_ms", value)
     return stats.snapshot()
+
+
+def endpoint_category_counts(events: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    """How many turns fell in each adaptive-endpointing category (complete, unfinished, ...)."""
+    counts: dict[str, int] = {}
+    for ev in events:
+        if ev.get("event") == "voice_turn_latency" and isinstance(ev.get("endpoint_category"), str):
+            counts[ev["endpoint_category"]] = counts.get(ev["endpoint_category"], 0) + 1
+    return counts
 
 
 def turn_event_counts(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:

@@ -37,9 +37,16 @@ from apps.api.channels.voice.voice_profile import (
     platform_voice_id,
 )
 from apps.api.channels.voice import language_detect
-from apps.api.channels.voice import call_control, recovery, turn_controller
+from apps.api.channels.voice import (
+    call_control,
+    conversation_state,
+    recovery,
+    script_rules,
+    turn_controller,
+)
 from apps.api.channels.voice.latency import LatencyTracker
 from apps.api.channels.voice.metering import CallUsage
+from apps.api import pilot
 from apps.api.config import settings
 from apps.api.core import privacy
 from apps.api.core.conversation import dialogue, runtime_stats, voice_decision
@@ -89,6 +96,30 @@ class CallState:
     eleven_session: elevenlabs_client.ElevenLabsTTSSession | None = field(default=None, repr=False)
     eleven_forward_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
     eleven_text_buffer: str = ""
+    # VOICE_EXACT_LINES: code -> approved words for this call, and the substituter for the reply
+    # in progress.
+    exact_lines: dict[str, str] = field(default_factory=dict)
+    reply_used_exact: bool = False  # the reply just finished spoke an exact client line
+    # VOICE_PIPELINE_DIAG (pilot only): counts for the per-call summary.
+    # Never speech, text, numbers or ids.
+    diag_on: bool = False
+    diag_in_frames: int = 0
+    diag_in_bytes: int = 0
+    diag_out_frames: int = 0
+    diag_out_bytes: int = 0
+    diag_turns: int = 0
+    diag_silent_turns: int = 0
+    diag_tts_failures: int = 0
+    diag_first_failure: str | None = None
+    # Replies the provider refused or dropped: logged as errors, never stored as spoken.
+    tts_failed_turns: int = 0
+    # VOICE_IF_TRIGGERS: this call's keyword rules and the actions fired by the caller's latest
+    # turn.
+    if_triggers: list[script_rules.Trigger] = field(default_factory=list)
+    fired_rules: list[str] = field(default_factory=list)
+    # VOICE_CONVERSATION_MEMORY / VOICE_OPENER_VARIETY: this call's memory (never shared).
+    memory: conversation_state.ConversationMemory | None = field(default=None, repr=False)
+    exact_sub: script_rules.ExactSubstituter | None = field(default=None, repr=False)
     # VOICE_ELEVENLABS_PREWARM: a session being opened in the background for
     # the response OpenAI just started, claimed by that response's first text
     # delta. Per-call and per-turn like eleven_session — never shared, never
@@ -234,6 +265,8 @@ class CallState:
     # ("haan, mera matlab..."); cleared as soon as they resume or the text
     # stops looking unfinished.
     hold_until: float = 0.0
+    # VOICE_ADAPTIVE_ENDPOINTING: why the current hold was set ("settle" or "noise_check").
+    hold_kind: str | None = None
     # Latency instrumentation: when the caller's speech ended / when the reply
     # request went out (monotonic; 0 = not measuring). Logged once the first
     # audio or text of that reply arrives (voice_reply_latency).
@@ -851,6 +884,159 @@ def _with_priority(response: dict[str, Any] | None, state: CallState) -> dict[st
     return out
 
 
+def _memory(state: CallState) -> conversation_state.ConversationMemory | None:
+    """This call's conversation memory, created on first use; None when both memory flags are
+    off. A memory that belongs to another org is never reused."""
+    if not (settings.voice_conversation_memory or settings.voice_opener_variety):
+        return None
+    if state.memory is None or state.memory.org_id != state.org_id:
+        state.memory = conversation_state.ConversationMemory(state.org_id, state.call_uuid)
+    return state.memory
+
+
+def _with_memory(response: dict[str, Any] | None, state: CallState) -> dict[str, Any] | None:
+    """Add the call-memory block to a response.create body, keeping whatever instructions it
+    already carried. Nothing worth saying (or the flags off) leaves the body exactly as it was."""
+    memory = _memory(state)
+    if memory is None:
+        return response
+    try:
+        block = memory.render(
+            org_id=state.org_id,
+            memory=settings.voice_conversation_memory,
+            opener_variety=settings.voice_opener_variety,
+        )
+    except Exception:  # noqa: BLE001 - memory is advice; it must never break a reply
+        logger.warning("voice_memory_render_failed", exc_info=True)
+        return response
+    if not block:
+        return response
+    out = dict(response or {})
+    base = out.get("instructions") or state.base_instructions
+    out["instructions"] = f"{base}\n\n{block}".strip()
+    return out
+
+
+def diag_enabled() -> bool:
+    """VOICE_PIPELINE_DIAG counts and logs in any environment except production."""
+    return bool(settings.voice_pipeline_diag and not pilot.is_production())
+
+
+def diag_note_turn(
+    state: CallState, log: Any, session: Any, text_chars: int, chunks: int | None = None
+) -> None:
+    """One line per finished agent turn: did the text become audio? Counts and a code only.
+
+    ``session`` None means the turn's text arrived but no TTS session ever opened for it
+    (``chunks`` is then 0)."""
+    if not state.diag_on:
+        return
+    try:
+        chunks = int(state.eleven_turn_audio_chunks) if chunks is None else chunks
+        failed = session is None or bool(getattr(session, "failed", False))
+        if session is None:
+            code = "no_session"
+        else:
+            code = getattr(session, "fail_code", None) if failed else None
+        silent = text_chars > 0 and chunks == 0
+        state.diag_turns += 1
+        if silent:
+            state.diag_silent_turns += 1
+        if failed:
+            state.diag_tts_failures += 1
+        if (silent or failed) and state.diag_first_failure is None:
+            state.diag_first_failure = "tts"
+        log.info(
+            "voice_pipeline_turn",
+            turn=state.diag_turns,
+            text_chars=text_chars,
+            tts_chunks=chunks,
+            tts_failed=failed,
+            tts_error_code=code,
+            silent_turn=silent,
+            out_frames_so_far=state.diag_out_frames,
+        )
+    except Exception:  # noqa: BLE001 - diagnostics must never touch the call
+        return
+
+
+def diag_call_summary(state: CallState, log: Any) -> None:
+    """One line at the end of a call: which stage was the first to fail, from counts alone."""
+    if not state.diag_on:
+        return
+    try:
+        if state.diag_in_frames == 0:
+            first = "inbound_audio"
+        elif state.diag_turns == 0:
+            first = "no_agent_turn"
+        else:
+            first = state.diag_first_failure or "none"
+        log.info(
+            "voice_pipeline_call_summary",
+            inbound_frames=state.diag_in_frames,
+            inbound_bytes=state.diag_in_bytes,
+            outbound_frames=state.diag_out_frames,
+            outbound_bytes=state.diag_out_bytes,
+            agent_turns=state.diag_turns,
+            silent_turns=state.diag_silent_turns,
+            tts_failures=state.diag_tts_failures,
+            first_failing_stage=first,
+        )
+    except Exception:  # noqa: BLE001
+        return
+
+
+def _note_triggers(state: CallState, text: str) -> None:
+    """VOICE_IF_TRIGGERS: which keyword rules this caller turn fired (matched by code)."""
+    if not state.if_triggers:
+        return
+    state.fired_rules = [t.action for t in script_rules.match_triggers(text, state.if_triggers)]
+    if state.fired_rules:
+        _trace(state, "if_trigger_fired", rules=len(state.fired_rules))
+
+
+def _with_triggers(response: dict[str, Any] | None, state: CallState) -> dict[str, Any] | None:
+    """Add the actions the last caller turn fired to this reply's instructions (once)."""
+    if not state.fired_rules:
+        return response
+    actions, state.fired_rules = state.fired_rules, []
+    out = dict(response or {})
+    base = out.get("instructions") or state.base_instructions
+    rules = "\n".join(f"- {a}" for a in actions)
+    out["instructions"] = (
+        f"{base}\n\nClient script rule(s) triggered by what the caller just said - "
+        f"apply in this reply:\n{rules}"
+    ).strip()
+    return out
+
+
+def _note_caller_turn(state: CallState, text: str) -> None:
+    memory = _memory(state)
+    if memory is None:
+        return
+    try:
+        changed = memory.note_caller_turn(text)
+        if changed:  # slot names only, never values
+            _trace(state, "memory_updated", slots=changed, corrected=memory.corrected_last_turn)
+    except Exception:  # noqa: BLE001
+        logger.warning("voice_memory_update_failed", exc_info=True)
+
+
+def _note_agent_reply(state: CallState, text: str) -> None:
+    """A reply that was fully spoken (never one the caller cut off)."""
+    used_exact, state.reply_used_exact = state.reply_used_exact, False
+    memory = _memory(state)
+    if memory is None:
+        return
+    try:
+        repeated = memory.note_agent_turn(text, exact_used=used_exact)
+        if repeated:
+            state.latency.event("repeat_question", slots=repeated)
+            _trace(state, "repeat_question_detected", slots=repeated)
+    except Exception:  # noqa: BLE001
+        logger.warning("voice_memory_update_failed", exc_info=True)
+
+
 GREETING_CUT_INSTRUCTION = (
     "Your opening greeting was cut off by the caller before it finished, so they may not have heard that you are an "
     "AI assistant. Begin your reply with a few words saying so (in the caller's language), then answer what they "
@@ -1078,7 +1264,8 @@ async def handle_live_delta(
     if state.hold_until - time.monotonic() > 0 and not state.caller_speaking:
         # We're holding the reply for a caller who paused mid-sentence: more
         # text has arrived, so re-judge whether they're actually done.
-        if turn_controller.endpoint_hold_seconds(state.utterance_text, False, settings.voice_smart_turn_taking) == 0.0:
+        smart = settings.voice_smart_turn_taking or settings.voice_adaptive_endpointing
+        if turn_controller.endpoint_hold_seconds(state.utterance_text, False, smart) == 0.0:
             _clear_hold(state)
             if state.reply_pending and not state.response_active:
                 _schedule_reply(oai_ws, state)
@@ -1144,14 +1331,71 @@ async def _fire_reply_when_quiet(oai_ws: Any, state: CallState) -> None:
         await _fire_pending_reply(oai_ws, state)
 
 
+def _adaptive_hold(state: CallState) -> tuple[float, str | None]:
+    """VOICE_ADAPTIVE_ENDPOINTING: how long to wait, on top of the (lowered) VAD silence.
+
+    Without live text the original total wait is kept (the lowered floor is made up in
+    full), so a failed transcriber can never make the agent cut people off more than today."""
+    compensation = turn_controller.compensation_seconds()
+    state.latency.note(vad_silence_ms=turn_controller.adaptive_silence_ms())
+    if not _live_ready(state):
+        state.latency.note(endpoint_category="no_live_text")
+        return (compensation, "adaptive_no_text") if compensation else (0.0, None)
+    decision = turn_controller.endpoint_decision(state.utterance_text, _agent_busy(state))
+    state.latency.note(endpoint_category=decision.category)
+    if decision.category == "pending":
+        # Committed before any text arrived: give the transcript a moment, then decide.
+        state.hold_kind = "settle"
+        return turn_controller.settle_seconds(), "settle"
+    if decision.category == "complete":
+        return 0.0, None
+    return decision.hold_seconds + compensation, decision.category
+
+
+def _recheck_after_hold(state: CallState, kind: str) -> bool:
+    """A "settle" or "noise_check" hold ran out. True if it was extended or the turn dropped."""
+    text = state.utterance_text
+    if kind == "settle":
+        decision = turn_controller.endpoint_decision(text, _agent_busy(state))
+        state.latency.note(endpoint_category=decision.category, settled=True)
+        if decision.category == "pending":
+            speech = (
+                state.t_speech_stopped - state.t_speech_started
+                if state.t_speech_started and state.t_speech_stopped >= state.t_speech_started
+                else None
+            )
+            if turn_controller.is_noise_turn(text, speech):
+                # Too short to be speech and still no words: wait once more, long enough for any
+                # real word to show.
+                state.hold_kind = "noise_check"
+                state.hold_until = time.monotonic() + turn_controller.NOISE_CHECK_SECONDS
+                return True
+            return False  # the text may just be late: answer
+        if decision.category == "complete":
+            return False
+        extra = decision.hold_seconds + turn_controller.compensation_seconds()
+        state.hold_until = time.monotonic() + extra
+        return True
+    if kind == "noise_check" and not text.strip():
+        state.reply_pending = False  # a click, a cough or echo: no reply
+        state.latency.event("noise_turn_dropped")
+        _trace(state, "noise_turn_dropped", ms_since_commit=_ms_since(state.t_committed))
+        return True
+    return False
+
+
 async def _release_hold(oai_ws: Any, state: CallState) -> None:
     """Wait out the endpointing hold, then send the reply if the caller hasn't
     resumed speaking in the meantime."""
     while True:
         remaining = state.hold_until - time.monotonic()
-        if remaining <= 0:
-            break
-        await asyncio.sleep(remaining)
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+            continue
+        kind, state.hold_kind = state.hold_kind, None
+        if kind is not None and _recheck_after_hold(state, kind):
+            continue  # the hold was extended, or the turn was dropped as noise
+        break
     if state.reply_pending and not state.response_active and not state.caller_speaking:
         _schedule_reply(oai_ws, state)
 
@@ -1172,6 +1416,7 @@ def _ms_since(moment: float) -> int | None:
 
 def _clear_hold(state: CallState) -> None:
     state.hold_until = 0.0
+    state.hold_kind = None
     if state.hold_task is not None and not state.hold_task.done():
         state.hold_task.cancel()
     state.hold_task = None
@@ -1244,6 +1489,8 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
             response["instructions"] = f"{base}\n\n{GREETING_CUT_INSTRUCTION}".strip()
         state.answering_transcript = state.pending_user_transcript
         state.answering_utt = state.utt_seq
+        response = _with_triggers(response, state)
+        response = _with_memory(response, state)
         if response is not None:
             payload["response"] = response
         state.latency.mark("response_requested")
@@ -1816,6 +2063,9 @@ async def _send_media(ws: WebSocket, state: CallState, payload: str) -> None:
     instead.
     """
     await ws.send_text(json.dumps(_media_message(state.provider, state.stream_id, payload)))
+    if state.diag_on:
+        state.diag_out_frames += 1
+        state.diag_out_bytes += len(payload) * 3 // 4
     # base64 -> raw byte count; extend the playback horizon by that much audio.
     now = time.monotonic()
     chunk_seconds = (len(payload) * 3 // 4) / _PLAYBACK_BYTES_PER_SECOND
@@ -1845,6 +2095,16 @@ async def _forward_elevenlabs_audio(call_ws: WebSocket, state: CallState, log: A
                 sent_chars = getattr(session, "chars_sent", None)
                 if isinstance(sent_chars, int):  # measurement only: it must never be able to stop the audio
                     state.latency.note(tts_chars_at_first_chunk=sent_chars)
+            if state.eleven_turn_audio_chunks == 1:
+                # Measurement only: how long phrase buffering held the first words, and how long
+                # the provider took from receiving them to returning audio. It can never stop audio.
+                first_text = getattr(session, "first_text_at", None)
+                first_send = getattr(session, "first_send_at", None)
+                if isinstance(first_text, float) and isinstance(first_send, float):
+                    state.latency.note(
+                        tts_phrase_buffer_ms=round((first_send - first_text) * 1000),
+                        tts_send_to_audio_ms=round((time.monotonic() - first_send) * 1000),
+                    )
             state.latency.mark("tts_first_chunk")
             await _send_media(call_ws, state, chunk)
         if (
@@ -1944,6 +2204,11 @@ async def _open_elevenlabs_session(
     return session
 
 
+# ElevenLabs closes a stream-input socket that receives no text for 20 s (inactivity_timeout default); a prewarmed
+# socket older than this is not trusted.
+_PREWARM_MAX_AGE_S = 15.0
+
+
 def _start_prewarm(state: CallState, log: Any) -> None:
     """VOICE_ELEVENLABS_PREWARM: begin opening this turn's ElevenLabs socket
     now, so the connect overlaps OpenAI's time-to-first-token. The socket is
@@ -1998,6 +2263,16 @@ async def _take_elevenlabs_session(
         if not task.cancelled() and task.exception() is None:
             session = task.result()
             if session is not None:
+                age = time.monotonic() - (getattr(session, "opened_at", None) or time.monotonic())
+                if getattr(session, "failed", False) is True or age > _PREWARM_MAX_AGE_S:
+                    # The provider closes an idle socket (default 20 s) or has already rejected it: speaking
+                    # into it would be silence, so drop it and connect fresh.
+                    log.info("elevenlabs_prewarm_stale", age_s=round(age, 1), failed=bool(getattr(session, "failed", False)))
+                    try:
+                        await session.__aexit__(None, None, None)  # not yet the call's current session
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return await _open_elevenlabs_session(state, log)
                 state.latency.note(tts_prewarmed=True)
                 return session
     return await _open_elevenlabs_session(state, log)
@@ -2028,13 +2303,36 @@ async def _finish_elevenlabs_turn(
             _spawn_tts_recovery(state, log, "no_audio_for_turn")
             return
         await _close_eleven_session(state, session)
+        diag_note_turn(state, log, session, len(fallback_text or ""))
+        if getattr(session, "failed", False) is True:
+            # The provider refused or dropped this turn: nothing (or only part) of it was spoken, so
+            # it is not stored or remembered as said, and the failure is an error in the log.
+            state.tts_failed_turns += 1
+            log.error(
+                "voice_tts_failed",
+                code=getattr(session, "fail_code", None),
+                text_chars=len(fallback_text or ""),
+                audio_chunks=state.eleven_turn_audio_chunks,
+                partial=state.eleven_turn_audio_chunks > 0,
+                spoken=False,
+            )
+            return
         if fallback_text:
             await _persist_voice_turn(state, fallback_text, pending=pending_transcript)
             log.info("voice_assistant_transcript", text=fallback_text)
+            _note_agent_reply(state, fallback_text)
     except asyncio.CancelledError:
         raise  # the interrupter (_teardown_elevenlabs_turn) closes everything
     except Exception:  # noqa: BLE001 - one bad turn must not break the call
         log.warning("elevenlabs_finish_failed", exc_info=True)
+        state.tts_failed_turns += 1
+        log.error(
+            "voice_tts_failed",
+            code=getattr(session, "fail_code", None),
+            text_chars=len(fallback_text or ""),
+            spoken=False,
+        )
+        diag_note_turn(state, log, session, len(fallback_text or ""))
         await _close_eleven_session(state, session)
 
 
@@ -2679,6 +2977,10 @@ async def handle_openai_event(
                 "premature_response_suspected", since_reply_ms=round((time.monotonic() - state.t_reply_sent) * 1000)
             )
         call_control.abort_hangup(state, log)
+        if state.reply_pending and state.hold_until - time.monotonic() > 0:
+            # The caller carried on while we were holding the reply: a cut-off that waiting
+            # prevented.
+            state.latency.event("false_ending_avoided", hold_kind=state.hold_kind)
         _clear_hold(state)
         # OpenAI's VAD can fire speech_started more than once for what is
         # really one continuous overlap (a brief gap it reads as a new
@@ -2742,6 +3044,11 @@ async def handle_openai_event(
         state.response_id = (event.get("response") or {}).get("id")
         state.latency.mark("openai_response_created")
         state.latency.interruption_next_response()
+        # A new reply starts with a clean substituter, so text held from a cut-off reply can never
+        # leak into it.
+        state.exact_sub = (
+            script_rules.ExactSubstituter(state.exact_lines) if state.exact_lines else None
+        )
         _start_prewarm(state, log)
 
     elif etype in ("response.audio_transcript.delta", "response.output_audio_transcript.delta"):
@@ -2778,16 +3085,22 @@ async def handle_openai_event(
             state.latency.event("extended_backchannel_absorbed")
         # Adaptive endpointing: if the text streamed so far looks unfinished,
         # wait a little before answering in case they carry on.
-        hold, hold_reason = (
-            turn_controller.hold_decision(state.utterance_text, _agent_busy(state), settings.voice_smart_turn_taking)
-            if _live_ready(state) and not absorbed and (settings.voice_endpoint_hold or settings.voice_smart_turn_taking)
-            else (0.0, None)
-        )
+        state.hold_kind = None
+        if settings.voice_adaptive_endpointing and not absorbed:
+            hold, hold_reason = _adaptive_hold(state)  # VOICE_ADAPTIVE_ENDPOINTING (off by default)
+        else:
+            smart = settings.voice_smart_turn_taking
+            hold, hold_reason = (
+                turn_controller.hold_decision(state.utterance_text, _agent_busy(state), smart)
+                if _live_ready(state) and not absorbed and (settings.voice_endpoint_hold or smart)
+                else (0.0, None)
+            )
         state.hold_until = time.monotonic() + hold if hold else 0.0
         if hold:
             # Reason and duration only: what the caller said does not belong in this log line.
             log.info("voice_endpoint_hold", seconds=hold, reason=hold_reason, words=len(state.utterance_text.split()))
             state.latency.event("endpoint_hold", reason=hold_reason, hold_ms=round(hold * 1000))
+            state.latency.note(endpoint_hold_ms=round(hold * 1000))
         # finish_first: the caller asked something real while the agent talked
         # and has now finished asking — pause, acknowledge, resume, read back.
         if (
@@ -2849,6 +3162,9 @@ async def handle_openai_event(
             state.overlap_transcripts.append(state.pending_user_transcript)
         log.info("voice_user_transcript", text=state.pending_user_transcript)
         text = state.pending_user_transcript
+        if text and not (overlapping and _is_backchannel(text)):
+            _note_caller_turn(state, text)  # a nod is not information; everything else may be
+            _note_triggers(state, text)
         if text:
             state.tool_holds = {}  # a new thing was said: the previous turn's holds no longer apply
             state.caller_thinking = turn_controller.thinking_cue(text)
@@ -2885,6 +3201,7 @@ async def handle_openai_event(
             state.last_spoken_text = assistant_text
             await _persist_voice_turn(state, assistant_text)
             log.info("voice_assistant_transcript", text=assistant_text)
+            _note_agent_reply(state, assistant_text)
 
     elif etype in ("response.text.delta", "response.output_text.delta"):
         # ElevenLabs path only — reached when session.update set
@@ -2893,9 +3210,14 @@ async def handle_openai_event(
         # forwarding its audio concurrently, rather than waiting for the
         # full response to finish.
         delta = event.get("delta") or ""
-        state.resp_text += delta
+        flushed = bool(event.get("_exact_flushed"))
+        if not flushed:
+            state.resp_text += delta
         if state.suppress_response_audio:
             return
+        if state.exact_sub is not None and not flushed:
+            # Exact codes become the approved words here, before anything reaches TTS.
+            delta = state.exact_sub.feed(delta)
         if delta:
             _note_first_output(state, log, "text")
             state.latency.mark("openai_first_output")
@@ -2947,11 +3269,32 @@ async def handle_openai_event(
             _start_tts_watchdog(state, log)
 
     elif etype in ("response.text.done", "response.output_text.done"):
+        if (
+            state.diag_on
+            and state.tts_provider == "elevenlabs"
+            and state.eleven_session is None
+            and not state.suppress_response_audio
+            and state.resp_text.strip()
+        ):
+            diag_note_turn(state, log, None, len(state.resp_text.strip()), chunks=0)
+        if state.exact_sub is not None and not state.suppress_response_audio:
+            held = state.exact_sub.finish()  # text still held at the end of the reply
+            if held:
+                await handle_openai_event(
+                    {"type": "response.text.delta", "delta": held, "_exact_flushed": True},
+                    call_ws, oai_ws, state, log,
+                )
         if state.tts_provider == "elevenlabs" and state.eleven_session is not None:
             session = state.eleven_session
-            assistant_text = (event.get("text") or state.eleven_text_buffer or "").strip()
+            if state.exact_sub is not None:
+                # What was actually spoken (exact words in place of codes), not the model's raw
+                # text.
+                assistant_text = (state.eleven_text_buffer or "").strip()
+            else:
+                assistant_text = (event.get("text") or state.eleven_text_buffer or "").strip()
             pending = state.pending_user_transcript
             state.tts_text_done = True  # kept so TTS recovery can replay and finish this turn
+            state.reply_used_exact = bool(state.exact_sub is not None and state.exact_sub.used)
             state.tts_final_text = assistant_text
             state.tts_final_pending = pending
             if settings.voice_nonblocking_tts_finish:

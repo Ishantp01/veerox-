@@ -38,12 +38,24 @@ BEHAVIOUR_FLAGS = (
     "voice_retention_delete_provider_audio",
     "log_privacy_enabled",
     "log_transcripts",
+    # Phases 3-4 (conversation, script authority, turn-taking); all default off.
+    "voice_human_style",
+    "voice_script_authority",
+    "voice_exact_lines",
+    "voice_if_triggers",
+    "voice_conversation_memory",
+    "voice_opener_variety",
+    "voice_tts_phrase_flush",
+    "voice_adaptive_endpointing",
+    "voice_pipeline_diag",
+    "voice_preflight_voice_check",
 )
 _ELEVENLABS_ONLY = (
     "voice_elevenlabs_prewarm",
     "voice_nonblocking_tts_finish",
     "voice_greeting_audio_cache",
     "voice_tts_recovery",
+    "voice_tts_phrase_flush",
 )
 
 
@@ -81,6 +93,84 @@ def check_voice_config(s: Any = None) -> list[Issue]:
         add("warning", "smart_turns_without_live_detection", "VOICE_SMART_TURN_TAKING relies on live partial transcripts; VOICE_LIVE_TURN_DETECTION is off, so corrections/noise cannot be recognised.")
     if getattr(s, "voice_trim_interrupted_context", False) and not getattr(s, "voice_safe_cancel", False):
         add("info", "trim_without_safe_cancel", "VOICE_TRIM_INTERRUPTED_CONTEXT works with or without VOICE_SAFE_CANCEL, but the interrupted response will finish generating first.")
+    raw_allowlist = str(getattr(s, "voice_dial_allowlist", "") or "")
+    allowlist = [p for p in raw_allowlist.split(",") if p.strip()]
+    environment_name = str(getattr(s, "environment", "") or "").strip().lower()
+    dev_like = environment_name in ("dev", "development", "local", "")
+    if allowlist:
+        add(
+            "info",
+            "dial_allowlist_active",
+            f"VOICE_DIAL_ALLOWLIST is set ({len(allowlist)} number(s)): calls, SMS and WhatsApp "
+            "go only there.",
+        )
+    elif dev_like and getattr(s, "plivo_auth_token", None):
+        add(
+            "warning",
+            "dev_dial_unrestricted",
+            "A development stack with real Plivo credentials has no VOICE_DIAL_ALLOWLIST: it can "
+            "dial any number.",
+        )
+    if getattr(s, "voice_exact_lines", False) and not getattr(s, "voice_script_authority", False):
+        add(
+            "warning",
+            "exact_lines_without_authority",
+            "VOICE_EXACT_LINES has no effect unless VOICE_SCRIPT_AUTHORITY is on: "
+            "[[EXACT]] markers are not parsed.",
+        )
+    if getattr(s, "voice_exact_lines", False) and provider != "elevenlabs":
+        add(
+            "warning",
+            "exact_lines_prompt_only",
+            "Exact lines are only word-for-word on the text-only ElevenLabs path; on native "
+            "OpenAI audio they are requested in the prompt, not guaranteed.",
+        )
+    if getattr(s, "voice_if_triggers", False) and not getattr(s, "voice_script_authority", False):
+        add(
+            "warning",
+            "if_triggers_without_authority",
+            "VOICE_IF_TRIGGERS has no effect unless VOICE_SCRIPT_AUTHORITY is on: "
+            "keyword rules are not parsed.",
+        )
+    if getattr(s, "voice_human_style", False) and not getattr(s, "voice_script_authority", False):
+        add(
+            "info",
+            "human_style_overrides_scripts",
+            "VOICE_HUMAN_STYLE without VOICE_SCRIPT_AUTHORITY keeps its fixed sentence and "
+            "question limits and warm lead-in, which can conflict with a client script.",
+        )
+    if getattr(s, "voice_adaptive_endpointing", False):
+        if not getattr(s, "voice_live_turn_detection", True):
+            add(
+                "warning",
+                "adaptive_without_live_detection",
+                "VOICE_ADAPTIVE_ENDPOINTING classifies turns from the live transcript; "
+                "VOICE_LIVE_TURN_DETECTION is off, so the original wait is kept and nothing "
+                "is sped up.",
+            )
+        if getattr(s, "voice_endpoint_hold", False) or getattr(s, "voice_smart_turn_taking", False):
+            add(
+                "info",
+                "adaptive_replaces_hold",
+                "With VOICE_ADAPTIVE_ENDPOINTING on, it decides every hold; VOICE_ENDPOINT_HOLD "
+                "and VOICE_SMART_TURN_TAKING only keep their other roles (interruption judgement).",
+            )
+        adaptive_ms = int(getattr(s, "voice_adaptive_vad_silence_ms", 700) or 0)
+        if adaptive_ms >= int(getattr(s, "voice_vad_silence_ms", 1100) or 0):
+            add(
+                "info",
+                "adaptive_no_speedup",
+                "VOICE_ADAPTIVE_VAD_SILENCE_MS is not below VOICE_VAD_SILENCE_MS: the floor is "
+                "capped at the baseline, so complete turns are not answered any sooner.",
+            )
+    memory_on = getattr(s, "voice_conversation_memory", False)
+    if memory_on and not getattr(s, "voice_latency_tracking", True):
+        add(
+            "info",
+            "memory_without_tracking",
+            "VOICE_CONVERSATION_MEMORY is on but VOICE_LATENCY_TRACKING is off: repeated-question "
+            "counts will not be logged.",
+        )
     if getattr(s, "voice_retention_delete_provider_audio", False) and not getattr(s, "voice_retention_worker_enabled", False):
         add("warning", "provider_delete_without_worker", "VOICE_RETENTION_DELETE_PROVIDER_AUDIO has no effect unless VOICE_RETENTION_WORKER_ENABLED is on.")
     if getattr(s, "voice_metering_v2", False) and float(getattr(s, "voice_usage_checkpoint_seconds", 60) or 0) < 15:

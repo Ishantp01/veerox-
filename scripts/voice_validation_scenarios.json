@@ -474,6 +474,221 @@
    ],
    "manual_checks": [],
    "params": {}
+  },
+  {
+   "id": "P01",
+   "title": "Phase 5: Hindi, deliberate pauses while thinking",
+   "direction": "outbound",
+   "language": "hi",
+   "flags_required": [
+    "VOICE_ADAPTIVE_ENDPOINTING"
+   ],
+   "tester_script": [
+    "Ask a question in Hindi, then stop mid-sentence for about 1.5 seconds ('mera budget... [pause] ...paanch lakh hai').",
+    "Say 'ek minute, soch raha hoon', wait about 3 seconds, then answer.",
+    "Finish with a complete short question and note how soon the agent answers."
+   ],
+   "expected": [
+    "The agent waits through the pauses without talking over you and answers a complete sentence promptly."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "endpoint_telemetry",
+    "premature_responses"
+   ],
+   "manual_checks": [
+    "felt_cut_off",
+    "felt_slow"
+   ],
+   "params": {
+    "max_premature": 0
+   }
+  },
+  {
+   "id": "P02",
+   "title": "Phase 5: English, interruption while the agent speaks",
+   "direction": "outbound",
+   "language": "en",
+   "flags_required": [],
+   "tester_script": [
+    "Ask for a long explanation and interrupt after about two seconds with a short question.",
+    "Say 'okay' once while the agent is talking, without trying to interrupt."
+   ],
+   "expected": [
+    "The agent stops promptly on the real question, answers it, and ignores the bare 'okay'."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "interruptions",
+    "premature_responses"
+   ],
+   "manual_checks": [
+    "interruption_feel",
+    "no_stale_audio"
+   ],
+   "params": {
+    "max_detect_to_clear_ms": 1500,
+    "max_premature": 1
+   }
+  },
+  {
+   "id": "P03",
+   "title": "Phase 5: Hinglish, correction and topic change",
+   "direction": "outbound",
+   "language": "hinglish",
+   "flags_required": [
+    "VOICE_CONVERSATION_MEMORY"
+   ],
+   "tester_script": [
+    "Say 'mera naam Rahul hai, budget paanch lakh hai'.",
+    "Later say 'nahi nahi, budget chhe lakh hai'.",
+    "Change topic: ask about the demo, then come back and ask 'mera budget kya tha?'."
+   ],
+   "expected": [
+    "The corrected budget is used, the old one is not mentioned, and the name and budget are never asked for again."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "no_repeat_questions"
+   ],
+   "manual_checks": [
+    "corrections_handled",
+    "not_repetitive"
+   ],
+   "params": {}
+  },
+  {
+   "id": "P04",
+   "title": "Phase 5: client script with EXACT, REQUIRED and IF",
+   "direction": "outbound",
+   "language": "hinglish",
+   "flags_required": [
+    "VOICE_SCRIPT_AUTHORITY",
+    "VOICE_EXACT_LINES",
+    "VOICE_IF_TRIGGERS"
+   ],
+   "tester_script": [
+    "Use the staging test script (docs/phase5-staging-validation-plan.md, section 6).",
+    "Answer normally until the agent has asked your city. Then ask 'iska price kya hai?'."
+   ],
+   "expected": [
+    "The recording line is spoken word for word with nothing before it; the price rule fires on 'price'; the city is confirmed."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "exact_lines_verbatim",
+    "if_trigger_fired"
+   ],
+   "manual_checks": [
+    "required_points_covered",
+    "not_repetitive"
+   ],
+   "params": {
+    "exact_lines": [
+     "Yeh call quality aur training ke liye record ho sakti hai.",
+     "Pricing paanch hazaar rupaye mahine se shuru hoti hai."
+    ],
+    "min_triggers": 1
+   }
+  },
+  {
+   "id": "P05",
+   "title": "Phase 5: repeated-question trap",
+   "direction": "outbound",
+   "language": "hinglish",
+   "flags_required": [
+    "VOICE_CONVERSATION_MEMORY"
+   ],
+   "tester_script": [
+    "Volunteer your name and a (test) number in your first reply, before being asked.",
+    "Carry on for six or more turns on another topic."
+   ],
+   "expected": [
+    "The agent never asks for the name or number it was already given."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "no_repeat_questions"
+   ],
+   "manual_checks": [
+    "not_repetitive"
+   ],
+   "params": {}
+  },
+  {
+   "id": "P06",
+   "title": "Phase 5: acknowledgements, noise and silence",
+   "direction": "outbound",
+   "language": "hinglish",
+   "flags_required": [
+    "VOICE_ADAPTIVE_ENDPOINTING"
+   ],
+   "tester_script": [
+    "Say 'haan', 'achha', 'theek hai' as short acknowledgements while the agent talks and when it pauses.",
+    "Cough once and tap the handset once while the agent is silent.",
+    "Stay silent for 5 seconds, then ask a normal question."
+   ],
+   "expected": [
+    "Acknowledgements and noise do not trigger a full reply; a real question afterwards is answered at once."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "endpoint_telemetry",
+    "noise_drops",
+    "premature_responses"
+   ],
+   "manual_checks": [
+    "felt_cut_off",
+    "interruption_feel"
+   ],
+   "params": {
+    "max_premature": 1
+   }
+  },
+  {
+   "id": "P07",
+   "title": "Phase 5: ten-turn natural conversation",
+   "direction": "outbound",
+   "language": "hinglish",
+   "flags_required": [
+    "VOICE_CONVERSATION_MEMORY",
+    "VOICE_OPENER_VARIETY",
+    "VOICE_TTS_PHRASE_FLUSH"
+   ],
+   "tester_script": [
+    "Have a ten-turn conversation in a natural mix of Hindi and English, with at least one objection and one correction."
+   ],
+   "expected": [
+    "Varied openers, no repeated questions, smooth phrasing and pauses, no robotic breaks."
+   ],
+   "auto_checks": [
+    "connected",
+    "no_errors",
+    "first_audio_latency",
+    "no_repeat_questions",
+    "premature_responses"
+   ],
+   "manual_checks": [
+    "hindi_naturalness",
+    "pauses_and_rhythm",
+    "not_repetitive",
+    "felt_slow"
+   ],
+   "params": {
+    "max_premature": 1
+   }
   }
  ]
 }

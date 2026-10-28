@@ -35,7 +35,17 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from apps.api.channels.voice import adapter as voice_adapter
-from apps.api.channels.voice import call_control, capacity, compliance, local_vad, metering, recovery, signature, turn_controller
+from apps.api.channels.voice import (
+    call_control,
+    capacity,
+    compliance,
+    local_vad,
+    metering,
+    recovery,
+    script_rules,
+    signature,
+    turn_controller,
+)
 from apps.api.channels.voice.compliance import RecordingPolicy, resolve_recording_policy
 from apps.api.channels.voice.greeting import effective_brand, greeting_cache, greeting_instruction
 from apps.api.channels.voice.latency import LatencyTracker, startup_emit, startup_mark
@@ -430,6 +440,11 @@ async def _resolve_org_id(campaign_target_id: UUID | None, raw_org_id: str | Non
     return UUID(raw_org_id) if raw_org_id else None
 
 
+def exact_lines_deterministic() -> bool:
+    """Exact lines can be substituted word for word only on the text-only output path."""
+    return bool(settings.voice_exact_lines and settings.voice_tts_provider == "elevenlabs")
+
+
 async def _system_instructions(
     campaign_target_id: UUID | None, org_id: UUID | None, remote_number: str | None = None
 ) -> str:
@@ -477,6 +492,12 @@ async def _system_instructions(
             prompt_options(org_row.voice_profile) if org_row is not None else (False, None, False)
         )
 
+    parsed = None
+    if settings.voice_script_authority:
+        # Deterministic marker parse; a script with no markers comes back unchanged.
+        parsed = script_rules.parse_script(base, deterministic=exact_lines_deterministic())
+        base = parsed.text
+
     policy = resolve_recording_policy(
         org_row.voice_compliance if org_row is not None else None, remote_number
     )
@@ -487,6 +508,7 @@ async def _system_instructions(
         tone=prompt_tone,
         natural_hinglish=natural_hinglish,
         human_style=settings.voice_human_style,
+        authority=settings.voice_script_authority,
     )
     tail = f"{current_datetime_block()}\n\n{voice_append.strip()}"
     if catalog:
@@ -499,13 +521,20 @@ async def _system_instructions(
         tail = f"{tail}\n\n{compliance.CONSENT_PROMPT}"
 
     if campaign is not None:
-        return (
+        result = (
             f"{base.strip()}\n\n"
             f"{campaign_qualification_append(campaign.criteria).strip()}\n\n"
             f"{tail}"
         )
-
-    return f"{base.strip()}\n\n{tail}"
+    else:
+        result = f"{base.strip()}\n\n{tail}"
+    if parsed is not None:
+        # Last, so it is read after every default it ranks above.
+        block = script_rules.render_authority_block(
+            parsed, deterministic=exact_lines_deterministic()
+        )
+        result = f"{result.rstrip()}\n\n{block}"
+    return result
 
 
 def _session_update_event(instructions: str, *, consent_tool: bool = False) -> dict[str, Any]:
@@ -543,7 +572,11 @@ def _session_update_event(instructions: str, *, consent_tool: bool = False) -> d
                     "type": "server_vad",
                     "threshold": 0.5,
                     "prefix_padding_ms": 300,
-                    "silence_duration_ms": settings.voice_vad_silence_ms,
+                    "silence_duration_ms": (
+                        turn_controller.adaptive_silence_ms()
+                        if settings.voice_adaptive_endpointing
+                        else settings.voice_vad_silence_ms
+                    ),
                     # Caller talking mid-answer no longer wipes the
                     # in-progress response — OpenAI keeps generating and
                     # speaking it to completion, and the caller's new speech
@@ -938,6 +971,7 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
             if stream_id:
                 state.stream_id = stream_id
             state.call_uuid = call_uuid or None
+            state.diag_on = voice_adapter.diag_enabled()  # VOICE_PIPELINE_DIAG, pilot only
             state.call_ws = ws
             call_state = state
             if settings.voice_metering_v2 and call_uuid:
@@ -980,6 +1014,14 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                 # ran concurrently with the work above instead of after it.
                 oai = await oai_connect_task
             state.base_instructions = instructions
+            if (
+                exact_lines_deterministic()
+                and settings.voice_script_authority
+                and state.tts_provider == "elevenlabs"
+            ):
+                state.exact_lines = script_rules.extract_exact_lines(instructions)
+            if settings.voice_if_triggers and settings.voice_script_authority:
+                state.if_triggers = script_rules.extract_triggers(instructions)
             state.oai_ws = oai
 
             try:
@@ -1075,6 +1117,9 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                             if event == "media":
                                 payload = (msg.get("media") or {}).get("payload")
                                 if payload:
+                                    if state.diag_on:
+                                        state.diag_in_frames += 1
+                                        state.diag_in_bytes += len(payload) * 3 // 4
                                     if state.vad is not None:
                                         state.vad.feed(payload)
                                     if state.live is not None:
@@ -1313,6 +1358,8 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                     conversation_id, campaign_target_id=campaign_target_id
                 )
             call_duration_s = round(time.monotonic() - call_started, 1)
+            if call_state is not None:
+                voice_adapter.diag_call_summary(call_state, log)
             log.info("voice_stream_ended", call_duration_s=call_duration_s)
 
             # Usage metering (req §6): connected voice seconds, keyed to this

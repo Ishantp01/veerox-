@@ -52,13 +52,31 @@ def _allowed_numbers() -> set[str]:
     return {d[-10:] for d in (_digits(p) for p in settings.pilot_allowed_numbers.split(",")) if len(d) >= 7}
 
 
+def _dial_allowlist() -> set[str]:
+    entries = settings.voice_dial_allowlist.split(",")
+    return {d[-10:] for d in (_digits(p) for p in entries) if len(d) >= 7}
+
+
+def is_production() -> bool:
+    return (settings.environment or "").strip().lower() in ("production", "prod")
+
+
 def _allowed_emails() -> set[str]:
     return {e.strip().lower() for e in settings.pilot_allowed_emails.split(",") if e.strip()}
 
 
 def check_number_allowed(to: str, *, what: str) -> None:
-    """Raise ``PilotBlocked`` in pilot mode unless ``to`` is an allowlisted number. No-op elsewhere."""
+    """Raise ``PilotBlocked`` unless ``to`` is allowlisted.
+
+    Pilot mode: ``PILOT_ALLOWED_NUMBERS`` (empty blocks everything). Any other environment:
+    only when ``VOICE_DIAL_ALLOWLIST`` is set (empty, the default, restricts nothing)."""
     if not pilot_mode():
+        allowed = _dial_allowlist()
+        if allowed and _digits(to)[-10:] not in allowed:
+            logger.warning("dial_allowlist_blocked", what=what, to=f"***{_digits(to)[-4:]}")
+            raise PilotBlocked(
+                f"dial allowlist: {what} to a number that is not on VOICE_DIAL_ALLOWLIST"
+            )
         return
     if _digits(to)[-10:] not in _allowed_numbers():
         logger.warning("pilot_outbound_blocked", what=what, to=f"***{_digits(to)[-4:]}")
@@ -107,3 +125,15 @@ def check_email_allowed(to: str) -> None:
     if (to or "").strip().lower() not in _allowed_emails():
         logger.warning("pilot_email_blocked")
         raise PilotBlocked("pilot mode: e-mail to an address that is not on PILOT_ALLOWED_EMAILS")
+
+
+def outbound_hangup_url() -> str | None:
+    """Pilot mode: the post-hangup destination of an API-placed call, named explicitly.
+
+    Plivo's documentation does not say where a hangup notification goes when ``hangup_url`` is
+    left out of the Make-a-call request, so a pilot call names it: this process's own
+    ``/voice/campaign-hangup`` (which does nothing without a campaign id). Outside pilot mode
+    ``None``: the request is exactly what it has always been."""
+    if not pilot_mode():
+        return None
+    return f"{settings.public_base_url.rstrip('/')}/voice/campaign-hangup"

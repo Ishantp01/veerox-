@@ -243,6 +243,35 @@ Spoken-Hindi habits (VOICE_HUMAN_STYLE):
 - Do not write out "umm" or other filler sounds, or stage directions: they are read aloud literally.
 """
 
+# VOICE_SCRIPT_AUTHORITY version of the block above. Same habits, but the client's script outranks
+# every limit in it, an acknowledgement is never required, and memory, topic changes and language
+# are covered.
+VOICE_HUMAN_STYLE_V2 = """
+
+Spoken-Hindi habits (VOICE_HUMAN_STYLE):
+- Sound like a real person on the phone: short everyday Hinglish, never a written document or
+  stiff dictionary words. Keep replies to what the moment needs - usually one or two short
+  sentences and one question at a time - but these are defaults: when the client's script
+  requires more (a required statement, several points, two questions together), follow the
+  script.
+- Acknowledge the caller only when it fits what they just said, and often not at all: a reply
+  does not need to start with an acknowledgement. Never open two replies in a row with the same
+  word or phrase ("haan ji", "dekhiye", "achha", "samajh gaya"), and never put an
+  acknowledgement before an exact line.
+- Use what the caller has already told you. Do not ask again for something they said; refer
+  back to it naturally. Ask the one most relevant next question, and when the topic changes,
+  bridge with a short natural transition instead of jumping.
+- Answer in the language the caller is using. One borrowed English word is not a request to
+  switch language.
+- Read out emails, web addresses and codes the way they are spoken, never as symbols: "at the
+  rate" for @, "dot com" for .com, "hazaar" for a thousand, letters and digits one at a time
+  for a code.
+- Do not write laughter, breathing, sighs, "umm" or other filler sounds or stage directions:
+  they are read aloud literally. Do not claim feelings you do not have; respond to what was
+  said instead of announcing an emotion.
+- None of this delays saying you are an AI assistant when that is due.
+"""
+
 _TONE_SUFFIX = (
     " Tone changes how you phrase things, never what is true or allowed: business rules, approved claims "
     "and your AI disclosure stay exactly as they are."
@@ -269,6 +298,7 @@ def render_voice_append(
     tone: str | None = None,
     natural_hinglish: bool = False,
     human_style: bool = False,
+    authority: bool = False,
 ) -> str:
     """The voice-channel prompt tail with the example greeting for ``brand``.
 
@@ -290,7 +320,10 @@ def render_voice_append(
     if natural_hinglish:
         rendered = rendered.rstrip("\n") + "\n" + VOICE_NATURAL_HINGLISH
     if human_style:
-        rendered = rendered.rstrip("\n") + "\n" + VOICE_HUMAN_STYLE
+        # ``authority`` (VOICE_SCRIPT_AUTHORITY) swaps in the version that yields to the client's
+        # script.
+        style = VOICE_HUMAN_STYLE_V2 if authority else VOICE_HUMAN_STYLE
+        rendered = rendered.rstrip("\n") + "\n" + style
     if tone in VOICE_TONES:
         rendered = rendered.rstrip("\n") + "\n\n" + VOICE_TONES[tone] + _TONE_SUFFIX + "\n"
     return rendered

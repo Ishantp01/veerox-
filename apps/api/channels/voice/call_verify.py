@@ -24,6 +24,7 @@ from typing import Any
 
 from apps.api.channels.voice.greeting import has_ai_disclosure
 from apps.api.channels.voice.latency import percentile
+from apps.api.channels.voice.script_rules import is_lead_in
 
 
 @dataclass(frozen=True)
@@ -239,7 +240,128 @@ def manual(id_: str, what: str) -> Callable[[Mapping[str, Any]], CheckResult]:
     return lambda ctx: CheckResult(id_, "manual", what)
 
 
+def _assistant_texts(ctx: Mapping[str, Any]) -> list[str]:
+    messages = (ctx.get("conversation") or {}).get("messages") or []
+    return [
+        " ".join(str(m.get("content", "")).split())
+        for m in messages
+        if m.get("role") == "assistant"
+    ]
+
+
+def _events_of(ctx: Mapping[str, Any], event: str, kind: str) -> list[Mapping[str, Any]]:
+    return [e for e in _named(ctx["events"], event) if e.get("kind") == kind]
+
+
+def check_exact_lines_verbatim(ctx: Mapping[str, Any]) -> CheckResult:
+    """Every client EXACT line was said word for word, with no "haan ji" put in front of it."""
+    wanted = (ctx.get("params") or {}).get("exact_lines") or []
+    lines = [" ".join(str(x).split()) for x in wanted]
+    if not lines:
+        return _skip("exact_lines_verbatim", "this scenario names no exact lines")
+    texts = _assistant_texts(ctx)
+    if not texts:
+        return _skip("exact_lines_verbatim", "no assistant transcript was provided")
+    missing, led_in = [], []
+    for index, line in enumerate(lines, 1):
+        hits = [t for t in texts if line in t]
+        if not hits:
+            missing.append(index)
+        for text in hits:
+            before = text.split(line, 1)[0]
+            if before.strip() and is_lead_in(before):
+                led_in.append(index)
+    if missing or led_in:
+        return _fail(
+            "exact_lines_verbatim",
+            f"exact line(s) not spoken verbatim: {sorted(set(missing))}; "
+            f"with a lead-in: {sorted(set(led_in))}",
+        )
+    return _pass(
+        "exact_lines_verbatim", f"{len(lines)} exact line(s) spoken word for word, no lead-in"
+    )
+
+
+def check_no_repeat_questions(ctx: Mapping[str, Any]) -> CheckResult:
+    active = _events_of(ctx, "voice_turn_trace", "memory_updated")
+    if not active:
+        return _skip(
+            "no_repeat_questions",
+            "no memory updates logged (VOICE_CONVERSATION_MEMORY off, or no detail given)",
+        )
+    repeats = _events_of(ctx, "voice_turn_event", "repeat_question")
+    detail = f"{len(active)} memory update(s); {len(repeats)} repeated question(s)"
+    if repeats:
+        return _fail("no_repeat_questions", detail)
+    return _pass("no_repeat_questions", detail)
+
+
+def check_if_trigger_fired(ctx: Mapping[str, Any]) -> CheckResult:
+    expected = int((ctx.get("params") or {}).get("min_triggers", 0) or 0)
+    fired = _events_of(ctx, "voice_turn_trace", "if_trigger_fired")
+    if not expected:
+        return _skip("if_trigger_fired", "this scenario expects no keyword rule")
+    detail = f"{len(fired)} keyword rule firing(s), expected at least {expected}"
+    if len(fired) >= expected:
+        return _pass("if_trigger_fired", detail)
+    return _fail("if_trigger_fired", detail)
+
+
+def check_endpoint_telemetry(ctx: Mapping[str, Any]) -> CheckResult:
+    turns = _named(ctx["events"], "voice_turn_latency")
+    if not turns:
+        return _skip("endpoint_telemetry", "no voice_turn_latency events")
+    cats: dict[str, int] = {}
+    for t in turns:
+        if isinstance(t.get("endpoint_category"), str):
+            cats[t["endpoint_category"]] = cats.get(t["endpoint_category"], 0) + 1
+    if not cats:
+        return _fail(
+            "endpoint_telemetry",
+            "no turn carries an endpoint_category (is VOICE_ADAPTIVE_ENDPOINTING on?)",
+        )
+    return _pass(
+        "endpoint_telemetry",
+        f"{sum(cats.values())} of {len(turns)} turns classified: {dict(sorted(cats.items()))}",
+    )
+
+
+def check_premature_responses(ctx: Mapping[str, Any]) -> CheckResult:
+    """A heuristic count (the agent answered, then the caller carried on), not a verdict."""
+    if not ctx["events"]:
+        return _skip("premature_responses", "no log events")
+    limit = int((ctx.get("params") or {}).get("max_premature", 0))
+    n = len(_events_of(ctx, "voice_turn_event", "premature_response_suspected"))
+    avoided = len(_events_of(ctx, "voice_turn_event", "false_ending_avoided"))
+    detail = (
+        f"{n} suspected premature response(s) (limit {limit}); "
+        f"{avoided} false ending(s) avoided by a hold"
+    )
+    if n <= limit:
+        return _pass("premature_responses", detail)
+    return _fail("premature_responses", detail)
+
+
+def check_noise_drops(ctx: Mapping[str, Any]) -> CheckResult:
+    if not ctx["events"]:
+        return _skip("noise_drops", "no log events")
+    n = len(_events_of(ctx, "voice_turn_event", "noise_turn_dropped"))
+    if not n:
+        return _pass("noise_drops", "no turn was dropped as noise")
+    return CheckResult(
+        "noise_drops",
+        "manual",
+        f"{n} turn(s) dropped as noise: confirm by listening that none was real speech",
+    )
+
+
 CHECKS: dict[str, Callable[[Mapping[str, Any]], CheckResult]] = {
+    "exact_lines_verbatim": check_exact_lines_verbatim,
+    "no_repeat_questions": check_no_repeat_questions,
+    "if_trigger_fired": check_if_trigger_fired,
+    "endpoint_telemetry": check_endpoint_telemetry,
+    "premature_responses": check_premature_responses,
+    "noise_drops": check_noise_drops,
     "connected": check_connected,
     "no_errors": check_no_errors,
     "first_audio_latency": check_first_audio_latency,
@@ -264,6 +386,25 @@ CHECKS: dict[str, Callable[[Mapping[str, Any]], CheckResult]] = {
     "interruption_feel": manual("interruption_feel", "Listen: did the agent stop promptly and answer the interruption?"),
     "no_stale_audio": manual("no_stale_audio", "Listen: any words from a cut-off answer heard after the interruption?"),
     "language_switch": manual("language_switch", "Listen: did the agent follow a requested language change?"),
+    "required_points_covered": manual(
+        "required_points_covered",
+        "Read the transcript: was every REQUIRED point covered before the call ended?",
+    ),
+    "felt_cut_off": manual(
+        "felt_cut_off",
+        "Listen: did the agent ever start talking while you were still thinking or mid-sentence?",
+    ),
+    "felt_slow": manual(
+        "felt_slow", "Listen: were there gaps after you finished that felt too long?"
+    ),
+    "pauses_and_rhythm": manual(
+        "pauses_and_rhythm",
+        "Listen: were phrase breaks and pauses natural, with no choppy or clipped words?",
+    ),
+    "not_repetitive": manual(
+        "not_repetitive",
+        "Listen: did the agent repeat the same opener (like 'haan ji' or 'dekhiye') across turns?",
+    ),
 }
 
 

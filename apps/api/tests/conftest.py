@@ -47,6 +47,26 @@ def _no_platform_channel_credentials_leak(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(settings, "voice_tts_engine", "elevenlabs")
 
 
+@pytest.fixture(autouse=True)
+def _local_dev_safety_knobs_do_not_leak_into_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reset the developer's local safety settings to their code defaults for every test.
+
+    Covers the dial allowlist, voice preflight, call limits and diagnostics, for the same reason
+    as above: a developer who restricts their local stack to one test phone must not change what
+    the suite asserts. Tests that exercise a knob set it themselves afterwards."""
+    for attr, default in (
+        ("voice_dial_allowlist", ""),
+        ("voice_preflight_voice_check", False),
+        ("voice_pipeline_diag", False),
+        ("voice_max_active_streams", 0),
+        ("voice_max_call_seconds", 0),
+        ("voice_outbound_time_limit_seconds", 0),
+        ("voice_outbound_ring_timeout_seconds", 0),
+        ("voice_hangup_on_stream_end", False),
+    ):
+        monkeypatch.setattr(settings, attr, default)
+
+
 # Building an SSL context loads the CA bundle (~0.7 s on Windows). This autouse fixture used to do
 # that four times before EVERY test, which dominated the suite's run time; one shared context, built
 # once, has the same verification behaviour (tests never make real HTTPS calls).

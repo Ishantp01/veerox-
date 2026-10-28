@@ -124,6 +124,7 @@ class _Log:
         self.events.append(event)
 
     warning = info
+    error = info
 
 
 class Call:

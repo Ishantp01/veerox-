@@ -37,6 +37,7 @@ class _Log:
         self.events.append(event)
 
     warning = info
+    error = info
 
 
 def state_for(org: uuid.UUID = ORG_A, user: uuid.UUID = USER_A, conversation: uuid.UUID | None = None) -> adapter.CallState:

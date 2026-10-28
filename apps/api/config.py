@@ -192,6 +192,9 @@ class Settings(BaseSettings):
     # when its first text token arrives, so the connect overlaps the model's own
     # first-token time. A socket is never reused across turns.
     voice_elevenlabs_prewarm: bool = False
+    # ElevenLabs generation_config.chunk_length_schedule for calls whose org voice profile sets none, e.g. "50,120,160"
+    # (1-6 integers, each 50-500; anything else is ignored). Empty = the provider default [120,160,250,290].
+    voice_tts_chunk_schedule: str = ""
     # Finish an ElevenLabs turn (flush, drain audio, persist) in a tracked task
     # instead of inside the OpenAI event handler, so a caller who speaks during
     # the audio tail is processed immediately. False = the old inline await.
@@ -224,6 +227,57 @@ class Settings(BaseSettings):
     whatsapp_details_template: str | None = None
     # VOICE_HUMAN_STYLE: append the spoken-Hindi habits block (back-channels, spoken emails/codes, info anchor) to the prompt.
     voice_human_style: bool = False
+    # VOICE_SCRIPT_AUTHORITY: instruction precedence (platform safety > client script > style),
+    # [[EXACT: ...]] /
+    # [[REQUIRED: ...]] / [[IF cond: ...]] markers in scripts, and a human-style block that yields
+    # to the script
+    # (channels/voice/script_rules.py). Off: prompts are byte-identical to before.
+    voice_script_authority: bool = False
+    # VOICE_EXACT_LINES: with the above and VOICE_TTS_PROVIDER=elevenlabs, [[EXACT: ...]] lines
+    # are spoken word for word
+    # by substitution before TTS (the model only writes a code). Without the ElevenLabs text path
+    # they are prompt-only.
+    voice_exact_lines: bool = False
+    # VOICE_CONVERSATION_MEMORY: per-call memory of what the caller already told us (name, phone,
+    # e-mail, budget, city, time, language), corrections, objections and unanswered questions,
+    # added to each reply's instructions so the agent does not re-ask. Scoped to one call
+    # (channels/voice/conversation_state.py). Off: nothing changes.
+    voice_conversation_memory: bool = False
+    # VOICE_OPENER_VARIETY: ask the model not to start a reply the way its last replies started.
+    # Advice only; exact client lines are never altered or counted. Off: nothing changes.
+    voice_opener_variety: bool = False
+    # VOICE_ADAPTIVE_ENDPOINTING: commit a turn after VOICE_ADAPTIVE_VAD_SILENCE_MS of silence
+    # instead of the fixed VOICE_VAD_SILENCE_MS, then classify it from the live transcript: a
+    # finished sentence is answered at once, an unfinished one or a hesitation waits (by the extra
+    # the lower floor saved, so patience is never below today's), and a text-less burst that is
+    # too short to be speech is dropped as noise. Needs the live transcriber
+    # (VOICE_LIVE_TURN_DETECTION); without live text the original timing is kept. Off: nothing
+    # changes.
+    voice_adaptive_endpointing: bool = False
+    voice_adaptive_vad_silence_ms: int = 700
+    # How long a turn that committed before any transcript text arrived waits for it (ms, clamped
+    # 0-600).
+    voice_adaptive_settle_ms: int = 250
+    # VOICE_PIPELINE_DIAG: one log line per agent turn (did the text produce
+    # audio?) and one per call (frames in/out, silent turns, the first failing stage), with counts
+    # and short error codes only: never speech, text, numbers or ids. Inert in
+    # any environment except production. Off: nothing is logged.
+    voice_pipeline_diag: bool = False
+    # VOICE_DIAL_ALLOWLIST: comma-separated numbers. When set, outside pilot mode (which has
+    # PILOT_ALLOWED_NUMBERS), every outbound call, SMS and WhatsApp send is refused unless its
+    # destination is listed, so a development stack that carries real provider credentials cannot
+    # reach anyone else. Empty (default): no restriction.
+    voice_dial_allowlist: str = ""
+    # VOICE_PREFLIGHT_VOICE_CHECK: before a dashboard call is placed (and once at startup) ask
+    # ElevenLabs whether the configured voice exists; a voice it definitively rejects refuses the
+    # call instead of connecting a silent one. An unreachable provider never blocks a call.
+    # Off by default.
+    voice_preflight_voice_check: bool = False
+    # VOICE_IF_TRIGGERS: a script rule written [[IF said "price"|"cost": action]] is matched by
+    # code against what the caller said, and its action is added to that one reply's instructions.
+    # Needs VOICE_SCRIPT_AUTHORITY. Other [[IF ...]] rules stay judged by the model, exactly as
+    # before. Off: nothing changes.
+    voice_if_triggers: bool = False
     # VOICE_GREETING_BARGE_IN: a real question (not "hello?") spoken for 0.4 s+ stops the opening greeting.
     voice_greeting_barge_in: bool = False
     voice_instant_ack: bool = False
@@ -286,6 +340,11 @@ class Settings(BaseSettings):
     # Which engine speaks when voice_tts_provider == "elevenlabs": "elevenlabs" (default) or "sarvam"
     # (channels/voice/sarvam_client.py). A failed Sarvam turn is replayed on ElevenLabs by TTS recovery.
     voice_tts_engine: str = "elevenlabs"
+    # VOICE_TTS_PHRASE_FLUSH: ElevenLabs path only. Send whole phrases (split at sentence
+    # punctuation, with flush) instead of raw token deltas, so each phrase is spoken with its full
+    # context and without waiting for the provider's ~120-char buffer. Off by default: needs a
+    # listening A/B before it is trusted (see channels/voice/elevenlabs_client.py).
+    voice_tts_phrase_flush: bool = False
     # True: a failed Sarvam turn is replayed on ElevenLabs. False: Sarvam only, so its failures stay visible (testing).
     sarvam_fallback_to_elevenlabs: bool = True
     sarvam_streaming_ws: bool = False  # SARVAM_STREAMING_WS: stream text over Sarvam's WebSocket instead of REST clauses

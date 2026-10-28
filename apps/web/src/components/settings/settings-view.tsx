@@ -879,7 +879,10 @@ export function SettingsView({ title, description, channel }: SettingsViewProps)
           defaultOpen
           maxWidthClassName="max-w-5xl"
         >
-          <ScriptLibrary channel={channel === "calling" ? "voice" : "whatsapp"} />
+          <ScriptLibrary
+            channel={channel === "calling" ? "voice" : "whatsapp"}
+            canEdit={Boolean(isOrgAdmin)}
+          />
         </CollapsibleSection>
 
         {channel === "whatsapp" && (

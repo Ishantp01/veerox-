@@ -71,6 +71,7 @@ class _Log:
         return None
 
     warning = info
+    error = info
 
 
 class Call:

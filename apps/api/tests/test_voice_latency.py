@@ -282,3 +282,19 @@ def test_report_script_summarises_json_log_lines() -> None:
     text = report.format_report(summary)
     assert "total" in text and "p95" in text
     assert report.format_report({}) == "No voice latency events found."
+
+
+def test_summaries_include_the_per_turn_notes_and_endpoint_categories() -> None:
+    def turn(total: int, **extra: Any) -> dict[str, Any]:
+        return {"event": "voice_turn_latency", "segments_ms": {"total": total}, **extra}
+
+    events = [
+        turn(900, endpoint_category="complete", vad_silence_ms=700, tts_phrase_buffer_ms=120,
+             tts_send_to_audio_ms=300),
+        turn(1700, endpoint_category="unfinished", vad_silence_ms=700, endpoint_hold_ms=1400),
+        turn(800),  # a baseline turn carries none of these
+    ]
+    summary = latency.summarize_events(events)
+    assert summary["note.vad_silence_ms"]["n"] == 2 and summary["note.endpoint_hold_ms"]["n"] == 1
+    assert summary["note.tts_phrase_buffer_ms"]["p50"] == 120
+    assert latency.endpoint_category_counts(events) == {"complete": 1, "unfinished": 1}
