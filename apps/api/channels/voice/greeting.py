@@ -95,10 +95,16 @@ def effective_brand(org: Any) -> str:
 
 
 def greeting_instruction(
-    org_greeting: str | None, brand: str, ai_disclosure: bool, notice: str | None = None
+    org_greeting: str | None,
+    brand: str,
+    ai_disclosure: bool,
+    notice: str | None = None,
+    from_script: bool = False,
 ) -> str:
     """The ``response.create`` instruction that opens the call. ``notice`` is the org's spoken
-    recording notice (policy mode "notice"), said once right after the greeting."""
+    recording notice (policy mode "notice"), said once right after the greeting. ``from_script``: the call
+    runs on a custom script, so with no fixed org greeting the opening is taken from that script (its own
+    first line, name and persona) instead of the generic example, which names a different agent."""
     if org_greeting:
         spoken = (
             "Begin the call now by saying exactly this greeting, word for word, in a "
@@ -110,6 +116,22 @@ def greeting_instruction(
                 "and add nothing before or after, then stop and wait for the caller."
             )
         return spoken + " Say nothing else and add nothing before or after it, then stop and wait for the caller."
+    if from_script:
+        instruction = (
+            "Begin the call now by opening exactly as your script says to start the call: use the opening "
+            "line, the name and the persona your script gives you, word for word wherever it gives exact "
+            "words. Do not use any other name or a sample greeting of your own. "
+        )
+        if ai_disclosure:
+            instruction += (
+                "Make clear in that opening that you are an AI assistant, in your script's own "
+                "style, if the script's opening does not already say so. "
+            )
+        if notice:
+            instruction += f"Right after the greeting, say once, briefly: {notice!r}. "
+        return instruction + (
+            "Follow your script on language and do not add a language question of your own."
+        )
     # Same wording the bridge always used; only the example line and the
     # optional disclosure sentence vary.
     instruction = (

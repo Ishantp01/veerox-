@@ -445,6 +445,11 @@ def exact_lines_deterministic() -> bool:
     return bool(settings.voice_exact_lines and settings.voice_tts_provider == "elevenlabs")
 
 
+def _runs_a_custom_script(instructions: str) -> bool:
+    """True when the call's base script is an org/campaign script, not the platform's built-in prompt."""
+    return not instructions.lstrip().startswith(OUTBOUND_CALL_PROMPT.strip())
+
+
 async def _system_instructions(
     campaign_target_id: UUID | None, org_id: UUID | None, remote_number: str | None = None
 ) -> str:
@@ -468,10 +473,12 @@ async def _system_instructions(
             campaign = await db.get(CallCampaign, target.campaign_id) if target else None
 
         base = OUTBOUND_CALL_PROMPT
+        source, picked = "platform_default", None
         if campaign is not None and campaign.script_id is not None:
             script = await db.get(Script, campaign.script_id)
             if script is not None:
                 base = script.content
+                source, picked = "campaign_pinned", script
         elif org_id is not None:
             # Voice scripts only: WhatsApp has its own default per org, and picking that one up here made calls
             # ignore the script chosen in settings. Newest first so a stray second default is still deterministic.
@@ -484,6 +491,16 @@ async def _system_instructions(
             default_script = result.scalar_one_or_none()
             if default_script is not None:
                 base = default_script.content
+                source, picked = "org_default", default_script
+        # Which script this call runs on, without its text (diagnosing "the call ignored my script").
+        logger.info(
+            "voice_script_resolved",
+            source=source,
+            org_id=str(org_id) if org_id else None,
+            script_id=str(picked.id)[-6:] if picked is not None else None,
+            script_name=picked.name if picked is not None else None,
+            script_chars=len(base),
+        )
 
         catalog = (
             await asset_catalog_prompt_block(db, org_id) if org_id is not None else ""
@@ -1103,6 +1120,7 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                                         brand,
                                         settings.voice_greeting_ai_disclosure,
                                         notice=notice,
+                                        from_script=_runs_a_custom_script(instructions),
                                     ),
                                 },
                             }

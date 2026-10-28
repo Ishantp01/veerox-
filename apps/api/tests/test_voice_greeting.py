@@ -99,6 +99,29 @@ def test_default_instruction_discloses_the_ai_and_uses_the_configured_brand() ->
     assert "Do not ask which language they want" in text
 
 
+def test_a_custom_script_supplies_the_opening_not_the_generic_example() -> None:
+    text = greeting_instruction(None, "WorkAssign AI", True, from_script=True)
+    assert "Veer" not in text and "something like" not in text
+    assert "your script" in text and "AI assistant" in text
+    with_notice = greeting_instruction(None, "WorkAssign AI", True, notice="This call may be recorded.", from_script=True)
+    assert "This call may be recorded." in with_notice
+    assert "AI assistant" not in greeting_instruction(None, "WorkAssign AI", False, from_script=True)
+
+
+def test_without_a_custom_script_or_with_a_fixed_greeting_nothing_changes() -> None:
+    assert greeting_instruction(None, "WorkAssign AI", False, from_script=False) == _LEGACY_INSTRUCTION
+    fixed = "Namaste, main Acme ka AI assistant hoon."
+    assert greeting_instruction(fixed, "x", True, from_script=True) == greeting_instruction(fixed, "x", True)
+
+
+async def test_the_bridge_tells_a_custom_script_from_the_built_in_prompt() -> None:
+    from apps.api.channels.voice import realtime_bridge as bridge
+    from apps.api.core.prompts import OUTBOUND_CALL_PROMPT
+
+    assert bridge._runs_a_custom_script("Sana ki script...\n\nrest") is True
+    assert bridge._runs_a_custom_script(OUTBOUND_CALL_PROMPT.strip() + "\n\ntail") is False
+
+
 def test_org_greeting_is_spoken_verbatim_with_nothing_added() -> None:
     text = greeting_instruction("Namaste, main Acme ka AI assistant hoon.", "Ignored", ai_disclosure=True)
     assert "exactly this greeting, word for word" in text

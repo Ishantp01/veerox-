@@ -98,6 +98,22 @@ async def test_a_voice_call_never_uses_the_whatsapp_default_script(reuse_db: Asy
     assert "WHATSAPP DEFAULT" not in instructions
 
 
+async def test_the_script_a_call_loaded_is_logged_without_its_text(reuse_db: AsyncSession) -> None:
+    from structlog.testing import capture_logs
+
+    reuse_db.add(Org(id=ORG_ID, name="Test Org"))
+    reuse_db.add(Script(org_id=ORG_ID, name="Main voice", content="SECRET WORDING", is_default=True))
+    await reuse_db.commit()
+
+    with capture_logs() as logs:
+        await bridge_module._system_instructions(None, ORG_ID)
+        await bridge_module._system_instructions(None, None)
+
+    entries = [e for e in logs if e["event"] == "voice_script_resolved"]
+    assert [(e["source"], e["script_name"]) for e in entries] == [("org_default", "Main voice"), ("platform_default", None)]
+    assert "SECRET WORDING" not in str(entries)
+
+
 async def test_a_whatsapp_only_org_falls_back_to_the_platform_script_for_calls(reuse_db: AsyncSession) -> None:
     reuse_db.add(Org(id=ORG_ID, name="Test Org"))
     reuse_db.add(Script(org_id=ORG_ID, name="WA", content="WHATSAPP DEFAULT", channel="whatsapp", is_default=True))
