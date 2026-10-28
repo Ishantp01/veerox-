@@ -84,6 +84,28 @@ async def test_campaign_call_uses_org_default_script_as_base_plus_criteria(
     assert instructions.index("MY CUSTOM SCRIPT") < instructions.index("Wants a demo this quarter")
 
 
+async def test_a_voice_call_never_uses_the_whatsapp_default_script(reuse_db: AsyncSession) -> None:
+    """Each channel has its own default; the WhatsApp one must not be picked up by a call, whichever row the
+    database returns first."""
+    reuse_db.add(Org(id=ORG_ID, name="Test Org"))
+    reuse_db.add(Script(org_id=ORG_ID, name="WA", content="WHATSAPP DEFAULT", channel="whatsapp", is_default=True))
+    reuse_db.add(Script(org_id=ORG_ID, name="Voice", content="VOICE DEFAULT", channel="voice", is_default=True))
+    await reuse_db.commit()
+
+    instructions = await bridge_module._system_instructions(None, ORG_ID)
+
+    assert "VOICE DEFAULT" in instructions
+    assert "WHATSAPP DEFAULT" not in instructions
+
+
+async def test_a_whatsapp_only_org_falls_back_to_the_platform_script_for_calls(reuse_db: AsyncSession) -> None:
+    reuse_db.add(Org(id=ORG_ID, name="Test Org"))
+    reuse_db.add(Script(org_id=ORG_ID, name="WA", content="WHATSAPP DEFAULT", channel="whatsapp", is_default=True))
+    await reuse_db.commit()
+
+    assert "WHATSAPP DEFAULT" not in await bridge_module._system_instructions(None, ORG_ID)
+
+
 async def test_campaign_call_uses_its_own_pinned_script_over_org_default(
     reuse_db: AsyncSession,
 ) -> None:

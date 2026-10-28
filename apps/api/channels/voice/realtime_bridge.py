@@ -473,8 +473,13 @@ async def _system_instructions(
             if script is not None:
                 base = script.content
         elif org_id is not None:
+            # Voice scripts only: WhatsApp has its own default per org, and picking that one up here made calls
+            # ignore the script chosen in settings. Newest first so a stray second default is still deterministic.
             result = await db.execute(
-                select(Script).where(Script.org_id == org_id, Script.is_default.is_(True)).limit(1)
+                select(Script)
+                .where(Script.org_id == org_id, Script.channel == "voice", Script.is_default.is_(True))
+                .order_by(Script.updated_at.desc())
+                .limit(1)
             )
             default_script = result.scalar_one_or_none()
             if default_script is not None:
