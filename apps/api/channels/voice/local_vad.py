@@ -51,6 +51,9 @@ class LocalVAD:
         self.run_frames = 0
         self._run_prob_sum = 0.0
         self.last_prob = 0.0
+        # Evidence over a whole utterance (reset by mark_utterance), unlike run_* which a single quiet frame resets.
+        self.utt_frames = 0
+        self._utt_prob_sum = 0.0
 
     def score_frame(self, frame: list[int]) -> float:
         rms = math.sqrt(sum(x * x for x in frame) / len(frame)) if frame else 0.0
@@ -74,10 +77,29 @@ class LocalVAD:
             if prob >= SPEECH_PROB:
                 self.run_frames += 1
                 self._run_prob_sum += prob
+                self.utt_frames += 1
+                self._utt_prob_sum += prob
             else:
                 self.run_frames = 0
                 self._run_prob_sum = 0.0
         self._carry = samples[n * FRAME_SAMPLES :]
+
+    def mark_utterance(self) -> None:
+        """A new caller turn begins: start counting its confident speech from zero."""
+        self.utt_frames = 0
+        self._utt_prob_sum = 0.0
+
+    @property
+    def utt_seconds(self) -> float:
+        return self.utt_frames * FRAME_SECONDS
+
+    @property
+    def utt_mean_prob(self) -> float:
+        return self._utt_prob_sum / self.utt_frames if self.utt_frames else 0.0
+
+    def utterance_confident(self, min_seconds: float) -> bool:
+        """This turn held at least ``min_seconds`` of confident speech frames (not necessarily unbroken)."""
+        return self.utt_seconds >= min_seconds and self.utt_mean_prob >= CONFIDENT_PROB
 
     @property
     def run_seconds(self) -> float:

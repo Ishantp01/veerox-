@@ -674,10 +674,10 @@ async def _start_live_transcriber(
         async with AsyncSessionLocal() as db:
             state.openai_api_key = resolve_openai_api_key(await db.get(Org, org_id))
 
-        async def on_delta(delta: str) -> None:
+        async def on_delta(delta: str, item_id: str | None = None) -> None:
             # oai is bound by the time deltas flow: audio is only fed once the
             # call pumps run, which is after oai exists.
-            await voice_adapter.handle_live_delta(delta, call_ws, state.oai_ws, state, log)
+            await voice_adapter.handle_live_delta(delta, call_ws, state.oai_ws, state, log, item_id=item_id)
 
         asyncio.create_task(turn_controller.warm_up(state.openai_api_key, state.live_stats))
         transcriber = LiveTranscriber(state.openai_api_key, on_delta, log)

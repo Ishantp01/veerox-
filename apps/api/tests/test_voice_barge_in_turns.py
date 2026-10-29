@@ -356,6 +356,9 @@ async def test_energy_gate_blocks_a_soft_sound_but_lets_sustained_speech_through
         def sustained(self, seconds: float) -> bool:
             return self.confident
 
+        def mark_utterance(self) -> None:
+            return None
+
     gate = Gate()
     call = _timed_call(vad=gate)
     await _agent_speaking(call)
@@ -376,6 +379,9 @@ async def test_local_vad_ends_the_wait_for_a_late_transcript_in_the_live_path(mo
     class Gate:
         def sustained(self, seconds: float) -> bool:
             return True
+
+        def mark_utterance(self) -> None:
+            return None
 
     call = _timed_call(vad=Gate(), live=types.SimpleNamespace(healthy=True))
     await _agent_speaking(call)

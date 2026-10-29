@@ -486,7 +486,7 @@ TURN_LABELS = (
 LLM_MIN_CONFIDENCE = 0.6
 
 
-CUT_REASONS = frozenset({"duration", "live_fallback", "live_real", "native_barge_in", "greeting_barge_in"} | {f"live_llm_{label.lower()}" for label in TURN_LABELS})
+CUT_REASONS = frozenset({"duration", "live_fallback", "live_real", "native_barge_in", "greeting_barge_in", "commit_resolve"} | {f"live_llm_{label.lower()}" for label in TURN_LABELS})
 JUDGE_LABELS = frozenset(label.lower() for label in TURN_LABELS)
 
 
@@ -695,7 +695,8 @@ async def warm_up(api_key: str | None, stats: LiveTurnStats | None = None) -> No
 # Live transcription connection
 # ---------------------------------------------------------------------------
 
-DeltaCallback = Callable[[str], Awaitable[None]]
+# Called with the text and, when the provider names it, the id of the transcript segment (item) it belongs to.
+DeltaCallback = Callable[..., Awaitable[None]]
 
 
 class LiveTranscriber:
@@ -811,7 +812,11 @@ class LiveTranscriber:
                     delta = event.get("delta") or ""
                     if delta:
                         try:
-                            await self._on_delta(delta)
+                            item_id = event.get("item_id")
+                            if item_id:
+                                await self._on_delta(delta, item_id=item_id)
+                            else:
+                                await self._on_delta(delta)
                         except Exception as exc:  # noqa: BLE001
                             self._log.warning("voice_live_delta_handler_failed", error_type=type(exc).__name__)
                 elif etype == "error":

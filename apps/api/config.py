@@ -176,6 +176,11 @@ class Settings(BaseSettings):
     # judgement. Short acknowledgements are still dropped as backchannel once their transcript arrives, so they
     # never trigger a full reply. Off by default: no live-call validation yet.
     voice_native_barge_in: bool = False
+    # VOICE_COMMIT_TIME_CUT: when the caller's turn is committed while the agent is still talking, decide then (from the
+    # speech length and the live text so far) whether it was a real turn, and stop the agent at once if so, instead of
+    # holding the reply until the agent's own queued audio has played out or a late live-transcript verdict arrives.
+    # Acknowledgements ("haan ji", "theek hai") and short bursts are still left alone. Off by default.
+    voice_commit_time_cut: bool = False
     # Listen-first: on INBOUND calls only, the agent stays quiet until the caller speaks, then introduces itself
     # (including that it is an AI) in its first reply. Outbound calls always greet first, so a callee's "hello?" is
     # answered. Never applies when a recording notice or consent question must be spoken first.

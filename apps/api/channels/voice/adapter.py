@@ -316,6 +316,15 @@ class CallState:
     unborn_cut_at: float = 0.0
     # Realtime item ids whose final transcript was already taken, so a redelivered event is not a second turn.
     claimed_item_ids: dict[str, None] = field(default_factory=dict)
+    committed_item_ids: dict[str, None] = field(default_factory=dict)
+    # Ownership of live partial transcripts. A "live turn" starts when the caller begins speaking after the previous
+    # turn was committed; each live transcript segment (item id) belongs to the turn that was current when its first
+    # fragment arrived, so the late tail of an earlier turn can never be appended to a newer one.
+    live_turn: int = 0
+    live_turn_utt: int = -1  # utt_seq when the current live turn began
+    live_turn_started_at: float = 0.0
+    live_item_owner: dict[str, int] = field(default_factory=dict)
+    commit_cut_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
     # Bumped on every cut/reconnect; long-lived audio forwarders compare it to the
     # value they started with and stop forwarding the moment it changes.
     generation: int = 0
@@ -1215,6 +1224,73 @@ async def _greeting_barge_in(oai_ws: Any, call_ws: WebSocket, state: CallState, 
     await _cut_now(oai_ws, call_ws, state, log, "greeting_barge_in")
 
 
+# VOICE_COMMIT_TIME_CUT, when no live text has arrived by the commit (the usual case in production, where the live
+# transcript lags by seconds). Duration alone cannot tell a question from a cough, a TV or side talk, so:
+#  * with the local VAD (VOICE_LOCAL_VAD) the turn must contain this much CONFIDENT speech frames (near-silence and
+#    short blips never qualify; the energy gate cannot tell loud side talk or steady noise from the caller) and last
+#    at least COMMIT_CUT_MIN_SPEECH_SECONDS;
+#  * without it, only a longer turn qualifies, since nothing else separates speech from noise.
+# "hmm, theek hai" takes about a second; EARLY_CUT_SECONDS (1.5 s) was already the bar for a duration-only cut.
+COMMIT_CUT_MIN_SPEECH_SECONDS = 1.5
+COMMIT_CUT_MIN_CONFIDENT_SECONDS = 1.0
+COMMIT_CUT_MIN_SPEECH_NO_VAD_SECONDS = 2.0
+
+
+async def _commit_time_cut(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, turn: int | None = None) -> None:
+    """The caller's turn was just committed while the agent is still talking. Their speech is over, so there is
+    nothing more to wait for: if it was a real turn, stop the agent now. Without this the reply waited for the
+    agent's own queued audio to play out (10+ s of a long answer) or for the live transcript to produce a verdict,
+    which in production arrived 3-4 s after the caller had finished.
+
+    Acknowledgements, noise and short bursts are left to the existing filler handling, which drops them."""
+    try:
+        await _commit_time_cut_inner(oai_ws, call_ws, state, log, turn)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - a failed early cut falls back to the existing wait; it must not break the call
+        log.warning("voice_commit_time_cut_failed", exc_info=True)
+
+
+async def _commit_time_cut_inner(
+    oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, turn: int | None
+) -> None:
+    if not _agent_busy(state) or state.live_llm_said_filler:
+        return
+    if turn is not None and (state.live_turn != turn or state.caller_speaking):
+        # The caller has already started a newer turn: the text and timings now belong to it, not to the turn that
+        # was committed. Its own handling decides; this commit must not act on someone else's words.
+        log.info("voice_commit_time_cut_skipped_newer_turn")
+        return
+    text = state.utterance_text.strip()
+    speech = (
+        state.t_speech_stopped - state.t_speech_started
+        if state.t_speech_started and state.t_speech_stopped >= state.t_speech_started
+        else None
+    )
+    if text:
+        if (
+            turn_controller.is_noise(text)  # "aaaa", symbols: background noise, whatever the smart-turn setting
+            or turn_controller.classify_partial(text, settings.voice_smart_turn_taking) == "filler"
+            or turn_controller.is_extended_backchannel(text)
+            or turn_controller.is_short_burst(text)
+            or turn_controller.is_candidate_backchannel(text, speech)
+        ):
+            return
+    else:
+        vad = getattr(state, "vad", None)
+        if vad is not None:
+            qualifies = (
+                speech is not None
+                and speech >= COMMIT_CUT_MIN_SPEECH_SECONDS
+                and vad.utterance_confident(COMMIT_CUT_MIN_CONFIDENT_SECONDS)
+            )
+        else:
+            qualifies = speech is not None and speech >= COMMIT_CUT_MIN_SPEECH_NO_VAD_SECONDS
+        if not qualifies:
+            return  # nothing heard yet and no good evidence of speech: keep the existing handling
+    await _cut_now(oai_ws, call_ws, state, log, "commit_resolve")
+
+
 async def _cut_if_still_speaking(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
     """Duration-based fallback (no live transcript): stop the agent once the
     caller has spoken over it for EARLY_CUT_SECONDS. The answer itself is sent
@@ -1312,11 +1388,58 @@ async def _live_llm_check(oai_ws: Any, call_ws: WebSocket, state: CallState, log
     # more text re-triggers the check, and the fallback timer covers silence.
 
 
+def _begin_live_turn(state: CallState) -> None:
+    """The caller's utterance text is being reset for a new turn. A repeated speech_started with no commit in
+    between is the same turn, not a new one."""
+    if state.live_turn and state.live_turn_utt == state.utt_seq:
+        return
+    state.live_turn += 1
+    state.live_turn_utt = state.utt_seq
+    state.live_turn_started_at = time.monotonic()
+    if state.vad is not None:
+        state.vad.mark_utterance()
+
+
+# A fragment of an item that belongs to an earlier turn is adopted by the current one only after the current turn
+# has been speaking this long with no text of its own: then the provider is evidently continuing one item across
+# turns (it does its own segmentation), and the alternative is losing the live text for the whole call.
+LIVE_REBIND_AFTER_SECONDS = 4.0
+_MAX_TRACKED_LIVE_ITEMS = 64
+
+
+def _live_delta_is_current(state: CallState, item_id: str | None, log: Any) -> bool:
+    """False when this fragment belongs to an earlier caller turn and must not touch the current one."""
+    if not item_id:
+        return True  # the provider did not say which segment: nothing to judge by
+    owner = state.live_item_owner.get(item_id)
+    if owner is None:
+        state.live_item_owner[item_id] = state.live_turn
+        while len(state.live_item_owner) > _MAX_TRACKED_LIVE_ITEMS:
+            state.live_item_owner.pop(next(iter(state.live_item_owner)))
+        return True
+    if owner == state.live_turn:
+        return True
+    if (
+        state.caller_speaking
+        and not state.utterance_text.strip()
+        and time.monotonic() - state.live_turn_started_at >= LIVE_REBIND_AFTER_SECONDS
+    ):
+        state.live_item_owner[item_id] = state.live_turn
+        log.info("voice_live_item_rebound")
+        state.latency.event("live_item_rebound")
+        return True
+    log.info("voice_stale_live_delta_dropped")
+    state.latency.event("stale_live_delta_dropped")
+    return False
+
+
 async def handle_live_delta(
-    delta: str, call_ws: WebSocket, oai_ws: Any, state: CallState, log: Any
+    delta: str, call_ws: WebSocket, oai_ws: Any, state: CallState, log: Any, item_id: str | None = None
 ) -> None:
     """A partial-transcript fragment of what the caller is saying. While the
     agent is talking, decide from the words so far whether to cut it off."""
+    if not _live_delta_is_current(state, item_id, log):
+        return
     state.utterance_text += delta
     if state.hold_until - time.monotonic() > 0 and not state.caller_speaking:
         # We're holding the reply for a caller who paused mid-sentence: more
@@ -2403,6 +2526,7 @@ async def cancel_pending_tasks(state: CallState) -> None:
     by the caller after this; here we only stop the tasks themselves."""
     for attr in (
         "cut_task",
+        "commit_cut_task",
         "ack_task",
         "hold_task",
         "reply_task",
@@ -3029,6 +3153,7 @@ async def handle_openai_event(
         if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
             if settings.voice_greeting_barge_in:
                 state.caller_speaking = True
+                _begin_live_turn(state)
                 state.utterance_text = ""
                 if state.cut_task is None or state.cut_task.done():
                     state.cut_task = asyncio.create_task(_greeting_barge_in(oai_ws, call_ws, state, log))
@@ -3064,6 +3189,7 @@ async def handle_openai_event(
         # see _on_real_turn/_cut_now/input_audio_buffer.committed).
         if not state.interrupted_mid_response:
             state.backchannel_marked = False
+            _begin_live_turn(state)
             state.utterance_text = ""
             state.live_llm_calls = 0
             state.live_llm_last_words = 0
@@ -3095,6 +3221,9 @@ async def handle_openai_event(
         if not (state.greeting_guard_until and state.t_speech_stopped < state.greeting_guard_until):
             state.latency.begin_turn()
             state.latency.mark("speech_stopped")
+            # The provider reports speech_stopped only after this much silence, so the caller's last word was
+            # this long before the "speech_stopped" mark.
+            state.latency.note(vad_silence_ms=settings.voice_vad_silence_ms)
             if _ack_voice(state) is not None:
                 asyncio.create_task(_send_instant_ack(call_ws, state, log))
         if state.cut_eval_deadline:
@@ -3138,6 +3267,14 @@ async def handle_openai_event(
         # also the one place that can attach a one-off instruction to that
         # specific response without touching the persisted session
         # instructions used every other turn.
+        commit_id = event.get("item_id")
+        if commit_id:
+            if commit_id in state.committed_item_ids:
+                log.info("voice_duplicate_commit_dropped")
+                return  # a redelivered commit is not a second turn
+            state.committed_item_ids[commit_id] = None
+            while len(state.committed_item_ids) > 128:
+                state.committed_item_ids.pop(next(iter(state.committed_item_ids)))
         state.transcripts_outstanding += 1
         state.utt_seq += 1
         state.utt_queue.append((event.get("item_id"), state.utt_seq, state.speech_turn_id))
@@ -3193,6 +3330,18 @@ async def handle_openai_event(
         if not state.response_active and not absorbed:
             _schedule_reply(oai_ws, state)
         if (
+            settings.voice_commit_time_cut
+            and _answer_immediately()
+            and not absorbed
+            and _agent_busy(state)
+            and state.ack_stage is None
+            and not (state.greeting_guard_until and time.monotonic() < state.greeting_guard_until)
+            and (state.commit_cut_task is None or state.commit_cut_task.done())
+        ):
+            state.commit_cut_task = asyncio.create_task(
+                _commit_time_cut(oai_ws, call_ws, state, log, state.live_turn)
+            )
+        if (
             _agent_busy(state)
             and not _live_ready(state)
             and state.ack_stage is None
@@ -3226,6 +3375,7 @@ async def handle_openai_event(
             state.applied_utt = max(state.applied_utt, utt)
             state.pending_utt = utt
         state.pending_user_transcript = (event.get("transcript") or "").strip()
+        state.latency.mark("transcript_final")
         _trace(state, "transcript_arrived", ms_since_commit=_ms_since(state.t_committed), agent_busy=_agent_busy(state))
         if state.pending_user_transcript:
             _caller_is_active(state)

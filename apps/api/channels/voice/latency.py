@@ -44,6 +44,7 @@ logger = structlog.get_logger(__name__)
 TURN_STAGES: tuple[str, ...] = (
     "speech_stopped",  # provider VAD: caller stopped talking
     "committed",  # OpenAI committed the caller's audio turn
+    "transcript_final",  # the final (Whisper) transcript of the turn arrived; usually AFTER the reply started
     "response_requested",  # we sent response.create
     "openai_response_created",  # OpenAI acknowledged the response
     "openai_first_output",  # first text delta (ElevenLabs path) / audio delta (native)
@@ -92,6 +93,7 @@ def compute_segments(marks: Mapping[str, float]) -> dict[str, int]:
     seg: dict[str, int | None] = {}
     seg["vad_to_commit"] = _ms(marks, "speech_stopped", "committed")
     commit_from = "committed" if "committed" in marks else "speech_stopped"
+    seg["commit_to_transcript"] = _ms(marks, "committed", "transcript_final")
     seg["commit_to_request"] = _ms(marks, commit_from, "response_requested")
     seg["request_to_model_output"] = _ms(marks, "response_requested", "openai_first_output")
     if "tts_ready" in marks and "openai_first_output" in marks:
