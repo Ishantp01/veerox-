@@ -308,6 +308,14 @@ class CallState:
     # transcript, tool call) is dropped by id, so a cancelled answer can never be
     # heard or acted on. Bounded; per call.
     cancelled_response_ids: set[str] = field(default_factory=set)
+    # Responses superseded by a newer turn, whether or not a response.cancel went upstream (mute-and-wait
+    # keeps them generating). Their late events are dropped by id exactly like cancelled ones.
+    superseded_response_ids: set[str] = field(default_factory=set)
+    # time.monotonic() when a turn was cut while its response was requested but response.created had not
+    # arrived yet: that response is born superseded (see the response.created handler). 0 = none.
+    unborn_cut_at: float = 0.0
+    # Realtime item ids whose final transcript was already taken, so a redelivered event is not a second turn.
+    claimed_item_ids: dict[str, None] = field(default_factory=dict)
     # Bumped on every cut/reconnect; long-lived audio forwarders compare it to the
     # value they started with and stop forwarding the moment it changes.
     generation: int = 0
@@ -450,6 +458,50 @@ async def _send_clear(ws: WebSocket, state: CallState) -> None:
     state.latency.interruption_cleared()
 
 
+async def _silence_playback(ws: WebSocket, state: CallState, *, mute: bool = True) -> None:
+    """Make the caller hear silence NOW, then tidy up the TTS side.
+
+    Order matters: tearing the ElevenLabs turn down closes a WebSocket (a close handshake that can take
+    seconds when the provider is slow), and the provider's clear used to wait behind it, so the agent kept
+    talking for that long after the decision to stop. Now the turn is invalidated (generation bump: its
+    forwarder drops any chunk it is still holding), the provider buffer is cleared, and only then is the TTS
+    session closed. A second clear catches anything handed over while the teardown ran."""
+    if mute:
+        state.suppress_response_audio = True
+    state.generation += 1
+    try:
+        await _send_clear(ws, state)
+    finally:
+        await _teardown_elevenlabs_turn(state)
+    if state.playback_end > 0:  # _send_clear zeroed it, so audio was handed to the provider since
+        await _send_clear(ws, state)
+
+
+def _supersede_response(state: CallState) -> None:
+    """The response in flight is being replaced by a newer turn. Remember it so that every late event it
+    emits is dropped by id, even after the local mute flag has been reset by a later response."""
+    if not state.response_active:
+        return
+    rid = state.response_id
+    if rid is None or rid in state.completed_response_ids:
+        # Requested, but response.created has not arrived: that response will be born superseded.
+        state.unborn_cut_at = time.monotonic()
+        return
+    state.superseded_response_ids.add(rid)
+    while len(state.superseded_response_ids) > _MAX_TRACKED_CANCELLED:
+        state.superseded_response_ids.pop()
+
+
+def _current_transcript(state: CallState) -> str | None:
+    """The newest caller transcript, or None when it belongs to an earlier utterance than the newest commit
+    (the new utterance's own transcript has not arrived yet). A reply fired in that gap must not be paired
+    with, decided from, or sent to a tool as the previous question."""
+    text = state.pending_user_transcript
+    if text and state.pending_utt and state.pending_utt < state.utt_seq:
+        return None
+    return text
+
+
 # The pause / acknowledge / resume / read-back lines are sent as ISOLATED
 # responses: ``conversation: "none"`` plus a hand-built ``input``. A normal
 # response.create sees the caller's still-unanswered question in the
@@ -552,8 +604,7 @@ async def _ack_after_gap(oai_ws: Any, call_ws: WebSocket, state: CallState, log:
     if not (_agent_busy(state) and state.reply_pending and state.ack_stage is None):
         return
     _snapshot_heard(state)
-    await _teardown_elevenlabs_turn(state)
-    await _send_clear(call_ws, state)
+    await _silence_playback(call_ws, state, mute=state.response_active)
     log.info("voice_ack_pausing_answer", still_generating=state.response_active)
     if _answer_immediately():
         # Real question mid-answer: drop the read-back beat, answer it now.
@@ -623,8 +674,7 @@ async def _start_finish_first(oai_ws: Any, call_ws: WebSocket, state: CallState,
         state.paused_heard_pct = max(0, min(95, int(100 * heard / state.resp_audio_seconds)))
     else:
         state.paused_heard_pct = 0
-    await _teardown_elevenlabs_turn(state)
-    await _send_clear(call_ws, state)
+    await _silence_playback(call_ws, state, mute=state.response_active)
     if state.response_active:
         # No response.cancel while generating — see _cut_now's docstring.
         # paused_text/paused_heard_pct above already captured what to resume
@@ -660,6 +710,8 @@ CANCEL_HARD_TIMEOUT_SECONDS = 10.0
 # A session close this soon after a cancel is attributed to it.
 CANCEL_CLOSE_WINDOW_SECONDS = 10.0
 _MAX_TRACKED_CANCELLED = 64
+# A cut that finds its response not yet created marks the next response.created only if it comes this soon.
+UNBORN_CUT_WINDOW_SECONDS = 5.0
 
 INTERRUPT_PRIORITY_INSTRUCTION = (
     "The caller just interrupted you. Do NOT continue or repeat what you were saying. First "
@@ -691,7 +743,7 @@ _RESPONSE_CONTENT_EVENTS = frozenset(
 
 def _is_stale_response(state: CallState, event: dict[str, Any]) -> bool:
     rid = event.get("response_id")
-    return bool(rid) and rid in state.cancelled_response_ids
+    return bool(rid) and (rid in state.cancelled_response_ids or rid in state.superseded_response_ids)
 
 
 def _trip_cancel_breaker(state: CallState, log: Any, reason: str) -> None:
@@ -727,6 +779,8 @@ def reset_after_reconnect(state: CallState) -> None:
     state.completed_response_ids.clear()
     state.seen_tool_call_ids.clear()
     state.cancelled_response_ids.clear()
+    state.superseded_response_ids.clear()
+    state.unborn_cut_at = 0.0
     state.generation += 1
     state.priority_reply = False
     state.answering_transcript = None
@@ -848,6 +902,7 @@ async def _stop_generation(oai_ws: Any, state: CallState, log: Any) -> None:
     state.ack_stage = "cancelling"
     state.suppress_response_audio = True
     state.generation += 1
+    _supersede_response(state)
     if settings.voice_trim_interrupted_context and state.response_id:
         state.trim_pending[state.response_id] = state.heard_snapshot or ""
     if not settings.voice_safe_cancel:
@@ -1071,10 +1126,10 @@ async def _cut_now(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, 
         playback_remaining_ms=round(max(0.0, state.playback_end - time.monotonic()) * 1000),
         live_filler=state.live_llm_said_filler,
     )
-    # Suppress deltas before teardown yields to an in-flight TTS send.
-    state.suppress_response_audio = True
-    await _teardown_elevenlabs_turn(state)
-    await _send_clear(call_ws, state)
+    # Mute and invalidate the turn before anything can yield to an in-flight TTS send, clear the provider's
+    # buffer first, and only then close the TTS session.
+    _supersede_response(state)
+    await _silence_playback(call_ws, state)
     if not state.caller_speaking:
         # Their turn already ended (its reply may have been dropped as filler
         # earlier); make sure it is answered now.
@@ -1186,6 +1241,8 @@ async def _live_fallback_cut(oai_ws: Any, call_ws: WebSocket, state: CallState, 
         and not state.utterance_text.strip()
         and time.monotonic() - state.t_speech_started < LIVE_NO_TEXT_CUT_SECONDS
         and not _live_text_stalled(state)
+        # VOICE_LOCAL_VAD: continuous confident speech is not a late-transcript "hmm"; stop waiting for words.
+        and not ((vad := getattr(state, "vad", None)) is not None and vad.sustained(LIVE_FALLBACK_CUT_SECONDS))
     ):
         await asyncio.sleep(0.1)  # no transcript yet: lag, not a turn
     if not state.caller_speaking or state.live_llm_said_filler:
@@ -1487,7 +1544,7 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
             response = dict(response or {})
             base = response.get("instructions") or state.base_instructions
             response["instructions"] = f"{base}\n\n{GREETING_CUT_INSTRUCTION}".strip()
-        state.answering_transcript = state.pending_user_transcript
+        state.answering_transcript = _current_transcript(state)
         state.answering_utt = state.utt_seq
         response = _with_triggers(response, state)
         response = _with_memory(response, state)
@@ -1679,7 +1736,7 @@ async def _voice_decision_response(state: CallState) -> dict[str, Any] | None:
             )
             _hold_from_words(state)
             return None
-        if plan is None or state.voice_decision_text != state.pending_user_transcript:
+        if plan is None or state.voice_decision_text != _current_transcript(state):
             _hold_from_words(state)
             return None  # nothing to apply, or the caller has said something newer
         config = getattr(plan, "config", None)
@@ -1968,7 +2025,7 @@ async def _persist_voice_turn(
     is built from the snapshot and a newer ``pending_user_transcript`` is left
     alone for its own turn.
     """
-    snapshot = state.pending_user_transcript if pending is _UNSET else pending
+    snapshot = _current_transcript(state) if pending is _UNSET else pending
     state.answering_transcript = None
     answered_utt = state.answering_utt if utt is None else utt
     if utt is None:
@@ -2085,8 +2142,8 @@ async def _forward_elevenlabs_audio(call_ws: WebSocket, state: CallState, log: A
     generation = state.generation
     try:
         async for chunk in session.audio_chunks():
-            if state.generation != generation:
-                return  # the caller cut this turn off: nothing more of it may play
+            if state.generation != generation or (state.eleven_session is not session):
+                return  # the caller cut this turn off (or a newer turn owns the line): nothing more of it may play
             state.eleven_turn_audio_chunks += 1
             if state.eleven_turn_audio_chunks == 1:
                 # Characters ElevenLabs had been given when its first audio came back. It starts generating at
@@ -2494,6 +2551,10 @@ async def _tts_failed(state: CallState, log: Any, reason: str) -> None:
     """A turn's speech failed. Retry once with safe settings (replaying the turn), then fall back
     to the pre-generated apology and a controlled end. See channels/voice/recovery.py."""
     try:
+        generation = state.generation
+        if state.suppress_response_audio:
+            log.info("voice_tts_recovery_skipped_turn_superseded")
+            return  # the caller already cut this turn: a retry must not bring it back
         state.tts_failures += 1
         log.warning("voice_tts_failure", reason=reason, failures=state.tts_failures)
         text_so_far = state.eleven_text_buffer
@@ -2510,6 +2571,11 @@ async def _tts_failed(state: CallState, log: Any, reason: str) -> None:
             except Exception as exc:  # noqa: BLE001
                 log.warning("voice_tts_retry_failed", error_type=type(exc).__name__)
             else:
+                if state.generation != generation:
+                    # Cut while reconnecting: the replay would speak a cancelled answer.
+                    await session.__aexit__(None, None, None)
+                    log.info("voice_tts_recovery_dropped_turn_superseded")
+                    return
                 state.eleven_turn_audio_chunks = 0
                 # Deltas that arrive while we replay are buffered by the handler (recovery is pending),
                 # so assigning the session now is safe and lets the forwarder find it.
@@ -2629,7 +2695,7 @@ async def _dispatch_deduped(state: CallState, name: str, args_json: str, log: An
         state.org_id,
         campaign_target_id=state.campaign_target_id,
         conversation_id=state.conversation_id,
-        raw_message=state.pending_user_transcript,
+        raw_message=_current_transcript(state),
     )
     if key is not None and isinstance(result, dict) and result.get("status") == "ok":
         state.action_results[key] = result
@@ -2905,7 +2971,11 @@ async def handle_openai_event(
 
     # Anything a cancelled response still emits (audio, text, a tool call) is
     # discarded: the caller must never hear it or have it acted on.
-    if state.cancelled_response_ids and etype in _RESPONSE_CONTENT_EVENTS and _is_stale_response(state, event):
+    if (
+        (state.cancelled_response_ids or state.superseded_response_ids)
+        and etype in _RESPONSE_CONTENT_EVENTS
+        and _is_stale_response(state, event)
+    ):
         log.info("voice_stale_response_event_dropped", etype=etype)
         state.latency.event("stale_event_dropped", etype=etype)
         return
@@ -3042,6 +3112,14 @@ async def handle_openai_event(
         state.resp_text = ""
         state.resp_audio_seconds = 0.0
         state.response_id = (event.get("response") or {}).get("id")
+        if state.unborn_cut_at:
+            born_superseded = time.monotonic() - state.unborn_cut_at < UNBORN_CUT_WINDOW_SECONDS
+            state.unborn_cut_at = 0.0
+            if born_superseded and state.response_id:
+                # The caller cut this turn before its response even existed: never let it be heard.
+                state.superseded_response_ids.add(state.response_id)
+                state.suppress_response_audio = True
+                log.info("voice_response_born_superseded")
         state.latency.mark("openai_response_created")
         state.latency.interruption_next_response()
         # A new reply starts with a clean substituter, so text held from a cut-off reply can never
@@ -3124,6 +3202,15 @@ async def handle_openai_event(
             state.ack_task = asyncio.create_task(_ack_after_gap(oai_ws, call_ws, state, log))
 
     elif etype == "conversation.item.input_audio_transcription.completed":
+        item_id = event.get("item_id")
+        if item_id:
+            if item_id in state.claimed_item_ids:
+                # Redelivered: this utterance's transcript was already taken, so it is not a second turn.
+                log.info("voice_duplicate_transcript_dropped")
+                return
+            state.claimed_item_ids[item_id] = None
+            while len(state.claimed_item_ids) > 128:
+                state.claimed_item_ids.pop(next(iter(state.claimed_item_ids)))
         utt, spoke_in_turn = _claim_utterance(state, event.get("item_id"))
         if utt and (utt <= state.consumed_utt or utt < state.applied_utt):
             # Older than a turn that is already in the history, or than a transcript already accepted: it belongs
@@ -3292,7 +3379,7 @@ async def handle_openai_event(
                 assistant_text = (state.eleven_text_buffer or "").strip()
             else:
                 assistant_text = (event.get("text") or state.eleven_text_buffer or "").strip()
-            pending = state.pending_user_transcript
+            pending = _current_transcript(state)
             state.tts_text_done = True  # kept so TTS recovery can replay and finish this turn
             state.reply_used_exact = bool(state.exact_sub is not None and state.exact_sub.used)
             state.tts_final_text = assistant_text

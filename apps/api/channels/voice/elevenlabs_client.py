@@ -66,6 +66,8 @@ def error_code(msg: dict[str, Any]) -> str:
     return "provider_error"
 
 
+# How long closing a turn's socket may take before it is abandoned (an interrupted turn must not wait on it).
+CLOSE_TIMEOUT_SECONDS = 1.0
 _ELEVENLABS_WS_URL = "wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input"
 
 
@@ -300,7 +302,12 @@ class ElevenLabsTTSSession:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         if self._ws is not None:
-            await self._ws.close()
+            # The close handshake waits for the provider's reply (websockets allows ~10 s). An interrupted
+            # turn must not be held up by it: give it a moment, then let the connection go.
+            try:
+                await asyncio.wait_for(self._ws.close(), timeout=CLOSE_TIMEOUT_SECONDS)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+                pass
         if self.on_close is not None and not self._closed_reported:
             self._closed_reported = True
             try:
