@@ -52,6 +52,7 @@ from apps.api.channels.voice.latency import LatencyTracker, startup_emit, startu
 from apps.api.channels.voice.voice_profile import (
     ResolvedVoice,
     resolve_profile,
+    prompt_extras,
     prompt_options,
 )
 from apps.api.channels.voice.turn_controller import LiveTranscriber
@@ -521,6 +522,9 @@ async def _system_instructions(
         speaking_style, prompt_tone, natural_hinglish = (
             prompt_options(org_row.voice_profile) if org_row is not None else (False, None, False)
         )
+        natural_speech, hindi_script = (
+            prompt_extras(org_row.voice_profile) if org_row is not None else (False, None)
+        )
 
     parsed = None
     if settings.voice_script_authority:
@@ -540,6 +544,8 @@ async def _system_instructions(
         human_style=settings.voice_human_style,
         authority=settings.voice_script_authority,
         from_script=picked is not None,
+        natural_speech=natural_speech,
+        hindi_script=hindi_script,
     )
     tail = f"{current_datetime_block()}\n\n{voice_append.strip()}"
     if catalog:

@@ -272,6 +272,56 @@ Spoken-Hindi habits (VOICE_HUMAN_STYLE):
 - None of this delays saying you are an AI assistant when that is due.
 """
 
+# Phase 2 (test-org only, per-org voice profile ``natural_speech``): replaces the written-document feel of
+# the default tail with spoken phrasing. It changes how things are said, never what is true or allowed: facts,
+# figures, the script, tool rules and the AI disclosure stay exactly as they are.
+VOICE_NATURAL_SPEECH = """
+
+Natural spoken delivery (applies to HOW you say things; script, facts, figures and tool rules stay as they are):
+- You are talking, not writing. Use the contractions and rhythm of everyday speech, and let sentence length
+  vary: a short reply is fine, and so is one longer sentence with a natural pause (comma) in it.
+- Put the key word of a sentence near its end, where the voice naturally lands. Do not stack several clauses in
+  front of it.
+- Do not open consecutive replies the same way, and do not introduce yourself or your company again once the
+  caller has heard it (if an instruction says they did not hear it, say it as instructed). Skip stock openers;
+  many replies can simply start with the answer.
+- A question is asked as a question: one thing, ending with a question mark. An acknowledgement ("haan ji",
+  "achha", "theek hai") is short and ends with a full stop; if more follows, say it in the same breath.
+- Use a comma where a person would breathe, a full stop where the thought ends, a dash or an ellipsis only for a
+  real hesitation or a change of thought. Do not add pauses everywhere.
+- Never write "umm", "uh", laughter, breaths, sighs or stage directions: they would be read aloud literally.
+  Be warm through the words you choose, not through announced emotions.
+- Plain statements should sound settled, not like an announcement. Do not open with "Sure!", "Great!" or other
+  enthusiasm unless the moment calls for it.
+"""
+
+# Phase 2: how Hindi words are WRITTEN (the text-to-speech model pronounces from the spelling). Chosen per org
+# (``hindi_script``); neither is the default. English technical words and brand names stay in Latin script in both.
+VOICE_SCRIPT_DEVANAGARI = """
+
+Script for Hindi words (spelling decides pronunciation):
+- Write Hindi words in Devanagari (देवनागरी), e.g. "हाँ जी, मैं आपकी मदद करता हूँ।". End statements with "।" and
+  questions with "?".
+- Keep English words, technical terms, product names, brand names, people's names and numbers/codes in Latin
+  script exactly as given (e.g. "WhatsApp", "appointment", "Sharma Interiors"). Do not translate or transliterate
+  them. Do not rewrite a word the caller or the script gave you.
+- In a mixed sentence, switch script only at the word boundary: "आपका appointment कल 5 बजे है।". Do not put
+  Roman-script Hindi in the middle of a Devanagari sentence.
+"""
+
+VOICE_SCRIPT_ROMAN = """
+
+Script for Hindi words (spelling decides pronunciation):
+- Write Hindi in simple, consistent Roman script (Hinglish) as people type it, e.g. "haan ji, main aapki madad
+  karta hoon." Use one spelling per word throughout the call, and keep long vowels visible where it changes the
+  word (e.g. "kaam", "paanch", "nahin").
+- Keep English words, technical terms, product names, brand names and people's names exactly as given. Do not
+  write Devanagari at all.
+- End statements with a full stop and questions with a question mark.
+"""
+
+HINDI_SCRIPTS = {"devanagari": VOICE_SCRIPT_DEVANAGARI, "roman": VOICE_SCRIPT_ROMAN}
+
 _TONE_SUFFIX = (
     " Tone changes how you phrase things, never what is true or allowed: business rules, approved claims "
     "and your AI disclosure stay exactly as they are."
@@ -300,6 +350,8 @@ def render_voice_append(
     human_style: bool = False,
     authority: bool = False,
     from_script: bool = False,
+    natural_speech: bool = False,
+    hindi_script: str | None = None,
 ) -> str:
     """The voice-channel prompt tail with the example greeting for ``brand``.
 
@@ -332,6 +384,10 @@ def render_voice_append(
         # script.
         style = VOICE_HUMAN_STYLE_V2 if authority else VOICE_HUMAN_STYLE
         rendered = rendered.rstrip("\n") + "\n" + style
+    if natural_speech:
+        rendered = rendered.rstrip("\n") + "\n" + VOICE_NATURAL_SPEECH
+    if hindi_script in HINDI_SCRIPTS:
+        rendered = rendered.rstrip("\n") + "\n" + HINDI_SCRIPTS[hindi_script]
     if tone in VOICE_TONES:
         rendered = rendered.rstrip("\n") + "\n\n" + VOICE_TONES[tone] + _TONE_SUFFIX + "\n"
     return rendered

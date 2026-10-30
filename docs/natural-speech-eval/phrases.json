@@ -1,0 +1,36 @@
+{
+  "_comment": "Phase 2 listening scripts. Same content in Roman and Devanagari (pair = same sentence) so the script strategies are compared on identical wording. English technical and brand words stay Latin in both. Data only.",
+  "phrases": [
+    {"id": "greeting_rom", "category": "greeting", "script": "roman", "pair": "greeting", "text": "Namaste, main Sharma Interiors se Veer bol raha hoon, ek AI assistant. Kaise madad kar sakta hoon?"},
+    {"id": "greeting_dev", "category": "greeting", "script": "devanagari", "pair": "greeting", "text": "नमस्ते, मैं Sharma Interiors से Veer बोल रहा हूँ, एक AI assistant। कैसे मदद कर सकता हूँ?"},
+
+    {"id": "question_rom", "category": "simple_question", "script": "roman", "pair": "question", "text": "Aapka ghar kitne BHK ka hai?"},
+    {"id": "question_dev", "category": "simple_question", "script": "devanagari", "pair": "question", "text": "आपका घर कितने BHK का है?"},
+    {"id": "question2_rom", "category": "simple_question", "script": "roman", "pair": "question2", "text": "Kya aap is hafte site visit ke liye free hain?"},
+    {"id": "question2_dev", "category": "simple_question", "script": "devanagari", "pair": "question2", "text": "क्या आप इस हफ़्ते site visit के लिए free हैं?"},
+
+    {"id": "explain_rom", "category": "long_explanation", "script": "roman", "pair": "explain", "text": "Dekhiye, modular kitchen mein pehle hum aapke ghar ka naap lete hain, phir design finalize hota hai. Uske baad factory mein kaam shuru hota hai, aur lagbhag teen hafte mein installation ho jaata hai. Poore process mein aapko sirf do baar aana padega."},
+    {"id": "explain_dev", "category": "long_explanation", "script": "devanagari", "pair": "explain", "text": "देखिए, modular kitchen में पहले हम आपके घर का नाप लेते हैं, फिर design finalize होता है। उसके बाद factory में काम शुरू होता है, और लगभग तीन हफ़्ते में installation हो जाता है। पूरे process में आपको सिर्फ़ दो बार आना पड़ेगा।"},
+
+    {"id": "followup_rom", "category": "follow_up", "script": "roman", "pair": "followup", "text": "Achha, aur budget aapne kitna socha hai? Matlab, ek andaaza bhi chalega."},
+    {"id": "followup_dev", "category": "follow_up", "script": "devanagari", "pair": "followup", "text": "अच्छा, और budget आपने कितना सोचा है? मतलब, एक अंदाज़ा भी चलेगा।"},
+
+    {"id": "hindi_rom", "category": "hindi", "script": "roman", "pair": "hindi", "text": "Ji bilkul, aapka kaam kal subah tak ho jaayega."},
+    {"id": "hindi_dev", "category": "hindi", "script": "devanagari", "pair": "hindi", "text": "जी बिल्कुल, आपका काम कल सुबह तक हो जाएगा।"},
+
+    {"id": "hinglish_rom", "category": "hinglish", "script": "roman", "pair": "hinglish", "text": "Aapka appointment kal shaam paanch baje confirm ho gaya hai, details main WhatsApp par bhej raha hoon."},
+    {"id": "hinglish_dev", "category": "hinglish", "script": "devanagari", "pair": "hinglish", "text": "आपका appointment कल शाम पाँच बजे confirm हो गया है, details मैं WhatsApp पर भेज रहा हूँ।"},
+
+    {"id": "ack1_rom", "category": "acknowledgement", "script": "roman", "pair": "ack1", "text": "Haan ji, samajh gaya."},
+    {"id": "ack1_dev", "category": "acknowledgement", "script": "devanagari", "pair": "ack1", "text": "हाँ जी, समझ गया।"},
+    {"id": "ack2_rom", "category": "acknowledgement", "script": "roman", "pair": "ack2", "text": "Theek hai, koi baat nahin. Aap araam se sochiye."},
+    {"id": "ack2_dev", "category": "acknowledgement", "script": "devanagari", "pair": "ack2", "text": "ठीक है, कोई बात नहीं। आप आराम से सोचिए।"},
+    {"id": "ack3_rom", "category": "acknowledgement", "script": "roman", "pair": "ack3", "text": "Achha, theek hai ji."},
+    {"id": "ack3_dev", "category": "acknowledgement", "script": "devanagari", "pair": "ack3", "text": "अच्छा, ठीक है जी।"},
+
+    {"id": "runon_rom", "category": "run_on_stress", "script": "roman", "pair": "runon", "text": "haan ji dekhiye aapke ghar ka naap lene ke baad hum design banate hain phir aapko dikhate hain aur aap jo badlaav chahte hain woh karte hain uske baad factory mein kaam shuru hota hai aur teen hafte mein installation ho jaata hai"},
+    {"id": "runon_dev", "category": "run_on_stress", "script": "devanagari", "pair": "runon", "text": "हाँ जी देखिए आपके घर का नाप लेने के बाद हम design बनाते हैं फिर आपको दिखाते हैं और आप जो बदलाव चाहते हैं वो करते हैं उसके बाद factory में काम शुरू होता है और तीन हफ़्ते में installation हो जाता है"},
+
+    {"id": "english_ref", "category": "english_reference", "script": "english", "pair": "english", "text": "Sure, I can book that for you. Would morning or evening work better?"}
+  ]
+}

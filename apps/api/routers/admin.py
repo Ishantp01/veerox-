@@ -2842,10 +2842,13 @@ def _voice_profile_out(record: Org | None) -> VoiceProfileSettingsOut:
     stored = record.voice_profile if record else None
     resolved = voice_profile_mod.resolve_profile(stored)
     if resolved is None:
+        # No profile: show exactly what a call sends (the platform voice/model the call resolves, and the same
+        # default settings it builds, style 0.15 included on the models that take it).
+        model_id = voice_profile_mod.platform_model_id()
         effective: dict = {
-            "voice_id": settings.elevenlabs_voice_id,
-            "model_id": settings.elevenlabs_model_id,
-            "voice_settings": dict(voice_profile_mod.LEGACY_VOICE_SETTINGS),
+            "voice_id": voice_profile_mod.platform_voice_id(),
+            "model_id": model_id,
+            "voice_settings": voice_profile_mod.default_voice_settings(model_id),
             "normalize_speech": False,
             "speaking_style": False,
             "natural_hinglish": False,
@@ -2853,6 +2856,13 @@ def _voice_profile_out(record: Org | None) -> VoiceProfileSettingsOut:
             "chunk_schedule": None,
             "pronunciations": {},
             "preferred_language": None,
+            "natural_speech": False,
+            "hindi_script": None,
+            "phrase_flush": None,
+            "phrase_min_chars": None,
+            "phrase_soft_chars": None,
+            "phrase_max_hold_chars": None,
+            "phrase_max_hold_ms": None,
         }
     else:
         effective = {
@@ -2866,6 +2876,13 @@ def _voice_profile_out(record: Org | None) -> VoiceProfileSettingsOut:
             "chunk_schedule": list(resolved.chunk_schedule) if resolved.chunk_schedule else None,
             "pronunciations": dict(resolved.pronunciations),
             "preferred_language": resolved.language,
+            "natural_speech": resolved.natural_speech,
+            "hindi_script": resolved.hindi_script,
+            "phrase_flush": resolved.phrase_flush,
+            "phrase_min_chars": resolved.phrase_min_chars,
+            "phrase_soft_chars": resolved.phrase_soft_chars,
+            "phrase_max_hold_chars": resolved.phrase_max_hold_chars,
+            "phrase_max_hold_ms": resolved.phrase_max_hold_ms,
         }
     return VoiceProfileSettingsOut(
         profile=stored,

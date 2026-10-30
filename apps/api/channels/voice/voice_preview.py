@@ -38,8 +38,8 @@ class PreviewFailed(RuntimeError):
     """The provider returned an error or no audio."""
 
 
-def load_phrases() -> list[dict[str, str]]:
-    data: dict[str, Any] = json.loads(PHRASES_PATH.read_text(encoding="utf-8"))
+def load_phrases(path: Path | None = None) -> list[dict[str, str]]:
+    data: dict[str, Any] = json.loads((path or PHRASES_PATH).read_text(encoding="utf-8"))
     return list(data["phrases"])
 
 
@@ -73,7 +73,11 @@ class SynthResult:
 
 
 async def synthesize(
-    text: str, voice: ResolvedVoice | None = None, *, timeout: float = _PREVIEW_TIMEOUT_SECONDS
+    text: str,
+    voice: ResolvedVoice | None = None,
+    *,
+    timeout: float = _PREVIEW_TIMEOUT_SECONDS,
+    stream_words: bool = False,
 ) -> SynthResult:
     """Synthesize ``text`` through ElevenLabs with the given resolved voice
     (None = platform voice). Raises ``PreviewUnavailable`` without a key and
@@ -90,7 +94,13 @@ async def synthesize(
         )
         async with session_cm as session:
             started = time.monotonic()
-            await session.send_text(text)
+            if stream_words:
+                # Deliver the text the way a live call does (a few characters at a time), so phrase
+                # buffering and the provider's own chunking behave as they do on a call.
+                for word in text.split(" "):
+                    await session.send_text(word + " ")
+            else:
+                await session.send_text(text)
             await session.finish()
 
             async def _collect() -> None:

@@ -123,7 +123,7 @@ def _sent_text(text: str, cand: dict[str, Any]) -> str:
 
 
 async def build_rows(args: argparse.Namespace) -> list[dict[str, str]]:
-    phrases = voice_preview.load_phrases()
+    phrases = voice_preview.load_phrases(Path(args.phrases_file) if args.phrases_file else None)
     if args.categories:
         phrases = [p for p in phrases if p["category"] in set(args.categories)]
     if not phrases:
@@ -142,7 +142,7 @@ async def build_rows(args: argparse.Namespace) -> list[dict[str, str]]:
             latency = NOT_MEASURED
             if can_measure and cand["provider"] == "elevenlabs":
                 try:
-                    result = await voice_preview.synthesize(phrase["text"], voice)
+                    result = await voice_preview.synthesize(phrase["text"], voice, stream_words=args.stream_words)
                     latency = str(result.first_audio_ms)
                 except Exception as exc:  # noqa: BLE001
                     latency = f"failed: {exc}"
@@ -177,6 +177,8 @@ def render(rows: list[dict[str, str]], fmt: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--categories", nargs="*", help="only these phrase categories")
+    parser.add_argument("--phrases-file", help="JSON file shaped like preview_phrases.json (default: the built-in set)")
+    parser.add_argument("--stream-words", action="store_true", help="with --measure: send text word by word, as a live call does")
     parser.add_argument("--candidates-file", help="JSON list of candidates (see docstring)")
     parser.add_argument("--measure", action="store_true", help="measure first-audio latency (needs ELEVENLABS_API_KEY)")
     parser.add_argument("--price-per-1k", type=float, help="your price per 1K characters")

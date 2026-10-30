@@ -55,6 +55,9 @@ STYLE_MODELS = frozenset({"eleven_multilingual_v2"})
 SPEED_RANGE = (0.7, 1.2)
 CHUNK_SCHEDULE_RANGE = (50, 500)
 MAX_CHUNK_SCHEDULE_LEN = 6
+PHRASE_CHARS_RANGE = (4, 80)
+PHRASE_HOLD_CHARS_RANGE = (40, 400)
+PHRASE_HOLD_MS_RANGE = (200, 5000)
 TONES = ("professional_warm", "friendly", "calm_reassuring", "confident_informative")
 LANGUAGES = ("hi", "en", "hinglish")
 MAX_PRONUNCIATIONS = 50
@@ -106,6 +109,16 @@ LEGACY_VOICE_SETTINGS: dict[str, float] = {"stability": 0.45, "similarity_boost"
 DEFAULT_STYLE = 0.15
 
 
+def default_voice_settings(model_id: str) -> dict[str, float]:
+    """The voice settings an org with NO profile gets for ``model_id``: stability 0.45 and similarity 0.80, plus
+    style 0.15 on the models that accept it. The single source for both the request sent to ElevenLabs and the
+    settings endpoint's "effective" display, so the two cannot drift apart."""
+    out: dict[str, float] = dict(LEGACY_VOICE_SETTINGS)
+    if model_id in STYLE_MODELS:
+        out["style"] = DEFAULT_STYLE
+    return out
+
+
 class VoiceProfileError(ValueError):
     """The submitted profile can't be used; the message is safe to show."""
 
@@ -146,6 +159,33 @@ class VoiceProfile(BaseModel):
         None,
         description="ElevenLabs generation_config.chunk_length_schedule (characters buffered before speaking); "
         "unset = provider default.",
+    )
+    # Phase 2 (test org): every field below is unset by default and then changes nothing.
+    natural_speech: bool = Field(
+        False, description="Add the natural spoken-delivery block to the voice prompt (wording and rhythm only)."
+    )
+    hindi_script: Literal["devanagari", "roman"] | None = Field(
+        None, description="Which script the agent writes Hindi words in; English/brand words stay Latin."
+    )
+    phrase_flush: bool | None = Field(
+        None, description="Per-org override of VOICE_TTS_PHRASE_FLUSH; unset = follow the platform setting."
+    )
+    phrase_min_chars: int | None = Field(
+        None, ge=PHRASE_CHARS_RANGE[0], le=PHRASE_CHARS_RANGE[1],
+        description="Shortest phrase (characters) released at a sentence end; shorter ones are joined to the next.",
+    )
+    phrase_soft_chars: int | None = Field(
+        None, ge=PHRASE_CHARS_RANGE[0], le=PHRASE_CHARS_RANGE[1] * 4,
+        description="Length a phrase needs before a comma/semicolon may end it.",
+    )
+
+    phrase_max_hold_chars: int | None = Field(
+        None, ge=PHRASE_HOLD_CHARS_RANGE[0], le=PHRASE_HOLD_CHARS_RANGE[1],
+        description="Phase 3: release waiting phrase text once it is this many characters long (needs phrase flush).",
+    )
+    phrase_max_hold_ms: int | None = Field(
+        None, ge=PHRASE_HOLD_MS_RANGE[0], le=PHRASE_HOLD_MS_RANGE[1],
+        description="Phase 3: release waiting phrase text once it has waited this long (needs phrase flush).",
     )
 
     @field_validator("chunk_schedule")
@@ -200,6 +240,8 @@ class VoiceProfile(BaseModel):
         return self.model_id or platform_model_id()
 
     def check_cross_fields(self) -> None:
+        if self.phrase_flush is False and (self.phrase_max_hold_chars or self.phrase_max_hold_ms):
+            raise VoiceProfileError("a maximum hold needs phrase flushing, but phrase_flush is explicitly false")
         if self.style and self.effective_model() not in STYLE_MODELS:
             raise VoiceProfileError(
                 "style is only supported with model eleven_multilingual_v2 "
@@ -237,6 +279,13 @@ class ResolvedVoice:
     natural_hinglish: bool = False
     tone: str | None = None
     chunk_schedule: tuple[int, ...] | None = None
+    natural_speech: bool = False
+    hindi_script: str | None = None
+    phrase_flush: bool | None = None
+    phrase_min_chars: int | None = None
+    phrase_soft_chars: int | None = None
+    phrase_max_hold_chars: int | None = None
+    phrase_max_hold_ms: int | None = None
     fingerprint: str = field(default="", compare=False)
 
     def audio_fingerprint(self) -> str:
@@ -275,14 +324,17 @@ def resolve_profile(raw: Any) -> ResolvedVoice | None:
         voice_settings["speed"] = profile.speed
     voice_id = profile.voice_id or platform_voice_id()
     pron = tuple(sorted(profile.pronunciations.items()))
-    digest = hashlib.sha256(
-        json.dumps(
-            [voice_id, model_id, voice_settings, profile.normalize_speech, profile.preferred_language, pron,
-             profile.chunk_schedule],
-            sort_keys=True,
-            ensure_ascii=False,
-        ).encode()
-    ).hexdigest()
+    parts: list[Any] = [
+        voice_id, model_id, voice_settings, profile.normalize_speech, profile.preferred_language, pron,
+        profile.chunk_schedule,
+    ]
+    # The audio of a fixed text does not depend on the Phase 2 prompt options; it does depend on how the text
+    # is cut into phrases, so those join the fingerprint only when set (an unchanged profile keeps its old one).
+    if profile.phrase_flush is not None or profile.phrase_min_chars or profile.phrase_soft_chars:
+        parts.append([profile.phrase_flush, profile.phrase_min_chars, profile.phrase_soft_chars])
+    if profile.phrase_max_hold_chars or profile.phrase_max_hold_ms:
+        parts.append(["max_hold", profile.phrase_max_hold_chars, profile.phrase_max_hold_ms])
+    digest = hashlib.sha256(json.dumps(parts, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     return ResolvedVoice(
         voice_id=voice_id,
         model_id=model_id,
@@ -294,6 +346,13 @@ def resolve_profile(raw: Any) -> ResolvedVoice | None:
         natural_hinglish=profile.natural_hinglish,
         tone=profile.tone,
         chunk_schedule=tuple(profile.chunk_schedule) if profile.chunk_schedule else None,
+        natural_speech=profile.natural_speech,
+        hindi_script=profile.hindi_script,
+        phrase_flush=profile.phrase_flush,
+        phrase_min_chars=profile.phrase_min_chars,
+        phrase_soft_chars=profile.phrase_soft_chars,
+        phrase_max_hold_chars=profile.phrase_max_hold_chars,
+        phrase_max_hold_ms=profile.phrase_max_hold_ms,
         fingerprint=digest,
     )
 
@@ -305,6 +364,15 @@ def prompt_options(raw: Any) -> tuple[bool, str | None, bool]:
     if resolved is None:
         return False, None, False
     return resolved.speaking_style, resolved.tone, resolved.natural_hinglish
+
+
+def prompt_extras(raw: Any) -> tuple[bool, str | None]:
+    """``(natural_speech, hindi_script)`` for the voice prompt; ``(False, None)`` for no or an invalid profile.
+    Kept apart from ``prompt_options`` so that function's shape (and its callers) did not change."""
+    resolved = resolve_profile(raw)
+    if resolved is None:
+        return False, None
+    return resolved.natural_speech, resolved.hindi_script
 
 
 def speaking_style_enabled(raw: Any) -> bool:

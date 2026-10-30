@@ -37,11 +37,12 @@ import structlog
 import websockets
 
 from apps.api.channels.voice.tts_normalize import TTSNormalizer
-from apps.api.channels.voice.voice_profile import (
+from apps.api.channels.voice.voice_profile import (  # noqa: F401 - the three constants are re-exported (scripts use them)
     DEFAULT_STYLE,
     LEGACY_VOICE_SETTINGS,
     STYLE_MODELS,
     ResolvedVoice,
+    default_voice_settings,
     platform_chunk_schedule,
     platform_model_id,
     platform_voice_id,
@@ -165,32 +166,112 @@ class PhraseBuffer:
     is skipped; and a very short fragment ("Haan.") is held and joined with the next phrase
     instead of being synthesised alone (tiny fragments lose intonation). ``flush`` returns the
     remainder.
+
+    Maximum hold (off unless ``max_hold_chars`` and/or ``max_hold_seconds`` is given): text that has no phrase
+    boundary yet is released anyway once it is that long, or has waited that long, so a reply without sentence
+    punctuation (or a slow stream) cannot sit in the buffer until the end of the turn. A forced release still
+    prefers a comma/semicolon, otherwise cuts at the last space (never inside a word), and never releases a piece
+    shorter than ``min_chars`` (that would be a tiny fragment). The same options also treat a Devanagari danda
+    glued to the next word as a sentence end. With neither option set the behaviour is unchanged.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        min_chars: int | None = None,
+        soft_chars: int | None = None,
+        max_hold_chars: int | None = None,
+        max_hold_seconds: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._buf = ""
+        # Defaults are the module constants; an org voice profile may set its own (Phase 2, test org).
+        self._min_chars = min_chars or _MIN_PHRASE_CHARS
+        self._soft_chars = soft_chars or _MIN_SOFT_PHRASE_CHARS
+        self._max_hold_chars = max_hold_chars
+        self._max_hold_seconds = max_hold_seconds
+        self._clock = clock
+        self._robust = max_hold_chars is not None or max_hold_seconds is not None
+        self._pending_since: float | None = None  # when the text now in the buffer started waiting
+
+    def _boundary_cut(self) -> int:
+        buf = self._buf
+        cut = -1
+        for i in range(len(buf) - 1):
+            ch = buf[i]
+            size = i + 1
+            if not buf[i + 1].isspace():
+                if self._robust and ch == "।" and size >= self._min_chars:
+                    cut = i + 1  # danda glued to the next word
+                continue
+            if ch in _SENTENCE_ENDS and size >= self._min_chars:
+                if ch == "." and _is_abbreviation(buf[:i]):
+                    continue
+                cut = i + 2
+            elif ch in _SOFT_ENDS and size >= self._soft_chars:
+                cut = i + 2
+        return cut
+
+    def _forced_cut(self, *, due_by_time: bool) -> int:
+        """Where to cut because the maximum hold was reached, or -1 (not reached, or nothing to cut safely)."""
+        if not self._robust or not self._buf:
+            return -1
+        buf = self._buf
+        over_chars = self._max_hold_chars is not None and len(buf) >= self._max_hold_chars
+        over_time = due_by_time or (
+            self._max_hold_seconds is not None
+            and self._pending_since is not None
+            and self._clock() - self._pending_since >= self._max_hold_seconds
+        )
+        if not (over_chars or over_time):
+            return -1
+        soft = -1
+        space = -1
+        for i in range(len(buf) - 1):
+            if i + 1 < self._min_chars:
+                continue  # a piece this short would be a tiny fragment
+            if buf[i + 1].isspace() and buf[i] in _SOFT_ENDS:
+                soft = i + 2
+        for i in range(len(buf) - 1, -1, -1):
+            if buf[i].isspace() and len(buf[:i].rstrip()) >= self._min_chars:
+                space = i + 1
+                break
+        return soft if soft > 0 else space
+
+    def _take(self, cut: int) -> str:
+        if cut <= 0:
+            return ""
+        out, self._buf = self._buf[:cut], self._buf[cut:]
+        self._pending_since = self._clock() if self._buf else None
+        if self._robust and out and not out[-1].isspace():
+            out += " "  # a glued danda: keep the next word from joining it
+        return out
 
     def feed(self, text: str) -> str:
         self._buf += text
-        cut = -1
-        for i in range(len(self._buf) - 1):
-            ch = self._buf[i]
-            if not self._buf[i + 1].isspace():
-                continue
-            size = i + 1
-            if ch in _SENTENCE_ENDS and size >= _MIN_PHRASE_CHARS:
-                if ch == "." and _is_abbreviation(self._buf[:i]):
-                    continue
-                cut = i + 2
-            elif ch in _SOFT_ENDS and size >= _MIN_SOFT_PHRASE_CHARS:
-                cut = i + 2
+        if self._buf and self._pending_since is None:
+            self._pending_since = self._clock()
+        cut = self._boundary_cut()
         if cut < 0:
+            cut = self._forced_cut(due_by_time=False)
+        return self._take(cut)
+
+    def deadline(self) -> float | None:
+        """Clock time at which waiting text becomes due, or None (nothing waiting / no time limit)."""
+        if self._max_hold_seconds is None or not self._buf or self._pending_since is None:
+            return None
+        return self._pending_since + self._max_hold_seconds
+
+    def poll(self) -> str:
+        """Release waiting text whose time limit has passed (no new text needed). '' when not due, or when
+        the waiting text is too short to release without making a tiny fragment."""
+        due = self.deadline()
+        if due is None or self._clock() < due:
             return ""
-        out, self._buf = self._buf[:cut], self._buf[cut:]
-        return out
+        return self._take(self._forced_cut(due_by_time=True))
 
     def flush(self) -> str:
         out, self._buf = self._buf, ""
+        self._pending_since = None
         return out
 
 
@@ -217,10 +298,8 @@ class ElevenLabsTTSSession:
         self._voice_id = voice_id or (profile.voice_id if profile else None) or platform_voice_id()
         self._model_id = model_id or (profile.model_id if profile else None) or platform_model_id()
         self._voice_settings: dict[str, Any] = (
-            dict(profile.voice_settings) if profile else dict(LEGACY_VOICE_SETTINGS)
+            dict(profile.voice_settings) if profile else default_voice_settings(self._model_id)
         )
-        if not profile and self._model_id in STYLE_MODELS:
-            self._voice_settings["style"] = DEFAULT_STYLE
         # Spoken-form rewriting of the text sent to TTS (off unless the org's
         # profile enables it); None means send text through untouched.
         self._normalizer: TTSNormalizer | None = (
@@ -233,9 +312,25 @@ class ElevenLabsTTSSession:
         # Phrase-aware streaming (off unless VOICE_TTS_PHRASE_FLUSH): whole phrases are sent with
         # flush=true so the provider speaks each with full context instead of waiting on its
         # character threshold.
+        # An org profile's ``phrase_flush`` (Phase 2, test org) overrides the platform flag; unset follows it.
+        flush_on = settings.voice_tts_phrase_flush
+        if profile is not None and profile.phrase_flush is not None:
+            flush_on = profile.phrase_flush
+        hold_ms = profile.phrase_max_hold_ms if profile else None
+        self._hold_seconds: float | None = hold_ms / 1000 if (flush_on and hold_ms) else None
         self._phrases: PhraseBuffer | None = (
-            PhraseBuffer() if settings.voice_tts_phrase_flush else None
+            PhraseBuffer(
+                profile.phrase_min_chars if profile else None,
+                profile.phrase_soft_chars if profile else None,
+                profile.phrase_max_hold_chars if profile else None,
+                self._hold_seconds,
+            )
+            if flush_on
+            else None
         )
+        # Only used with a maximum hold in seconds: a watcher that releases waiting text when the stream stalls.
+        self._hold_task: asyncio.Task[None] | None = None
+        self._send_lock = asyncio.Lock()
         self._ws: Any = None
         self._audio_queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._reader_task: asyncio.Task[None] | None = None
@@ -295,6 +390,7 @@ class ElevenLabsTTSSession:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
+        await self._cancel_hold_watch()
         if self._reader_task is not None:
             self._reader_task.cancel()
             try:
@@ -374,6 +470,50 @@ class ElevenLabsTTSSession:
         if self.first_send_at is None:
             self.first_send_at = time.monotonic()
 
+    def _arm_hold_watch(self) -> None:
+        """Start the watcher when text is waiting and a maximum hold in seconds is set."""
+        if self._phrases is None or self._hold_seconds is None or self._phrases.deadline() is None:
+            return
+        if self._hold_task is None or self._hold_task.done():
+            self._hold_task = asyncio.create_task(self._hold_watch())
+
+    async def _hold_watch(self) -> None:
+        """Release waiting text once its maximum hold has passed even if no new text arrives (a stalled or slow
+        stream). Ends when nothing is waiting, or the waiting text is too short to release as a phrase."""
+        try:
+            while self._phrases is not None:
+                due = self._phrases.deadline()
+                if due is None:
+                    return
+                delay = due - time.monotonic()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                async with self._send_lock:
+                    released = self._phrases.poll()
+                    if released:
+                        self.chars_sent += len(released)
+                        self._mark_first_send()
+                        await self._send(json.dumps({"text": released, "flush": True}))
+                        continue
+                later = self._phrases.deadline()
+                if later is None or later <= time.monotonic():
+                    return  # nothing waiting, or the waiting text is too short to release safely
+        except asyncio.CancelledError:
+            raise
+        except TTSConnectionClosed:
+            return  # already recorded as a failed turn by _send
+        except Exception:  # noqa: BLE001 - a flush timer must never break the call
+            logger.warning("elevenlabs_hold_watch_failed", exc_info=True)
+
+    async def _cancel_hold_watch(self) -> None:
+        task, self._hold_task = self._hold_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+
     async def send_text(self, text: str) -> None:
         """Push one text chunk (e.g. one ``response.text.delta``) in."""
         if not text or self._ws is None:
@@ -385,6 +525,15 @@ class ElevenLabsTTSSession:
             if not text:
                 return  # buffered until a clause boundary
         if self._phrases is not None:
+            if self._hold_seconds is not None:
+                async with self._send_lock:
+                    released = self._phrases.feed(text)
+                    if released:
+                        self.chars_sent += len(released)
+                        self._mark_first_send()
+                        await self._send(json.dumps({"text": released, "flush": True}))
+                self._arm_hold_watch()
+                return
             text = self._phrases.feed(text)
             if not text:
                 return  # held until a phrase boundary
@@ -401,6 +550,7 @@ class ElevenLabsTTSSession:
         internal buffer so it generates audio for whatever's left."""
         if self._ws is None:
             return
+        await self._cancel_hold_watch()
         if self._normalizer is not None:
             tail = self._normalizer.flush()
             if tail:

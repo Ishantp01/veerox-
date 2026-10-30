@@ -1,0 +1,7 @@
+[
+  {"name": "N0 baseline = pilot (platform voice, eleven_turbo_v2_5, legacy 0.45/0.80, no phrase flush)", "provider": "elevenlabs", "profile": {}},
+  {"name": "N1 phrase flush on (whole phrases, flush=true)", "provider": "elevenlabs", "profile": {"phrase_flush": true}},
+  {"name": "N2 phrase flush, shorter minimum phrase (8 chars)", "provider": "elevenlabs", "profile": {"phrase_flush": true, "phrase_min_chars": 8}},
+  {"name": "N3 production model eleven_multilingual_v2 (also sends style 0.15), no phrase flush", "provider": "elevenlabs", "profile": {"model_id": "eleven_multilingual_v2"}},
+  {"name": "N4 phrase flush + maximum hold (100 chars / 500 ms)", "provider": "elevenlabs", "profile": {"phrase_flush": true, "phrase_max_hold_chars": 100, "phrase_max_hold_ms": 500}}
+]
