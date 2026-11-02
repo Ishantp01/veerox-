@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { Activity, Cloud, CreditCard, Layers } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -10,6 +11,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  Select,
   Skeleton,
   Table,
   TableCell,
@@ -67,15 +69,35 @@ const STATUS_BADGE: Record<string, "success" | "live" | "neutral"> = {
  * metric allocation, not an exact per-tenant bill (req §10/§12).
  */
 export default function UsagePage() {
-  const usage = useOrgUsage("current");
-  const estimate = useOrgBillingEstimate("current");
+  // Last 24 months (UTC, newest first); the server's "current" is the first entry.
+  const months = useMemo(() => {
+    const now = new Date();
+    return Array.from({ length: 24 }, (_, i) => {
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    });
+  }, []);
+  const [period, setPeriod] = useState<string>(months[0]);
+  const usage = useOrgUsage(period);
+  const estimate = useOrgBillingEstimate(period);
   const isError = usage.isError || estimate.isError;
 
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="Usage & Billing"
-        description="Your organization's usage this billing period, and an estimate of what it costs."
+        description="Your organization's usage for the selected billing period, and an estimate of what it costs."
+        action={
+          <div className="w-36">
+            <Select value={period} onChange={setPeriod}>
+              {months.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </Select>
+          </div>
+        }
       />
 
       {!isError && (

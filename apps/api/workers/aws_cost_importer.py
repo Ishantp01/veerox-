@@ -26,6 +26,7 @@ from apps.api.config import settings
 from apps.api.db.models.aws_cost_pool import AWS_COST_POOL_CATEGORIES, AwsCostPool
 from apps.api.db.session import AsyncSessionLocal
 from apps.api.redis_client import record_error
+from apps.api.workers.cost_allocation_worker import allocate_open_periods
 from apps.api.workers.usage_monthly_aggregator import current_billing_period
 
 logger = structlog.get_logger(__name__)
@@ -166,6 +167,7 @@ async def run_aws_cost_importer() -> None:
     while True:
         try:
             await import_aws_costs()
+            await allocate_open_periods()  # per-org share visible without a manual period close
         except Exception:  # noqa: BLE001
             logger.exception("aws_cost_importer_tick_failed")
             await record_error()

@@ -185,3 +185,32 @@ async def get_org_allocated_cost(db: AsyncSession, org_id: UUID, billing_period:
         )
     ).scalars().all()
     return sum(rows, Decimal("0"))
+
+
+async def allocate_open_periods() -> int:
+    """Refresh the usage-based AWS allocation for the previous and the current billing period so every org's
+    dashboard shows its share without waiting for an admin to close the month. A period the billing close has locked
+    is left alone (its allocation is final); every other run adds a new ``allocation_version``, never overwriting an
+    earlier one. Returns the number of rows written."""
+    from apps.api.workers.usage_monthly_aggregator import current_billing_period
+
+    current = current_billing_period()
+    year, month = (int(p) for p in current.split("-"))
+    previous = f"{year - 1:04d}-12" if month == 1 else f"{year:04d}-{month - 1:02d}"
+    written = 0
+    for period in (previous, current):
+        async with AsyncSessionLocal() as db:
+            locked = (
+                await db.execute(
+                    select(func.count())
+                    .select_from(UsageMonthly)
+                    .where(
+                        UsageMonthly.billing_period == period,
+                        UsageMonthly.calculation_status == "locked",
+                    )
+                )
+            ).scalar_one()
+        if locked:
+            continue
+        written += await allocate_costs(period)
+    return written
