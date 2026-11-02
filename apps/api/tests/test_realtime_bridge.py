@@ -207,3 +207,21 @@ async def test_the_reply_after_a_cut_greeting_carries_the_disclosure(_greeting_b
     await asyncio.sleep(0.2)
     texts = [str(m.get("response", {}).get("instructions", "")) for m in call.replies()]
     assert any("AI assistant" in t for t in texts)
+
+
+# --- a reply to a turn with no caller words must not introduce the agent a second time ---
+
+
+async def test_empty_turn_after_the_intro_does_not_reintroduce(monkeypatch: pytest.MonkeyPatch) -> None:
+    call = Call(last_spoken_text="Hello! Main Veer, AI assistant.")
+    await adapter._fire_pending_reply(call.agent, call.state)
+    (reply,) = call.replies()
+    assert adapter.NO_REINTRO_INSTRUCTION in reply["response"]["instructions"]
+
+
+async def test_real_caller_words_get_a_plain_reply() -> None:
+    call = Call(last_spoken_text="Hello! Main Veer, AI assistant.", pending_user_transcript="pricing batao")
+    call.state.utterance_text = "pricing batao"
+    await adapter._fire_pending_reply(call.agent, call.state)
+    (reply,) = call.replies()
+    assert adapter.NO_REINTRO_INSTRUCTION not in str(reply.get("response"))

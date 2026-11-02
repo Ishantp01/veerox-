@@ -1110,6 +1110,12 @@ GREETING_CUT_INSTRUCTION = (
 )
 
 
+NO_REINTRO_INSTRUCTION = (
+    "You have already greeted the caller and said who you are. Do not greet or introduce yourself again. If you did "
+    "not catch what they said, say so in a few words and ask them to repeat, or simply continue where you left off."
+)
+
+
 async def _cut_now(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, reason: str) -> None:
     """Stop the agent mid-speech: drop queued audio and make sure the
     caller's turn gets answered.
@@ -1722,6 +1728,7 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
             state.priority_reply = False
             if settings.voice_smart_turn_taking:
                 response = _with_priority(response, state)
+        disclosure_owed = state.disclosure_owed
         if state.disclosure_owed:
             state.disclosure_owed = False
             response = dict(response or {})
@@ -1729,6 +1736,17 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
             response["instructions"] = f"{base}\n\n{GREETING_CUT_INSTRUCTION}".strip()
         state.answering_transcript = _current_transcript(state)
         state.answering_utt = state.utt_seq
+        if (
+            state.last_spoken_text
+            and not disclosure_owed
+            and not state.answering_transcript
+            and not state.utterance_text.strip()
+        ):
+            # The agent already spoke (its intro) and the caller's turn has no words (a cut on noise or a
+            # reflexive "hello?"): a plain reply would introduce the agent a second time.
+            response = dict(response or {})
+            base = response.get("instructions") or state.base_instructions
+            response["instructions"] = f"{base}\n\n{NO_REINTRO_INSTRUCTION}".strip()
         response = _with_triggers(response, state)
         response = _with_memory(response, state)
         if response is not None:
