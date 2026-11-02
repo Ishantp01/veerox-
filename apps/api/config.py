@@ -160,6 +160,21 @@ class Settings(BaseSettings):
     # gpt-live-transcribe streaming delay: minimal|low|medium|high|xhigh —
     # measured ~1s lower lag at "minimal" than the default.
     voice_live_transcribe_delay: str = "minimal"
+    # VOICE_LIVE_SHADOW_OWNERSHIP: SHADOW MODE only. Attribute each live delta to a caller turn by arrival time
+    # (channels/voice/live_ownership_shadow.py) and log how often that agrees with the item-id rule. It never
+    # cuts, delays or changes anything. Off by default. Grace: how long after the commit a turn still accepts
+    # deltas; min lag: a delta sooner than this after a new turn starts (and soon after the previous commit) is
+    # ambiguous: possibly that turn's tail.
+    voice_live_shadow_ownership: bool = False
+    voice_live_shadow_grace_ms: int = 1500
+    voice_live_shadow_min_lag_ms: int = 500
+    # A delta this soon after a new turn starts, while the previous turn was committed within the recency window,
+    # could be that turn's tail: it is classed ambiguous (never confirmed, never rejected).
+    voice_live_shadow_prev_commit_recency_ms: int = 3000
+    # An open turn whose commit never arrives is abandoned after this long without activity, or after the stopped wait
+    # following speech_stopped, so later speech is not merged into it.
+    voice_live_shadow_open_turn_timeout_ms: int = 20000
+    voice_live_shadow_stopped_commit_wait_ms: int = 5000
     # What the agent does when the caller asks a real question while it is still
     # talking. "answer_now" (default): stop and answer straight away (small
     # acknowledgements like "ok" / "theek hai" are ignored either way).
@@ -338,6 +353,9 @@ class Settings(BaseSettings):
     # Opt-in: pre-synthesize an org's custom greeting with ElevenLabs and play
     # the cached audio instead of generating it live (channels/voice/greeting.py).
     voice_greeting_audio_cache: bool = False
+    # Opt-in (needs VOICE_GREETING_AUDIO_CACHE): an org with no fixed greeting gets its opening line derived from
+    # the call's script once, then synthesised and cached. Editing the script derives and caches a new one.
+    voice_script_greeting_cache: bool = False
     # Voice-profile preview endpoint (POST /admin/settings/voice-profile/preview):
     # max syntheses per org per minute, and the longest phrase accepted.
     voice_preview_per_minute: int = 6

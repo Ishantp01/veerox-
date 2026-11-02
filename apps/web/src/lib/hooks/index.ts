@@ -180,6 +180,9 @@ export {
 export {
   useAdminOrgUsage,
   useAdminAwsCosts,
+  useAdminAwsCostsRange,
+  useAdminOrgUsageRange,
+  monthsBetween,
   useCloseBillingPeriod,
   type AdminOrgUsage,
   type AwsCostPool,

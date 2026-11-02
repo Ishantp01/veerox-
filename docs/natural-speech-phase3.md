@@ -103,9 +103,9 @@ Command: `python -m pytest apps -q -p no:cacheprovider -rs`, run once on the fin
 
 | Passed | Failed | Skipped | Errors | Warnings | Duration |
 |---|---|---|---|---|---|
-| **2862** | **0** | **0** | **0** | 8 | **727.29 s (12 min 07 s)** |
+| **2867** | **0** | **0** | **0** | 8 | **796.97 s (13 min 17 s)** |
 
-2,862 is the previous 2,802 plus the 60 new tests. The 8 warnings are the same FastAPI "Duplicate Operation ID" notices in `channels/voice/webhook.py` as before, a file not touched in any phase. Not run: nothing needing a real provider, database server or phone (the suite uses fakes).
+2,867 is the Phase 2 total of 2,802 plus the 65 Phase 3 tests, run once after the last code edit (the updated-decisions changes included). The 8 warnings are the same FastAPI "Duplicate Operation ID" notices in `channels/voice/webhook.py` as before, a file not touched in any phase. Not run: nothing needing a real provider, database server or phone (the suite uses fakes).
 
 **Backward compatibility.** Without the new fields: `PhraseBuffer()` and the session behave byte for byte as before (old tests unchanged and passing; a test pins the exact messages); the profile fingerprint (greeting-cache key) is unchanged; `prompt_options()` and the prompt are unchanged; stored profiles load as before and `exclude_none` means an unset new field is never persisted. `elevenlabs_client` still re-exports `STYLE_MODELS`, `DEFAULT_STYLE` and `LEGACY_VOICE_SETTINGS` (a script uses them). The only visible change for existing orgs is the settings endpoint now also lists the new fields and reports the true style/platform values.
 

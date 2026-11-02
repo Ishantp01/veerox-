@@ -47,7 +47,13 @@ from apps.api.channels.voice import (
     turn_controller,
 )
 from apps.api.channels.voice.compliance import RecordingPolicy, resolve_recording_policy
-from apps.api.channels.voice.greeting import effective_brand, greeting_cache, greeting_instruction
+from apps.api.channels.voice.greeting import (
+    derive_script_greeting,
+    effective_brand,
+    greeting_cache,
+    greeting_instruction,
+    peek_script_greeting,
+)
 from apps.api.channels.voice.latency import LatencyTracker, startup_emit, startup_mark
 from apps.api.channels.voice.voice_profile import (
     ResolvedVoice,
@@ -148,7 +154,11 @@ async def _pump_openai_events(oai: Any, ws: Any, state: Any, log: Any, started: 
             break
         try:
             event = json.loads(raw)
-            await voice_adapter.handle_openai_event(event, ws, oai, state, log)
+            voice_adapter.shadow_event_begin(state, event)  # processing-time metadata for the shadow tracker only
+            try:
+                await voice_adapter.handle_openai_event(event, ws, oai, state, log)
+            finally:
+                voice_adapter.shadow_event_end(state)
         except websockets.ConnectionClosed:
             # A handler can fail on either provider. Check the actual OpenAI
             # connection, rather than attributing the exception by its class.
@@ -266,7 +276,7 @@ def start_precall_connect(
         if settings.voice_greeting_audio_cache:
             # Independent of the OpenAI connect: start synthesising now, while the phone rings (the first request to a
             # voice after idle was measured at 3.6 s on the Phase 8K call), so the greeting is ready when the callee answers.
-            asyncio.create_task(_warm_greeting_cache(resolved_org_id))
+            asyncio.create_task(_warm_greeting_cache(resolved_org_id, campaign_target_id))
         instructions = await _system_instructions(
             campaign_target_id, resolved_org_id, remote_number=remote_number
         )
@@ -296,10 +306,11 @@ def start_precall_connect(
     asyncio.create_task(_expire())
 
 
-async def _warm_greeting_cache(org_id: UUID) -> None:
-    """Fill the greeting audio cache for this org's reviewed greeting, if it is not already filled. Never raises."""
+async def _warm_greeting_cache(org_id: UUID, campaign_target_id: UUID | None = None) -> None:
+    """Fill the greeting audio cache for this call's greeting (the org's fixed one, else the one derived from the
+    script), if it is not already filled. Never raises."""
     try:
-        greeting = await _load_org_greeting(org_id)
+        greeting = await _load_call_greeting(org_id, campaign_target_id, derive=True)
         if greeting:
             greeting_cache.ensure_in_background(org_id, greeting, await _load_org_voice(org_id))
     except Exception:  # noqa: BLE001 - a cache warm-up must never affect a call
@@ -373,6 +384,56 @@ async def _fetch_org(org_id: UUID) -> Org | None:
     except Exception:  # noqa: BLE001
         logger.warning("voice_org_lookup_failed", org_id=str(org_id), exc_info=True)
         return None
+
+
+async def _resolve_voice_script_text(campaign_target_id: UUID | None, org_id: UUID) -> str | None:
+    """The script text this call runs on, in the same order as ``_system_instructions`` (campaign-pinned, else the
+    org's default voice script); None when it runs on the platform's built-in prompt."""
+    async with AsyncSessionLocal() as db:
+        if campaign_target_id is not None:
+            target = await db.get(CampaignTarget, campaign_target_id)
+            campaign = await db.get(CallCampaign, target.campaign_id) if target else None
+            if campaign is not None and campaign.script_id is not None:
+                script = await db.get(Script, campaign.script_id)
+                return script.content if script is not None else None
+        result = await db.execute(
+            select(Script)
+            .where(Script.org_id == org_id, Script.channel == "voice", Script.is_default.is_(True))
+            .order_by(Script.updated_at.desc())
+            .limit(1)
+        )
+        default_script = result.scalar_one_or_none()
+        return default_script.content if default_script is not None else None
+
+
+async def _load_call_greeting(
+    org_id: UUID, campaign_target_id: UUID | None, org: Any = _NOT_GIVEN, *, derive: bool = False
+) -> str | None:
+    """The fixed opening for this call: the org's own greeting, else (VOICE_SCRIPT_GREETING_CACHE) the one derived
+    from the script, so a new script gets a new greeting and an unchanged script reuses its cached one.
+    ``derive=False`` (the call path) only reuses an already-derived line and never waits on the model; the dial-time
+    warm-up passes ``derive=True``. None means the live greeting, as before. Never raises."""
+    fixed = await (_load_org_greeting(org_id) if org is _NOT_GIVEN else _load_org_greeting(org_id, org=org))
+    if fixed or not (settings.voice_script_greeting_cache and settings.voice_greeting_audio_cache):
+        return fixed
+    try:
+        script_text = await _resolve_voice_script_text(campaign_target_id, org_id)
+        if not script_text:
+            return None
+        brand = effective_brand(await _fetch_org(org_id) if org is _NOT_GIVEN else org)
+        disclosure = settings.voice_greeting_ai_disclosure
+        if derive:
+            return await derive_script_greeting(script_text, brand, disclosure)
+        return peek_script_greeting(script_text, brand, disclosure)
+    except Exception:  # noqa: BLE001
+        logger.warning("voice_script_greeting_lookup_failed", org_id=str(org_id), exc_info=True)
+        return None
+
+
+async def _load_call_greeting_for(
+    org_id: UUID, campaign_target_id: UUID | None, org: Any = _NOT_GIVEN
+) -> str | None:
+    return await _load_call_greeting(org_id, campaign_target_id, org)
 
 
 async def _load_org_greeting(org_id: UUID, org: Any = _NOT_GIVEN) -> str | None:
@@ -981,7 +1042,9 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                 return await load(*args, org=await org_task)
 
             ctx_task = asyncio.create_task(_from_org(_call_context, resolved_org_id, caller))
-            greeting_task = asyncio.create_task(_from_org(_load_org_greeting, resolved_org_id))
+            greeting_task = asyncio.create_task(
+                _from_org(_load_call_greeting_for, resolved_org_id, campaign_target_id)
+            )
             voice_task = asyncio.create_task(_from_org(_load_org_voice, resolved_org_id))
             # A reviewed, fixed greeting whose audio is already cached needs neither the model nor the conversation row:
             # send it now. (Only when the cache flag is on and the entry exists; otherwise the live path below.)
@@ -1378,6 +1441,9 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                         "voice_live_turn_summary",
                         **turn_controller.summary_fields(state.live_stats, state.usage.judge_in, state.usage.judge_out),
                     )
+                    if state.live_shadow is not None:
+                        # Shadow-mode ownership (VOICE_LIVE_SHADOW_OWNERSHIP): counts and timings only, no text.
+                        log.info("voice_live_shadow_ownership_summary", **state.live_shadow.summary())
                 # pump_call_to_openai already closes oai in its own finally on
                 # the normal path — this is a safety net for the (unusual) case
                 # where something above raised before the pumps ever started.

@@ -40,6 +40,7 @@ from apps.api.channels.voice import language_detect
 from apps.api.channels.voice import (
     call_control,
     conversation_state,
+    live_ownership_shadow,
     recovery,
     script_rules,
     turn_controller,
@@ -324,6 +325,7 @@ class CallState:
     live_turn_utt: int = -1  # utt_seq when the current live turn began
     live_turn_started_at: float = 0.0
     live_item_owner: dict[str, int] = field(default_factory=dict)
+    live_shadow: Any = field(default=None, repr=False)  # live_ownership_shadow.ShadowOwnership (VOICE_LIVE_SHADOW_OWNERSHIP)
     commit_cut_task: "asyncio.Task[None] | None" = field(default=None, repr=False)
     # Bumped on every cut/reconnect; long-lived audio forwarders compare it to the
     # value they started with and stop forwarding the moment it changes.
@@ -1407,6 +1409,62 @@ LIVE_REBIND_AFTER_SECONDS = 4.0
 _MAX_TRACKED_LIVE_ITEMS = 64
 
 
+def _shadow(state: CallState) -> Any:
+    """The shadow-mode ownership tracker for this call, or None when VOICE_LIVE_SHADOW_OWNERSHIP is off."""
+    if not settings.voice_live_shadow_ownership:
+        return None
+    if state.live_shadow is None:
+        state.live_shadow = live_ownership_shadow.ShadowOwnership(
+            grace_s=settings.voice_live_shadow_grace_ms / 1000,
+            min_lag_s=settings.voice_live_shadow_min_lag_ms / 1000,
+            prev_commit_recency_s=settings.voice_live_shadow_prev_commit_recency_ms / 1000,
+            open_turn_timeout_s=settings.voice_live_shadow_open_turn_timeout_ms / 1000,
+            stopped_commit_wait_s=settings.voice_live_shadow_stopped_commit_wait_ms / 1000,
+        )
+    return state.live_shadow
+
+
+_SHADOW_DISAGREE_LOG_LIMIT = 30
+
+
+def _shadow_record(state: CallState, call: str, log: Any, *args: Any, **kwargs: Any) -> None:
+    """Observation only: never raises, never touches playback, replies or the item-id decision."""
+    try:
+        tracker = _shadow(state)
+        if tracker is None:
+            return
+        result = getattr(tracker, call)(*args, **kwargs)
+        # Ambiguous decisions have no agreement value and are never logged as disagreements.
+        if call == "on_delta" and result.agreement is False:
+            if tracker.counts.get("disagreed_total", 0) <= _SHADOW_DISAGREE_LOG_LIMIT:
+                log.info(
+                    "voice_live_shadow_disagree", shadow=result.kind, reason=result.reason, turn=result.turn_id,
+                    legacy_accepted=result.legacy_accepted, since_start_ms=result.since_start_ms,
+                    since_commit_ms=result.since_commit_ms, chars=result.text_len,
+                    item_id_present=result.item_id_present, main_inflight_ms=result.main_inflight_ms,
+                )
+    except Exception:  # noqa: BLE001 - a diagnostic must never touch the call
+        return
+
+
+def shadow_event_begin(state: CallState, event: Any) -> None:
+    """The main Realtime pump is about to handle ``event`` (processing-time measurement only; flag off: no-op)."""
+    try:
+        tracker = _shadow(state)
+        if tracker is not None:
+            tracker.main_begin(event.get("type") if isinstance(event, dict) else None)
+    except Exception:  # noqa: BLE001
+        return
+
+
+def shadow_event_end(state: CallState) -> None:
+    try:
+        if state.live_shadow is not None:
+            state.live_shadow.main_end()
+    except Exception:  # noqa: BLE001
+        return
+
+
 def _live_delta_is_current(state: CallState, item_id: str | None, log: Any) -> bool:
     """False when this fragment belongs to an earlier caller turn and must not touch the current one."""
     if not item_id:
@@ -1438,7 +1496,9 @@ async def handle_live_delta(
 ) -> None:
     """A partial-transcript fragment of what the caller is saying. While the
     agent is talking, decide from the words so far whether to cut it off."""
-    if not _live_delta_is_current(state, item_id, log):
+    current = _live_delta_is_current(state, item_id, log)
+    _shadow_record(state, "on_delta", log, len(delta), item_id=item_id, legacy_accepted=current)
+    if not current:
         return
     state.utterance_text += delta
     if state.hold_until - time.monotonic() > 0 and not state.caller_speaking:
@@ -3132,6 +3192,7 @@ async def handle_openai_event(
                 state.item_previous.pop(next(iter(state.item_previous)))
 
     elif etype == "input_audio_buffer.speech_started":
+        _shadow_record(state, "on_speech_started", log, agent_busy=_agent_busy(state))
         state.t_speech_started = time.monotonic()
         state.speech_turn_id = state.assistant_turn_id
         ack = _ack_voice(state)
@@ -3216,6 +3277,7 @@ async def handle_openai_event(
                 )
 
     elif etype == "input_audio_buffer.speech_stopped":
+        _shadow_record(state, "on_speech_stopped", log)
         state.caller_speaking = False
         state.t_speech_stopped = time.monotonic()
         if not (state.greeting_guard_until and state.t_speech_stopped < state.greeting_guard_until):
@@ -3275,6 +3337,7 @@ async def handle_openai_event(
             state.committed_item_ids[commit_id] = None
             while len(state.committed_item_ids) > 128:
                 state.committed_item_ids.pop(next(iter(state.committed_item_ids)))
+        _shadow_record(state, "on_committed", log)
         state.transcripts_outstanding += 1
         state.utt_seq += 1
         state.utt_queue.append((event.get("item_id"), state.utt_seq, state.speech_turn_id))

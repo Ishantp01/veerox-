@@ -330,3 +330,105 @@ async def test_a_failure_inside_the_early_cut_is_contained(monkeypatch: pytest.M
     await _caller_turn_over_busy_agent(call, text="", speech_seconds=2.5)
     assert "voice_commit_time_cut_failed" in call.log.warnings
     await adapter.cancel_pending_tasks(call.state)
+
+
+# --- offline validation gaps: plain acknowledgements, late text, late transcripts -------------------------------
+
+
+@pytest.mark.parametrize("text", ["okay", "ok", "hmm", "haan", "achha", "acha ji", "theek hai ji", "okay okay haan"])
+async def test_plain_acknowledgements_arriving_late_never_cut_a_busy_agent(
+    monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    """No text at the commit (production: live text lags); the acknowledgement arrives later: still no cut."""
+    _flags(monkeypatch, voice_commit_time_cut=True)
+    call = _timed_call(live=types.SimpleNamespace(healthy=True))
+    await _long_answer_still_playing(call)
+    await _caller_turn_over_busy_agent(call, text=text, speech_seconds=0.8)
+    assert not call.cleared() and call.state.eleven_session is not None
+    await adapter.cancel_pending_tasks(call.state)
+
+
+async def test_limitation_long_textless_acknowledgements_are_cut_without_local_vad(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Documents a VOICE_COMMIT_TIME_CUT risk: with no text and no local VAD, 2 s+ of any speech counts."""
+    _flags(monkeypatch, voice_commit_time_cut=True)
+    call = _timed_call(live=types.SimpleNamespace(healthy=True))
+    await _long_answer_still_playing(call)
+    await call.event("input_audio_buffer.speech_started")
+    call.state.t_speech_started = time.monotonic() - 2.2  # "haan ji... theek hai... achha", slowly
+    await call.event("input_audio_buffer.speech_stopped")
+    await call.event("input_audio_buffer.committed", item_id="slow_ack")
+    await asyncio.sleep(0.15)
+    assert call.cleared()  # the false-interruption exposure the pilot benchmark must measure
+    await adapter.cancel_pending_tasks(call.state)
+
+
+async def test_a_redelivered_transcript_after_a_commit_cut_causes_no_second_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _flags(monkeypatch, voice_commit_time_cut=True)
+    call = _timed_call(live=types.SimpleNamespace(healthy=True))
+    await _long_answer_still_playing(call)
+    await call.event("input_audio_buffer.speech_started")
+    call.state.t_speech_started = time.monotonic() - 2.5
+    await call.event("input_audio_buffer.speech_stopped")
+    await call.event("input_audio_buffer.committed", item_id="q9")
+    await asyncio.sleep(0.15)
+    assert len(call.replies()) == 1
+    for _ in range(2):  # the final transcript of the cut question, delivered twice, after the reply started
+        await call.event(
+            "conversation.item.input_audio_transcription.completed", item_id="q9", transcript="price batao"
+        )
+    await asyncio.sleep(0.15)
+    assert len(call.replies()) == 1
+    await adapter.cancel_pending_tasks(call.state)
+
+
+# --- LocalVAD in the loop (VOICE_LOCAL_VAD + VOICE_COMMIT_TIME_CUT), text-less turns ---------------------------
+
+
+def _vad_tone(amp: float, seconds: float) -> str:
+    import base64
+    import math
+
+    from apps.api.channels.voice import local_vad
+
+    table = local_vad._ULAW
+    samples = [int(amp * math.sin(2 * math.pi * 220 * n / 8000)) for n in range(int(8000 * seconds))]
+    return base64.b64encode(bytes(min(range(256), key=lambda i: abs(table[i] - x)) for x in samples)).decode()
+
+
+async def _textless_turn_with_vad(call: Call, *, loud_seconds: float, duration: float) -> None:
+    from apps.api.channels.voice import local_vad
+
+    call.state.vad = local_vad.LocalVAD()
+    call.state.vad.feed(_vad_tone(30, 0.5))  # room tone: settles the noise floor
+    await call.event("input_audio_buffer.speech_started")  # marks the VAD utterance
+    call.state.t_speech_started = time.monotonic() - duration
+    call.state.vad.feed(_vad_tone(6000, loud_seconds))
+    await call.event("input_audio_buffer.speech_stopped")
+    await call.event("input_audio_buffer.committed", item_id="vad1")
+    await asyncio.sleep(0.15)
+
+
+async def test_with_local_vad_a_soft_or_patchy_textless_turn_is_not_cut(monkeypatch: pytest.MonkeyPatch) -> None:
+    """2.2 s long by the clock but only 0.6 s of confident speech frames: noise-like, so the gate keeps the agent."""
+    _flags(monkeypatch, voice_commit_time_cut=True)
+    call = _timed_call(live=types.SimpleNamespace(healthy=True))
+    await _long_answer_still_playing(call)
+    await _textless_turn_with_vad(call, loud_seconds=0.6, duration=2.2)
+    assert not call.cleared()
+    await adapter.cancel_pending_tasks(call.state)
+
+
+async def test_limitation_with_local_vad_loud_textless_speech_is_cut_even_if_it_is_only_an_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The energy gate cannot tell a long 'haan ji, theek hai' from a question: both are confident speech."""
+    _flags(monkeypatch, voice_commit_time_cut=True)
+    call = _timed_call(live=types.SimpleNamespace(healthy=True))
+    await _long_answer_still_playing(call)
+    await _textless_turn_with_vad(call, loud_seconds=1.8, duration=2.2)
+    assert call.cleared()
+    await adapter.cancel_pending_tasks(call.state)

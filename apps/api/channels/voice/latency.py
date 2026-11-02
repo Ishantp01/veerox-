@@ -271,7 +271,8 @@ class LatencyTracker:
             return
         self.mark("first_audio_sent")
         turn.emitted = True
-        if turn.kind in ("greeting", "greeting_cached"):
+        # Listen-first inbound calls have no greeting turn: the first reply is the first audio.
+        if turn.kind in ("greeting", "greeting_cached") or turn.seq == 1:
             startup_mark(self._ids.get("call_uuid"), "first_audio_sent")
             startup_emit(self._ids.get("call_uuid"), kind=turn.kind)
         try:

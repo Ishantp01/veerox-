@@ -186,6 +186,66 @@ async def synthesize_greeting(text: str, voice: ResolvedVoice | None = None) -> 
         return []
 
 
+_DERIVE_TIMEOUT_SECONDS = 6.0
+_DERIVE_SYSTEM = (
+    "You extract the opening line of a phone call from an agent's call script. Reply with ONLY the words the agent "
+    "speaks first, nothing else: no quotes, no labels, no explanation. If the script gives an exact opening line, "
+    "copy it word for word, in the same language and script. If it gives none, write one short, warm opening "
+    "(at most two sentences, under 200 characters) in the script's own language, using the agent name and company "
+    "the script gives. {disclosure}Do not ask a question about language."
+)
+_DISCLOSURE_NOTE = "The opening must make clear the agent is an AI assistant (add it briefly if the script's line lacks it). "
+
+_derived: OrderedDict[str, str | None] = OrderedDict()
+_DERIVED_MAX = 64
+
+
+def script_greeting_key(script_text: str, brand: str, ai_disclosure: bool) -> str:
+    """Identity of one script version: any edit to the script (or the brand/disclosure setting) is a new key."""
+    return hashlib.sha256(f"{brand}|{int(ai_disclosure)}|{script_text}".encode()).hexdigest()
+
+
+def peek_script_greeting(script_text: str, brand: str, ai_disclosure: bool) -> str | None:
+    """The already-derived opening for this exact script version, or None. Never calls the model."""
+    return _derived.get(script_greeting_key(script_text, brand, ai_disclosure))
+
+
+async def derive_script_greeting(script_text: str, brand: str, ai_disclosure: bool) -> str | None:
+    """The opening line for this script version, derived once and reused until the script changes.
+    None on any failure or unusable result: the call then opens live exactly as before."""
+    key = script_greeting_key(script_text, brand, ai_disclosure)
+    if key in _derived:
+        return _derived[key]
+    try:
+        from apps.api.core.llm import chat_completion  # local: keeps this module importable without the SDK
+
+        result = await asyncio.wait_for(
+            chat_completion(
+                [
+                    {
+                        "role": "system",
+                        "content": _DERIVE_SYSTEM.format(disclosure=_DISCLOSURE_NOTE if ai_disclosure else ""),
+                    },
+                    {"role": "user", "content": script_text},
+                ],
+                temperature=0.0,
+                max_tokens=160,
+            ),
+            timeout=_DERIVE_TIMEOUT_SECONDS,
+        )
+        text = validate_greeting((result.content or "").strip().strip("\"'"), require_disclosure=ai_disclosure)
+    except Exception:  # noqa: BLE001 - a derive failure must never affect a call
+        logger.warning("voice_script_greeting_derive_failed", exc_info=True)
+        return None  # not memoised: the next warm-up retries
+    if text is None:
+        return None
+    _derived[key] = text
+    while len(_derived) > _DERIVED_MAX:
+        _derived.popitem(last=False)
+    logger.info("voice_script_greeting_derived", chars=len(text))
+    return text
+
+
 class GreetingAudioCache:
     def __init__(self, max_entries: int = 64, synth: Synth | None = None) -> None:
         self._entries: OrderedDict[str, CachedGreeting] = OrderedDict()

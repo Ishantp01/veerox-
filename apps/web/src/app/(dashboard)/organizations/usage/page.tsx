@@ -22,8 +22,9 @@ import {
   useToast,
 } from "@/components/ui";
 import {
-  useAdminAwsCosts,
-  useAdminOrgUsage,
+  monthsBetween,
+  useAdminAwsCostsRange,
+  useAdminOrgUsageRange,
   useAdminOrgs,
   useCloseBillingPeriod,
 } from "@/lib/hooks";
@@ -39,6 +40,15 @@ const POOL_CATEGORY_LABELS: Record<string, string> = {
   logging: "Logging / Observability",
   misc: "Miscellaneous",
 };
+
+/** The last 24 months, newest first, as "YYYY-MM" (UTC, matching the server's billing period). */
+function recentMonths(): string[] {
+  const now = new Date();
+  return Array.from({ length: 24 }, (_, i) => {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+  });
+}
 
 const LICENSE_BADGE: Record<string, "success" | "danger" | "neutral"> = {
   active: "success",
@@ -58,16 +68,21 @@ const LICENSE_BADGE: Record<string, "success" | "danger" | "neutral"> = {
 export default function OrganizationUsagePage() {
   const { toast } = useToast();
   const confirm = useConfirm();
-  const awsCosts = useAdminAwsCosts("current");
+  const months = useMemo(recentMonths, []);
+  const [fromMonth, setFromMonth] = useState<string>(months[0]);
+  const [toMonth, setToMonth] = useState<string>(months[0]);
+  const periods = useMemo(() => monthsBetween(fromMonth, toMonth), [fromMonth, toMonth]);
+  const singleMonth = periods.length === 1;
+  const awsCosts = useAdminAwsCostsRange(periods);
   const orgs = useAdminOrgs();
   const closePeriod = useCloseBillingPeriod();
   const [selectedOrgId, setSelectedOrgId] = useState<string>("");
 
-  const orgUsage = useAdminOrgUsage(selectedOrgId || undefined, "current");
+  const orgUsage = useAdminOrgUsageRange(selectedOrgId || undefined, periods);
   const orgOptions = useMemo(() => orgs.data ?? [], [orgs.data]);
 
   async function handleClosePeriod() {
-    const period = awsCosts.data?.billing_period;
+    const period = singleMonth ? periods[0] : undefined;
     if (!period) return;
     const ok = await confirm({
       title: "Close billing period",
@@ -96,12 +111,39 @@ export default function OrganizationUsagePage() {
         action={
           <Button
             onClick={handleClosePeriod}
-            disabled={!awsCosts.data?.billing_period || closePeriod.isPending}
+            disabled={!singleMonth || closePeriod.isPending}
+            title={singleMonth ? undefined : "Pick a single month to close it"}
           >
             {closePeriod.isPending ? "Closing…" : "Close billing period"}
           </Button>
         }
       />
+
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <span className="text-sm text-slate-600 dark:text-slate-300">Period</span>
+        <div className="w-36">
+          <Select value={fromMonth} onChange={setFromMonth}>
+            {months.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <span className="text-sm text-slate-500">to</span>
+        <div className="w-36">
+          <Select value={toMonth} onChange={setToMonth}>
+            {months.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </Select>
+        </div>
+        {periods.length === 0 && (
+          <span className="text-xs text-rose-500">&quot;From&quot; must not be after &quot;to&quot;.</span>
+        )}
+      </div>
 
       {!isError && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -150,7 +192,7 @@ export default function OrganizationUsagePage() {
             <CardHeader>
               <CardTitle>AWS cost pools</CardTitle>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {awsCosts.data?.billing_period ?? "Current period"} — allocation version{" "}
+                {awsCosts.data?.billing_period ?? periods[0] ?? "—"} — allocation version{" "}
                 {awsCosts.data?.allocation_version ?? "—"}
               </p>
             </CardHeader>

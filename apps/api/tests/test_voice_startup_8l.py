@@ -556,6 +556,32 @@ def test_startup_marks_are_bounded_ordered_and_never_raise(monkeypatch: pytest.M
     assert "off" not in latency._STARTUPS
 
 
+def test_listen_first_reply_emits_startup_timeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    latency._STARTUPS.clear()
+    monkeypatch.setattr(settings, "voice_latency_tracking", True)
+    emitted: list[str] = []
+    monkeypatch.setattr(latency, "startup_emit", lambda _i, **kw: emitted.append(kw.get("kind", "")))
+    tracker = latency.LatencyTracker(call_uuid="lf")
+    tracker.begin_turn(kind="reply")  # no greeting turn on a listen-first call
+    tracker.mark_first_audio_sent()
+    assert emitted == ["reply"]
+    tracker.begin_turn(kind="reply")  # later turns must not emit again
+    tracker.mark_first_audio_sent()
+    assert emitted == ["reply"]
+
+
+def test_a_dropped_first_turn_emits_no_misleading_timeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    latency._STARTUPS.clear()
+    monkeypatch.setattr(settings, "voice_latency_tracking", True)
+    emitted: list[str] = []
+    monkeypatch.setattr(latency, "startup_emit", lambda _i, **kw: emitted.append(kw.get("kind", "")))
+    tracker = latency.LatencyTracker(call_uuid="lf2")
+    tracker.begin_turn(kind="reply")  # a filler that never produced audio
+    tracker.begin_turn(kind="reply")  # the real first spoken reply is turn 2
+    tracker.mark_first_audio_sent()
+    assert emitted == []  # no timeline, rather than one that includes the dropped turn
+
+
 # --- a model of the live call's link (about 0.8 s per database round trip) ----------------------------------------------------------------------
 
 
