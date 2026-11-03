@@ -367,8 +367,10 @@ def take_inbound_call(call_uuid: str) -> bool:
 
 
 LISTEN_FIRST_NOTE = (
-    "The caller dialled you and will speak first; do not speak until they do. In your first reply, greet them "
-    "warmly, say who you are and that you are an AI assistant, then answer what they said."
+    "The caller dialled you and will speak first; stay quiet until they finish their first turn. "
+    "Listen to what they actually said. In your first reply, give a brief, warm introduction as an AI assistant, "
+    "then answer their question or request directly. Do not repeat a generic greeting over their words, "
+    "ask what they need, or add a sales pitch. Keep the first reply concise and ask at most one follow-up question."
 )
 
 
