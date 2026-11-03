@@ -1428,10 +1428,10 @@ def _begin_live_turn(state: CallState) -> None:
         state.vad.mark_utterance()
 
 
-# A fragment of an item that belongs to an earlier turn is adopted by the current one only after the current turn
-# has been speaking this long with no text of its own: then the provider is evidently continuing one item across
-# turns (it does its own segmentation), and the alternative is losing the live text for the whole call.
-LIVE_REBIND_AFTER_SECONDS = 4.0
+# The live transcriber can reuse one item id across caller turns. Rebind it to a new utterance after a brief lag,
+# except during the short ambiguous window after a recent commit, when the text may still be the previous turn's tail.
+LIVE_REBIND_AFTER_SECONDS = 0.5
+LIVE_REBIND_PREVIOUS_COMMIT_SECONDS = 3.0
 _MAX_TRACKED_LIVE_ITEMS = 64
 
 
@@ -1503,10 +1503,18 @@ def _live_delta_is_current(state: CallState, item_id: str | None, log: Any) -> b
         return True
     if owner == state.live_turn:
         return True
+    now = time.monotonic()
+    turn_age = now - state.live_turn_started_at
+    recent_commit = (
+        state.t_committed > 0
+        and 0 <= now - state.t_committed <= LIVE_REBIND_PREVIOUS_COMMIT_SECONDS
+    )
+    ambiguous_tail = recent_commit and turn_age < LIVE_REBIND_AFTER_SECONDS * 2
     if (
         state.caller_speaking
         and not state.utterance_text.strip()
-        and time.monotonic() - state.live_turn_started_at >= LIVE_REBIND_AFTER_SECONDS
+        and turn_age >= LIVE_REBIND_AFTER_SECONDS
+        and not ambiguous_tail
     ):
         state.live_item_owner[item_id] = state.live_turn
         log.info("voice_live_item_rebound")
