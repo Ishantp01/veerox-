@@ -289,6 +289,7 @@ class ElevenLabsTTSSession:
         voice_id: str | None = None,
         model_id: str | None = None,
         profile: ResolvedVoice | None = None,
+        phrase_flush_override: bool = False,
     ) -> None:
         # ``profile`` is the call's org voice profile merged over the platform
         # settings (voice_profile.resolve_profile). None = exactly the
@@ -316,6 +317,9 @@ class ElevenLabsTTSSession:
         flush_on = settings.voice_tts_phrase_flush
         if profile is not None and profile.phrase_flush is not None:
             flush_on = profile.phrase_flush
+        elif phrase_flush_override:
+            flush_on = True
+        self.phrase_flush_enabled = flush_on
         hold_ms = profile.phrase_max_hold_ms if profile else None
         self._hold_seconds: float | None = hold_ms / 1000 if (flush_on and hold_ms) else None
         self._phrases: PhraseBuffer | None = (

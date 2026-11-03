@@ -1087,6 +1087,7 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
             # A notice or consent question has to be spoken first, so those calls still open with the agent.
             listen_first = inbound_marked and not policy.spoken_notice and policy.mode != "consent"
             if listen_first:
+                state.inbound_first_reply_tts_flush_pending = True
                 log.info("voice_listen_first")
             state.latency = LatencyTracker(
                 org_id=resolved_org_id, call_uuid=call_uuid or None, provider=provider

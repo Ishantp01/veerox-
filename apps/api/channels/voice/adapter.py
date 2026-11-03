@@ -91,6 +91,10 @@ class CallState:
     # no profile: platform voice/model and the original handshake. Never a
     # process-global; one org's profile cannot reach another org's call.
     voice: "ResolvedVoice | None" = None
+    # Inbound listen-first calls get phrase-aware ElevenLabs flushing on the
+    # first spoken reply only. Keep it pending until a real TTS session is
+    # acquired, so a preceding tool-only response does not consume the fast path.
+    inbound_first_reply_tts_flush_pending: bool = False
     # Per-turn ElevenLabs streaming-TTS state, live only between the first
     # response.text.delta and that response finishing — None the rest of
     # the time. Not used when tts_provider is "openai".
@@ -2444,16 +2448,23 @@ async def _open_elevenlabs_session(
             sarvam_client.SarvamWSTTSSession() if settings.sarvam_streaming_ws else sarvam_client.SarvamTTSSession()
         )
     else:  # recovery after a failure (``safe``) goes to ElevenLabs unless Sarvam-only is requested
+        phrase_flush_override = state.inbound_first_reply_tts_flush_pending and not safe
+        phrase_flush_kw = {"phrase_flush_override": True} if phrase_flush_override else {}
         session_cm = (
-            elevenlabs_client.ElevenLabsTTSSession(profile=state.voice)
+            elevenlabs_client.ElevenLabsTTSSession(profile=state.voice, **phrase_flush_kw)
             if (state.voice is not None and not safe)
-            else elevenlabs_client.ElevenLabsTTSSession()
+            else elevenlabs_client.ElevenLabsTTSSession(**phrase_flush_kw)
         )
     session = await session_cm.__aenter__()
     # Characters sent are accounted when the session closes (a retry's are shown separately).
     session.on_close = lambda chars, _retry=retry: state.usage.add_tts_chars(chars, retry=_retry)
     state.latency.mark("tts_ready")
     log.info("elevenlabs_session_ready", connect_ms=session.connect_ms)
+    if state.inbound_first_reply_tts_flush_pending and not safe:
+        log.info(
+            "voice_inbound_first_reply_phrase_flush",
+            enabled=getattr(session, "phrase_flush_enabled", False),
+        )
     if session.connect_ms is not None:
         state.latency.metric("tts_connect_ms", session.connect_ms, retry=retry)
     if settings.voice_tts_recovery and not safe:
@@ -3561,6 +3572,9 @@ async def handle_openai_event(
                         log.info("voice_tts_interrupted_open_dropped")
                         return
                     state.eleven_session = session
+                    # Consume this one-turn optimization only after an actual
+                    # spoken reply acquired its TTS session successfully.
+                    state.inbound_first_reply_tts_flush_pending = False
                 except Exception as exc:  # noqa: BLE001
                     if not settings.voice_tts_recovery:
                         raise
