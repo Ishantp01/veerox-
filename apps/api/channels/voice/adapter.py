@@ -1168,6 +1168,10 @@ async def _cut_now(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, 
 # VOICE_NATIVE_BARGE_IN: the caller must keep speaking this long over the agent before it is stopped, so a cough,
 # a click or a quick "hmm" never cuts it off.
 NATIVE_BARGE_IN_MIN_SPEECH_SECONDS = 0.4
+# If live transcription has not produced any words, require sustained speech
+# this long before treating the overlap as a real interruption. This protects
+# short acknowledgements while avoiding the slower two-second fallback.
+NATIVE_BARGE_IN_NO_TEXT_SECONDS = 1.5
 
 
 async def _native_barge_in(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
@@ -1193,7 +1197,7 @@ async def _native_barge_in(oai_ws: Any, call_ws: WebSocket, state: CallState, lo
             if not state.caller_speaking:
                 log.info("voice_native_barge_in_ignored", reason="no_text_short_burst")
                 return
-            if time.monotonic() - started >= LIVE_NO_TEXT_CUT_SECONDS:
+            if time.monotonic() - started >= NATIVE_BARGE_IN_NO_TEXT_SECONDS:
                 break
         await asyncio.sleep(0.1)
     # Energy gate: a soft or patchy sound is not an interruption even when no transcript has arrived yet.
