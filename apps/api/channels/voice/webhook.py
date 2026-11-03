@@ -330,7 +330,11 @@ async def answer(request: Request, background: BackgroundTasks) -> Response:
     # additive: harmless if never claimed (self-expires), and voice_stream
     # falls back to connecting fresh exactly as before if this wasn't
     # called or didn't finish in time.
-    if not is_outbound and settings.voice_listen_first_inbound:
+    if (
+        not is_outbound
+        and settings.voice_listen_first_inbound
+        and not settings.voice_greeting_first_inbound
+    ):
         mark_inbound_call(call_uuid)
     start_precall_connect(
         call_uuid,

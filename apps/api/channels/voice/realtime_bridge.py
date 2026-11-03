@@ -345,9 +345,8 @@ async def claim_precall_connect(
     return claimed
 
 
-# Calls the answer webhook saw as genuinely inbound (VOICE_LISTEN_FIRST_INBOUND), keyed by call id. The stream URL
-# looks the same for an inbound call and a dashboard-placed outbound one once the org is resolved, so the webhook
-# says which this is. In-process only: a miss means "greet first", the safe default.
+# Calls the answer webhook saw as genuinely inbound and explicitly configured for listen-first, keyed by call id.
+# In-process only: a miss means "greet first", the safe default.
 _INBOUND_TTL_SECONDS = 120.0
 _inbound_calls: dict[str, float] = {}
 
@@ -1034,7 +1033,11 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
         try:
             # Everything that needs the database starts together instead of one round trip after another (each is
             # awaited only where its result is needed). On a slow link the serial version cost ~4 s before the greeting.
-            inbound_marked = settings.voice_listen_first_inbound and take_inbound_call(call_uuid)
+            inbound_marked = (
+                settings.voice_listen_first_inbound
+                and not settings.voice_greeting_first_inbound
+                and take_inbound_call(call_uuid)
+            )
             conv_task = asyncio.create_task(
                 voice_adapter.open_voice_conversation(caller, call_uuid, org_id=org_id)
             )
@@ -1085,7 +1088,12 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
             brand, policy = await ctx_task
             state.consent_tool = policy.mode == "consent"
             # A notice or consent question has to be spoken first, so those calls still open with the agent.
-            listen_first = inbound_marked and not policy.spoken_notice and policy.mode != "consent"
+            listen_first = (
+                inbound_marked
+                and not settings.voice_greeting_first_inbound
+                and not policy.spoken_notice
+                and policy.mode != "consent"
+            )
             if listen_first:
                 state.inbound_first_reply_tts_flush_pending = True
                 log.info("voice_listen_first")

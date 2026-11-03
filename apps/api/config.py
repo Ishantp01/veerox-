@@ -196,10 +196,11 @@ class Settings(BaseSettings):
     # holding the reply until the agent's own queued audio has played out or a late live-transcript verdict arrives.
     # Acknowledgements ("haan ji", "theek hai") and short bursts are still left alone. Off by default.
     voice_commit_time_cut: bool = False
-    # Listen-first: on INBOUND calls only, the agent stays quiet until the caller speaks, then introduces itself
-    # (including that it is an AI) in its first reply. Outbound calls always greet first, so a callee's "hello?" is
-    # answered. Never applies when a recording notice or consent question must be spoken first.
-    voice_listen_first_inbound: bool = True
+    # Greet-first inbound calls: start the cached/live greeting as soon as the call media stream is ready. Real
+    # caller speech during the greeting can barge in; acknowledgments and reflexive hellos are handled separately.
+    voice_greeting_first_inbound: bool = True
+    # Legacy listen-first behavior. Kept as an explicit opt-out for deployments that set greeting-first false.
+    voice_listen_first_inbound: bool = False
     # Adaptive endpointing: hold the reply up to ~1s when the caller's text looks
     # unfinished ("haan, mera matlab..."). Off by default — it adds a second of
     # latency whenever a sentence happens to end on a connective word.
