@@ -1171,27 +1171,39 @@ NATIVE_BARGE_IN_MIN_SPEECH_SECONDS = 0.4
 
 
 async def _native_barge_in(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any) -> None:
-    """Stop the agent once the caller has spoken over it for NATIVE_BARGE_IN_MIN_SPEECH_SECONDS, unless what they
-    said so far is only acknowledgments ("sahi hai", "haan ji", "hmm"). Anything with a question or command word
-    ("wait", "stop", "kya", "nahi") is not an acknowledgment, so it stops the agent as soon as the window passes."""
+    """Stop for a real interruption, but wait for late live text before judging a short overlap.
+
+    The transcriber can still be empty when the 0.4s minimum expires. Treating that empty text as a real interruption
+    cut off callers who only said "ok" or "theek hai" before their backchannel transcript arrived.
+    """
+    started = state.t_speech_started or time.monotonic()
+    deadline = started + 8.0
     await asyncio.sleep(NATIVE_BARGE_IN_MIN_SPEECH_SECONDS)
-    if not state.caller_speaking:
-        log.info("voice_native_barge_in_ignored", reason="short_burst")
-        return
-    deadline = time.monotonic() + 8.0
     while True:
         text = state.utterance_text.strip()
-        if not (text and turn_controller.is_extended_backchannel(text)):
-            break
-        # Only acknowledgments so far: keep listening in case the caller carries on into a real question.
-        if not state.caller_speaking or time.monotonic() > deadline:
-            log.info("voice_native_barge_in_ignored", reason="backchannel")
-            return
-        await asyncio.sleep(0.15)
+        if text:
+            if not turn_controller.is_extended_backchannel(text):
+                break
+            # Only acknowledgments so far: keep listening in case the caller carries on into a real question.
+            if not state.caller_speaking or time.monotonic() > deadline:
+                log.info("voice_native_barge_in_ignored", reason="backchannel")
+                return
+        else:
+            # Give the live transcriber time to label a brief "ok" before the energy gate can cut the agent.
+            if not state.caller_speaking:
+                log.info("voice_native_barge_in_ignored", reason="no_text_short_burst")
+                return
+            if time.monotonic() - started >= LIVE_NO_TEXT_CUT_SECONDS:
+                break
+        await asyncio.sleep(0.1)
     # Energy gate: a soft or patchy sound is not an interruption even when no transcript has arrived yet.
     while state.vad is not None and not state.vad.sustained(NATIVE_BARGE_IN_MIN_SPEECH_SECONDS):
         if not state.caller_speaking or time.monotonic() > deadline:
             log.info("voice_vad_gate", cut=False, run_s=round(state.vad.run_seconds, 2), mean=round(state.vad.run_mean_prob, 2))
+            return
+        text = state.utterance_text.strip()
+        if text and turn_controller.is_extended_backchannel(text):
+            log.info("voice_native_barge_in_ignored", reason="backchannel")
             return
         await asyncio.sleep(0.05)
     if state.vad is not None:
