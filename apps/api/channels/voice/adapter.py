@@ -2503,12 +2503,15 @@ _PREWARM_MAX_AGE_S = 15.0
 
 
 def _start_prewarm(state: CallState, log: Any) -> None:
-    """VOICE_ELEVENLABS_PREWARM: begin opening this turn's ElevenLabs socket
+    """Begin opening this turn's ElevenLabs socket
     now, so the connect overlaps OpenAI's time-to-first-token. The socket is
     still single-use: it is claimed by this response's first text delta, or
-    discarded when the response ends without speaking (e.g. a tool call)."""
+    discarded when the response ends without speaking (e.g. a tool call).
+    The first listen-first inbound reply gets this one-shot latency optimization
+    even when general per-turn prewarming is disabled."""
+    first_inbound_reply = state.inbound_first_reply_tts_flush_pending
     if (
-        not settings.voice_elevenlabs_prewarm
+        (not settings.voice_elevenlabs_prewarm and not first_inbound_reply)
         or state.tts_provider != "elevenlabs"
         or state.suppress_response_audio
         or state.eleven_session is not None

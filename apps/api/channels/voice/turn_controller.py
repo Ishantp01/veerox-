@@ -256,6 +256,7 @@ CONTINUATION_WORDS = frozenset(
 # Sentence-final punctuation from the transcriber (Latin, Devanagari danda,
 # Arabic/Urdu question mark, full-width).
 _TERMINAL = (".", "?", "!", "।", "؟", "？", "！", "。")
+_OPENING_GREETING_WORDS = frozenset({"hello", "hallo", "helo", "hi", "hey", "namaste", "namaskar"})
 # How long to keep waiting for the caller to continue.
 HOLD_CONTINUATION_SECONDS = 1.0
 HOLD_LONE_FILLER_SECONDS = 0.6
@@ -338,6 +339,10 @@ def hold_decision(text: str, agent_was_busy: bool, smart: bool = False) -> tuple
     words = _tokens(stripped)
     if not words:
         return 0.0, None  # no text yet — don't guess, answer normally
+    # A one-word phone greeting is a complete opening turn; don't add the
+    # generic punctuation hold before the assistant's first reply.
+    if not agent_was_busy and len(words) == 1 and words[0] in _OPENING_GREETING_WORDS:
+        return 0.0, None
     if smart and thinking_cue(stripped):
         return HOLD_THINKING_SECONDS, "thinking_request"
     if smart and _stuttering(stripped, words):
