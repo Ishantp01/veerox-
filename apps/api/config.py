@@ -191,6 +191,11 @@ class Settings(BaseSettings):
     # judgement. Short acknowledgements are still dropped as backchannel once their transcript arrives, so they
     # never trigger a full reply. Off by default: no live-call validation yet.
     voice_native_barge_in: bool = False
+    # VOICE_LATE_TRANSCRIPT_CUT: a short burst of speech over the agent is ignored while it has no text, but the
+    # words can arrive 1-2 s later. If they turn out to be a real interruption (2+ words, not a nod or noise)
+    # and the agent is still talking, stop it then instead of letting a long answer play on (a live call let one
+    # run 24 s after the caller's words had arrived). Off by default: no live-call validation yet.
+    voice_late_transcript_cut: bool = False
     # VOICE_COMMIT_TIME_CUT: when the caller's turn is committed while the agent is still talking, decide then (from the
     # speech length and the live text so far) whether it was a real turn, and stop the agent at once if so, instead of
     # holding the reply until the agent's own queued audio has played out or a late live-transcript verdict arrives.

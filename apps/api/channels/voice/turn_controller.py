@@ -491,7 +491,7 @@ TURN_LABELS = (
 LLM_MIN_CONFIDENCE = 0.6
 
 
-CUT_REASONS = frozenset({"duration", "live_fallback", "live_real", "native_barge_in", "greeting_barge_in", "commit_resolve"} | {f"live_llm_{label.lower()}" for label in TURN_LABELS})
+CUT_REASONS = frozenset({"duration", "live_fallback", "live_real", "native_barge_in", "greeting_barge_in", "commit_resolve", "late_transcript"} | {f"live_llm_{label.lower()}" for label in TURN_LABELS})
 JUDGE_LABELS = frozenset(label.lower() for label in TURN_LABELS)
 
 

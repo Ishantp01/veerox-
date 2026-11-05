@@ -110,3 +110,55 @@ async def test_a_reply_sent_by_someone_else_while_waiting_is_not_doubled(monkeyp
     state.transcripts_outstanding = 0
     await asyncio.wait_for(task, 1.0)
     assert ws.sent == []
+
+
+# --- VOICE_LATE_TRANSCRIPT_CUT: words that arrive after a short burst was ignored must still stop the agent ---
+
+
+def _busy_state(**kw: Any) -> adapter.CallState:
+    state = _state(response_active=True, interrupted_mid_response=True, **kw)
+    return state
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("आपको प्रस्तुत करते हैं", True),  # the real words from the call that ran on for 24 s
+        ("nahi nahi IT business ke liye batao", True),
+        ("पब्बे", False),  # one garbled word is not an interruption
+        ("haan", False),
+        ("ok theek hai", False),  # a nod
+        ("", False),
+    ],
+)
+def test_only_real_words_stop_the_agent(monkeypatch: pytest.MonkeyPatch, text: str, expected: bool) -> None:
+    monkeypatch.setattr(settings, "voice_late_transcript_cut", True)
+    assert adapter._late_transcript_is_real_interruption(_busy_state(), text) is expected
+
+
+def test_late_transcript_cut_is_off_by_default_and_needs_an_interruption(monkeypatch: pytest.MonkeyPatch) -> None:
+    from apps.api.config import Settings
+
+    assert Settings.model_fields["voice_late_transcript_cut"].default is False
+    assert adapter._late_transcript_is_real_interruption(_busy_state(), "nahi nahi IT business") is False
+    monkeypatch.setattr(settings, "voice_late_transcript_cut", True)
+    idle = _state(interrupted_mid_response=True)  # agent already quiet: nothing to cut
+    assert adapter._late_transcript_is_real_interruption(idle, "nahi nahi IT business") is False
+    not_overlapping = _state(response_active=True)  # agent talking but caller did not speak over it
+    assert adapter._late_transcript_is_real_interruption(not_overlapping, "nahi nahi IT business") is False
+
+
+def test_late_transcript_cut_never_cuts_the_greeting_guard_or_finish_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    monkeypatch.setattr(settings, "voice_late_transcript_cut", True)
+    guarded = _busy_state(greeting_guard_until=time.monotonic() + 5)
+    assert adapter._late_transcript_is_real_interruption(guarded, "nahi nahi IT business") is False
+    monkeypatch.setattr(settings, "voice_interruption_mode", "finish_first")
+    assert adapter._late_transcript_is_real_interruption(_busy_state(), "nahi nahi IT business") is False
+
+
+def test_late_transcript_is_a_known_cut_reason() -> None:
+    from apps.api.channels.voice import turn_controller
+
+    assert "late_transcript" in turn_controller.CUT_REASONS

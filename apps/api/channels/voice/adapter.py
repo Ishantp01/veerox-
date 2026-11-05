@@ -1251,6 +1251,20 @@ async def _native_barge_in(oai_ws: Any, call_ws: WebSocket, state: CallState, lo
     await _cut_now(oai_ws, call_ws, state, log, "native_barge_in")
 
 
+def _late_transcript_is_real_interruption(state: CallState, text: str) -> bool:
+    """VOICE_LATE_TRANSCRIPT_CUT: the caller's words arrived after the energy gate had already let them go, and
+    the agent is still talking over them. True only for real words (two or more, not a nod or noise)."""
+    if not settings.voice_late_transcript_cut or not _answer_immediately():
+        return False
+    if not (_agent_busy(state) and state.interrupted_mid_response) or state.ack_stage is not None:
+        return False
+    if state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
+        return False
+    if len(text.split()) < 2:  # not a \w regex: Devanagari vowel signs would split one word into pieces
+        return False
+    return not (turn_controller.is_extended_backchannel(text) or turn_controller.is_noise(text))
+
+
 # VOICE_GREETING_BARGE_IN: the caller speaks while the opening greeting plays. A reflexive "hello?" must not cut it,
 # but a real question stops it so the caller is answered at once.
 GREETING_BARGE_IN_MIN_SPEECH_SECONDS = 0.4
@@ -3572,6 +3586,8 @@ async def handle_openai_event(
                 # We stopped talking for something that was only an acknowledgement or noise.
                 state.latency.event("false_interruption")
                 state.cut_at = 0.0
+        if text and _late_transcript_is_real_interruption(state, text):
+            await _cut_now(oai_ws, call_ws, state, log, "late_transcript")
         if text and settings.voice_end_call_enabled and dialogue.looks_like_end_request(text):
             # They asked to end it: let the agent say goodbye, then hang up. Not abortable.
             call_control.request_hangup(
