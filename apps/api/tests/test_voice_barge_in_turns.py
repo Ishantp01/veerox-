@@ -74,6 +74,11 @@ async def _agent_speaking(call: Call, rid: str = "resp_1") -> FakeSession:
 @pytest.fixture
 def native(monkeypatch: pytest.MonkeyPatch) -> None:
     _flags(monkeypatch, voice_native_barge_in=True)
+    # These tests check the ORDER of cancel/clear/teardown, not how long speech must last before it counts. The
+    # sustained-speech thresholds (0.4 s, then 1.5 s with no text) are asserted by the short-burst tests below,
+    # which ask for them explicitly, so the rest run with no wait.
+    monkeypatch.setattr(adapter, "NATIVE_BARGE_IN_MIN_SPEECH_SECONDS", 0.0)
+    monkeypatch.setattr(adapter, "NATIVE_BARGE_IN_NO_TEXT_SECONDS", 0.0)
 
 
 # 1 ------------------------------------------------------------------------------------------------------------
@@ -334,7 +339,9 @@ async def test_short_acknowledgements_do_not_interrupt(native: None, spoken: str
     await adapter.cancel_pending_tasks(call.state)
 
 
-async def test_a_short_noise_burst_does_not_interrupt(native: None) -> None:
+async def test_a_short_noise_burst_does_not_interrupt(monkeypatch: pytest.MonkeyPatch, native: None) -> None:
+    monkeypatch.setattr(adapter, "NATIVE_BARGE_IN_MIN_SPEECH_SECONDS", 0.4)  # the real thresholds: this is what they guard
+    monkeypatch.setattr(adapter, "NATIVE_BARGE_IN_NO_TEXT_SECONDS", 1.5)
     call = _timed_call()
     await _agent_speaking(call)
     await call.event("input_audio_buffer.speech_started")

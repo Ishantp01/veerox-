@@ -48,6 +48,10 @@ def test_greeting_is_a_response_create_instruction() -> None:
 async def test_native_barge_in_cuts_immediately_on_speech_started(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "voice_safe_cancel", True)
     monkeypatch.setattr(settings, "voice_native_barge_in", True)
+    # This test is about the cut itself (cancel + clear, once), not the sustained-speech wait, which the short-burst
+    # tests below cover with the real thresholds.
+    monkeypatch.setattr(adapter, "NATIVE_BARGE_IN_MIN_SPEECH_SECONDS", 0.0)
+    monkeypatch.setattr(adapter, "NATIVE_BARGE_IN_NO_TEXT_SECONDS", 0.0)
     call = Call()
     await call.agent_starts_answering()
     await call.event("input_audio_buffer.speech_started")
