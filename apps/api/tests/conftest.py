@@ -48,6 +48,14 @@ def _no_platform_channel_credentials_leak(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.fixture(autouse=True)
+def _voice_reply_shaping_is_opt_in_for_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The short-reply instruction is on by default in production, but many voice tests assert the exact
+    response.create body. Keep them on the plain body; tests/test_voice_reply_shaping.py turns it on."""
+    monkeypatch.setattr(settings, "voice_reply_brevity", False)
+    monkeypatch.setattr(settings, "voice_reply_wait_transcript_ms", 0)
+
+
+@pytest.fixture(autouse=True)
 def _local_dev_safety_knobs_do_not_leak_into_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reset the developer's local safety settings to their code defaults for every test.
 

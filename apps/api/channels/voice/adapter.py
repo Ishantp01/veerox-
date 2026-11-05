@@ -1114,6 +1114,42 @@ GREETING_CUT_INSTRUCTION = (
 )
 
 
+BREVITY_INSTRUCTION = (
+    "Keep this reply to at most two short sentences, then at most one short question. Do not open by "
+    "restating the caller's business, topic or question (no \"X business ke liye...\", no \"aap poochh rahe "
+    "hain ki...\"): go straight to the point. Say one idea, not a feature list; the caller can ask for more."
+)
+
+
+def _with_brevity(response: dict[str, Any] | None, state: CallState) -> dict[str, Any] | None:
+    """Append the short-reply rule to a normal reply's instructions (VOICE_REPLY_BREVITY)."""
+    if not settings.voice_reply_brevity:
+        return response
+    out = dict(response or {})
+    base = out.get("instructions") or state.base_instructions
+    out["instructions"] = f"{base}\n\n{BREVITY_INSTRUCTION}".strip()
+    return out
+
+
+async def _wait_for_own_transcript(state: CallState) -> bool:
+    """Give the caller's own transcript a short, bounded chance to arrive before a reply is sent.
+
+    Without it the model answers from raw audio and can guess a word the caller never said. Returns False
+    when the caller started speaking meanwhile (the reply is not sent; the next commit re-schedules it).
+    Does nothing unless VOICE_REPLY_WAIT_TRANSCRIPT_MS is set."""
+    wait_s = settings.voice_reply_wait_transcript_ms / 1000
+    if wait_s <= 0 or state.transcripts_outstanding <= 0:
+        return True
+    deadline = time.monotonic() + wait_s
+    while state.transcripts_outstanding > 0 and time.monotonic() < deadline:
+        if state.caller_speaking:
+            return False
+        await asyncio.sleep(0.05)
+    _trace(state, "reply_waited_for_transcript", waited_ms=round(wait_s * 1000 - max(0.0, deadline - time.monotonic()) * 1000),
+           arrived=state.transcripts_outstanding <= 0)
+    return not state.caller_speaking
+
+
 NO_REINTRO_INSTRUCTION = (
     "You have already greeted the caller and said who you are. Do not greet or introduce yourself again. If you did "
     "not catch what they said, say so in a few words and ask them to repeat, or simply continue where you left off."
@@ -1722,6 +1758,11 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
     """
     if state.response_active:
         return  # another scheduled task already reserved the response slot
+    if state.transcripts_outstanding > 0 and settings.voice_reply_wait_transcript_ms > 0:
+        if not await _wait_for_own_transcript(state):
+            return  # the caller is speaking again; their next commit re-schedules this reply
+        if state.response_active or not state.reply_pending:
+            return  # something else answered while we waited
     _trace(state, "reply_firing", ms_since_commit=_ms_since(state.t_committed), restate=bool(state.restate_next))
     state.reply_pending = False
     state.response_active = True
@@ -1777,6 +1818,7 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
             response["instructions"] = f"{base}\n\n{NO_REINTRO_INSTRUCTION}".strip()
         response = _with_triggers(response, state)
         response = _with_memory(response, state)
+        response = _with_brevity(response, state)
         if response is not None:
             payload["response"] = response
         state.latency.mark("response_requested")

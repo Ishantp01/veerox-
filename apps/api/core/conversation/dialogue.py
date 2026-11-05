@@ -843,8 +843,7 @@ _D_NO_SLOT_ECHO = (
 )
 _D_STYLE = (
     "Keep it short and conversational, one clear question at most, and mix Hindi and English the way "
-    "the caller does. Never repeat or restate the caller's question back to them; reply to what they said "
-    "once they have finished, going straight to the answer. "
+    "the caller does. Never restate the caller's question back; go straight to the answer. "
     "Do not repeat explanations or acknowledgements you already gave, and use their "
     "name at most once in the whole call. You are an AI assistant: never claim to be a human employee."
 )

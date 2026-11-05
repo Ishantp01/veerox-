@@ -19,6 +19,7 @@ DEFAULT_ON = {
     "conversation_voice_live", "conversation_voice_shadow", "log_privacy_enabled", "log_transcripts",
     "plivo_startup_registration", "sarvam_fallback_to_elevenlabs", "voice_greeting_ai_disclosure",
     "voice_latency_tracking", "voice_live_turn_detection",
+    "voice_reply_brevity",  # instruction-only short-reply rule; VOICE_REPLY_BREVITY=false turns it off
 }
 NEW_FLAGS = (
     "voice_tts_phrase_flush", "voice_script_authority", "voice_exact_lines", "voice_if_triggers",

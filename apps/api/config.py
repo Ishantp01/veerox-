@@ -205,6 +205,15 @@ class Settings(BaseSettings):
     # unfinished ("haan, mera matlab..."). Off by default — it adds a second of
     # latency whenever a sentence happens to end on a connective word.
     voice_endpoint_hold: bool = False
+    # Keep every normal voice reply to two short sentences and stop it opening with the caller's own
+    # topic or question read back. Instruction only, on by default: long (~28 s) replies are what
+    # makes callers talk over the agent. VOICE_REPLY_BREVITY=false turns it off.
+    voice_reply_brevity: bool = True
+    # When a reply is about to fire but the caller's own transcript has not arrived yet, wait up to
+    # this many ms for it (stops the model guessing from raw audio, e.g. "travel" for "products").
+    # 0 = off (default); ~2500 is the suggested value to try on a test call. Never waits while the
+    # caller is speaking.
+    voice_reply_wait_transcript_ms: int = 0
     # Phase 1 voice-pipeline switches (channels/voice/). Instrumentation is
     # log-only and on by default; the two behaviour changes below are OFF so
     # existing calls run exactly as before until each is validated.
