@@ -18,6 +18,7 @@ import asyncio
 import json
 import re
 import time
+from difflib import SequenceMatcher
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -346,6 +347,10 @@ class CallState:
     answering_transcript: str | None = None
     # The next normal reply answers an interruption: tell the model to address it first.
     priority_reply: bool = False
+    # The last real caller turn (normalised) and when it arrived: a near-identical repeat right after it, while
+    # that turn's answer is still being produced or spoken, is the same question and gets no second answer.
+    last_turn_norm: str = ""
+    last_turn_at: float = 0.0
     # --- Phase 5: ending calls, TTS recovery, reconnect safety, metering ---
     # The provider's media-stream socket, so code outside the pumps can close it.
     call_ws: Any = field(default=None, repr=False)
@@ -1078,6 +1083,27 @@ def _with_triggers(response: dict[str, Any] | None, state: CallState) -> dict[st
         f"apply in this reply:\n{rules}"
     ).strip()
     return out
+
+
+REPEAT_QUESTION_WINDOW_SECONDS = 15.0
+REPEAT_QUESTION_SIMILARITY = 0.8
+
+
+def _norm_turn(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", text.lower()).split())
+
+
+def _is_repeated_question(state: CallState, text: str) -> bool:
+    """The caller said the same thing again right after the last turn, while its answer is still coming."""
+    norm = _norm_turn(text)
+    prev, prev_at = state.last_turn_norm, state.last_turn_at
+    if not norm or not prev or time.monotonic() - prev_at > REPEAT_QUESTION_WINDOW_SECONDS:
+        return False
+    if not (state.response_active or _is_playing(state) or state.ack_stage is not None):
+        return False  # the earlier answer is already done: asking again means they want it again
+    if len(norm.split()) < 3:
+        return False
+    return norm == prev or SequenceMatcher(None, norm, prev).ratio() >= REPEAT_QUESTION_SIMILARITY
 
 
 def _note_caller_turn(state: CallState, text: str) -> None:
@@ -3567,6 +3593,17 @@ async def handle_openai_event(
                 state.restate_next = False
                 state.interrupted_mid_response = False
             _trace(state, "backchannel", dropped=dropped, ms_since_commit=_ms_since(state.t_committed))
+        elif state.pending_user_transcript and _is_repeated_question(state, state.pending_user_transcript):
+            # Same question said twice in a row: the answer already under way covers it, so no second answer.
+            log.info("voice_repeated_question_dropped")
+            _trace(state, "repeated_question_dropped", ms_since_commit=_ms_since(state.t_committed))
+            state.reply_pending = False
+            state.restate_next = False
+            state.interrupted_mid_response = False
+            state.overlap_transcripts = []
+            state.last_turn_at = time.monotonic()
+            _clear_hold(state)
+            return
         elif state.pending_user_transcript and (state.interrupted_mid_response or state.restate_next):
             # Only a turn spoken over the agent is queued for the read-back. Before this, EVERY normal turn landed here
             # (a fresh commit always has reply_pending set), the list never emptied in the default mode, and one stale
@@ -3576,6 +3613,8 @@ async def handle_openai_event(
         text = state.pending_user_transcript
         if text and not (overlapping and _is_backchannel(text)):
             _note_caller_turn(state, text)  # a nod is not information; everything else may be
+            state.last_turn_norm = _norm_turn(text)
+            state.last_turn_at = time.monotonic()
             _note_triggers(state, text)
         if text:
             state.tool_holds = {}  # a new thing was said: the previous turn's holds no longer apply
