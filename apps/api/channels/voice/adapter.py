@@ -351,6 +351,7 @@ class CallState:
     # that turn's answer is still being produced or spoken, is the same question and gets no second answer.
     last_turn_norm: str = ""
     last_turn_at: float = 0.0
+    last_reply_at: float = 0.0  # when the last normal reply was requested (for the repeat guard)
     # --- Phase 5: ending calls, TTS recovery, reconnect safety, metering ---
     # The provider's media-stream socket, so code outside the pumps can close it.
     call_ws: Any = field(default=None, repr=False)
@@ -1099,8 +1100,12 @@ def _is_repeated_question(state: CallState, text: str) -> bool:
     prev, prev_at = state.last_turn_norm, state.last_turn_at
     if not norm or not prev or time.monotonic() - prev_at > REPEAT_QUESTION_WINDOW_SECONDS:
         return False
-    if not (state.response_active or _is_playing(state) or state.ack_stage is not None):
+    if not (state.response_active or _is_playing(state)):
         return False  # the earlier answer is already done: asking again means they want it again
+    if state.ack_stage is not None or state.suppress_response_audio or state.cut_at >= prev_at:
+        return False  # that answer was cut or muted, so the caller has not got it: this one must be answered
+    if not (state.answering_utt or _is_playing(state)):
+        return False  # what is playing is not the reply to the previous question
     if len(norm.split()) < 3:
         return False
     return norm == prev or SequenceMatcher(None, norm, prev).ratio() >= REPEAT_QUESTION_SIMILARITY
@@ -1154,6 +1159,27 @@ def _with_brevity(response: dict[str, Any] | None, state: CallState) -> dict[str
     out = dict(response or {})
     base = out.get("instructions") or state.base_instructions
     out["instructions"] = f"{base}\n\n{BREVITY_INSTRUCTION}".strip()
+    return out
+
+
+REPEAT_GUARD_INSTRUCTION = (
+    "You answered the caller a moment ago. If what they just said is the same question or request again, even "
+    "worded differently or badly transcribed (speech-to-text often garbles repeats), do NOT give that answer again "
+    "or rephrase it. Say at most one short line (for example that you just covered it) and ask which part they "
+    "want more on, or what else they need. If it is a genuinely different question, answer it normally."
+)
+REPEAT_GUARD_WINDOW_SECONDS = 30.0
+
+
+def _with_repeat_guard(response: dict[str, Any] | None, state: CallState) -> dict[str, Any] | None:
+    """A reply fired soon after another one is told not to answer the same question twice (VOICE_REPEAT_GUARD)."""
+    if not settings.voice_repeat_guard or not state.last_reply_at:
+        return response
+    if time.monotonic() - state.last_reply_at > REPEAT_GUARD_WINDOW_SECONDS:
+        return response
+    out = dict(response or {})
+    base = out.get("instructions") or state.base_instructions
+    out["instructions"] = f"{base}\n\n{REPEAT_GUARD_INSTRUCTION}".strip()
     return out
 
 
@@ -1859,6 +1885,8 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
         response = _with_triggers(response, state)
         response = _with_memory(response, state)
         response = _with_brevity(response, state)
+        response = _with_repeat_guard(response, state)
+        state.last_reply_at = time.monotonic()
         if response is not None:
             payload["response"] = response
         state.latency.mark("response_requested")

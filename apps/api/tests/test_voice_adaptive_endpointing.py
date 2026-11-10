@@ -433,7 +433,8 @@ async def test_a_fired_rule_is_added_to_that_one_reply_only(
     )
     call.state.response_active = False
     await adapter._fire_pending_reply(call.agent, call.state)
-    assert call.replies()[-1] == {"type": "response.create"}  # the next reply is plain again
+    later = call.replies()[-1].get("response", {}).get("instructions", "")
+    assert "triggered by what the caller just said" not in later and "say ⟦E1⟧" not in later  # the rule does not carry over
 
 
 async def test_what_the_caller_said_is_never_copied_into_the_instructions() -> None:

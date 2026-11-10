@@ -214,6 +214,10 @@ class Settings(BaseSettings):
     # topic or question read back. Instruction only, on by default: long (~28 s) replies are what
     # makes callers talk over the agent. VOICE_REPLY_BREVITY=false turns it off.
     voice_reply_brevity: bool = True
+    # A new turn right after an answer may be the same question again (the transcript of a repeat is often garbled
+    # differently each time, so text matching misses it). Instruction only: the model is told not to give the same
+    # answer twice. On by default; VOICE_REPEAT_GUARD=false turns it off.
+    voice_repeat_guard: bool = True
     # When a reply is about to fire but the caller's own transcript has not arrived yet, wait up to
     # this many ms for it (stops the model guessing from raw audio, e.g. "travel" for "products").
     # 0 = off (default); ~2500 is the suggested value to try on a test call. Never waits while the
