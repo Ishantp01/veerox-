@@ -1,4 +1,4 @@
-"""A caller who repeats the same question straight away gets one answer, not two.
+"""A caller who repeats the same (or a similar) question is always answered again, never silently dropped.
 
 Driven through the real adapter with fake sockets (see test_voice_interruption)."""
 
@@ -30,52 +30,17 @@ async def _first_answer_in_flight(text: str = Q) -> Call:
     return call
 
 
-async def test_same_question_again_while_answering_gets_no_second_reply() -> None:
+@pytest.mark.parametrize("again", [Q + "?", "aapki fees kitni hai batao"])
+async def test_repeat_while_answering_is_still_answered(again: str) -> None:
     call = await _first_answer_in_flight()
-    await _ask(call, "i2", Q + "?")
-    assert call.state.reply_pending is False
-    assert call.replies() == []
+    await _ask(call, "i2", again)
+    assert call.state.reply_pending is True
 
 
-async def test_slightly_different_wording_still_counts_as_the_same_question() -> None:
-    call = await _first_answer_in_flight()
-    await _ask(call, "i2", "aapki fees kitni hai batao")
-    assert call.state.reply_pending is False
-
-
-async def test_a_different_question_is_still_answered() -> None:
+async def test_a_different_question_is_answered() -> None:
     call = await _first_answer_in_flight()
     await _ask(call, "i2", "demo kab milega mujhe")
     assert call.state.reply_pending is True
-
-
-async def test_repeat_after_the_answer_has_finished_is_answered_again() -> None:
-    call = await _first_answer_in_flight()
-    call.state.response_active = False
-    call.state.playback_end = 0.0
-    await _ask(call, "i2", Q)
-    assert call.state.reply_pending is True
-
-
-async def test_repeat_is_answered_when_the_first_answer_was_cut() -> None:
-    call = await _first_answer_in_flight()
-    call.state.cut_at = time.monotonic() + 0.01  # the first answer was stopped after the question was heard
-    call.state.suppress_response_audio = True
-    await _ask(call, "i2", Q)
-    assert call.state.reply_pending is True
-
-
-async def test_old_repeat_outside_the_window_is_answered() -> None:
-    call = await _first_answer_in_flight()
-    call.state.last_turn_at = time.monotonic() - adapter.REPEAT_QUESTION_WINDOW_SECONDS - 1
-    await _ask(call, "i2", Q)
-    assert call.state.reply_pending is True
-
-
-@pytest.mark.parametrize("text", ["haan", "theek hai", "ok ji"])
-async def test_short_replies_are_never_treated_as_repeats(text: str) -> None:
-    call = await _first_answer_in_flight(text)
-    assert adapter._is_repeated_question(call.state, text) is False
 
 
 async def _fire(call: Call) -> str:
@@ -85,16 +50,16 @@ async def _fire(call: Call) -> str:
     return (call.replies()[-1].get("response") or {}).get("instructions", "")
 
 
-async def test_first_reply_has_no_repeat_guard_but_a_quick_second_one_does() -> None:
+async def test_repeat_guard_is_off_by_default() -> None:
+    call = Call()
+    await _fire(call)
+    assert adapter.REPEAT_GUARD_INSTRUCTION not in await _fire(call)
+
+
+async def test_repeat_guard_when_enabled_applies_only_to_a_quick_second_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(adapter.settings, "voice_repeat_guard", True)
     call = Call()
     assert adapter.REPEAT_GUARD_INSTRUCTION not in await _fire(call)
     assert adapter.REPEAT_GUARD_INSTRUCTION in await _fire(call)
-
-
-async def test_repeat_guard_expires_and_can_be_switched_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    call = Call()
-    await _fire(call)
     call.state.last_reply_at = time.monotonic() - adapter.REPEAT_GUARD_WINDOW_SECONDS - 1
-    assert adapter.REPEAT_GUARD_INSTRUCTION not in await _fire(call)
-    monkeypatch.setattr(adapter.settings, "voice_repeat_guard", False)
     assert adapter.REPEAT_GUARD_INSTRUCTION not in await _fire(call)

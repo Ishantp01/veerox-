@@ -216,8 +216,8 @@ class Settings(BaseSettings):
     voice_reply_brevity: bool = True
     # A new turn right after an answer may be the same question again (the transcript of a repeat is often garbled
     # differently each time, so text matching misses it). Instruction only: the model is told not to give the same
-    # answer twice. On by default; VOICE_REPEAT_GUARD=false turns it off.
-    voice_repeat_guard: bool = True
+    # answer twice. OFF by default (callers who repeat must always get an answer); VOICE_REPEAT_GUARD=true enables it.
+    voice_repeat_guard: bool = False
     # When a reply is about to fire but the caller's own transcript has not arrived yet, wait up to
     # this many ms for it (stops the model guessing from raw audio, e.g. "travel" for "products").
     # 0 = off (default); ~2500 is the suggested value to try on a test call. Never waits while the

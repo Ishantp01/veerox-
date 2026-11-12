@@ -3621,17 +3621,6 @@ async def handle_openai_event(
                 state.restate_next = False
                 state.interrupted_mid_response = False
             _trace(state, "backchannel", dropped=dropped, ms_since_commit=_ms_since(state.t_committed))
-        elif state.pending_user_transcript and _is_repeated_question(state, state.pending_user_transcript):
-            # Same question said twice in a row: the answer already under way covers it, so no second answer.
-            log.info("voice_repeated_question_dropped")
-            _trace(state, "repeated_question_dropped", ms_since_commit=_ms_since(state.t_committed))
-            state.reply_pending = False
-            state.restate_next = False
-            state.interrupted_mid_response = False
-            state.overlap_transcripts = []
-            state.last_turn_at = time.monotonic()
-            _clear_hold(state)
-            return
         elif state.pending_user_transcript and (state.interrupted_mid_response or state.restate_next):
             # Only a turn spoken over the agent is queued for the read-back. Before this, EVERY normal turn landed here
             # (a fresh commit always has reply_pending set), the list never emptied in the default mode, and one stale
