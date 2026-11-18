@@ -647,6 +647,81 @@ export const PAGE_GUIDES: Record<string, GuideStep[]> = {
         "Click New plan, then enter a name, price in rupees, length in days and the limits. Leave a limit blank for unlimited.",
     },
   ],
+  "/usage": [
+    {
+      anchor: "header",
+      title: "Usage & Billing",
+      content: "What your organization used in the chosen billing period, and an estimate of the cost.",
+    },
+    {
+      anchor: "action",
+      title: "Pick a month",
+      content: "Switch the billing period to compare calls, messages and AI usage month to month.",
+    },
+  ],
+  "/whatsapp/media": [
+    {
+      anchor: "header",
+      title: "WhatsApp Media",
+      content:
+        "Files the AI agent can send when a contact asks for them: a price list, brochure, plan or short video.",
+    },
+    {
+      anchor: "action",
+      title: "Upload a file",
+      content:
+        "Click Upload, choose the file, give it a clear name and write when the agent should send it. A good note helps the agent pick the right file.",
+    },
+  ],
+  "/conversation-engine": [
+    {
+      anchor: "header",
+      title: "Conversation Engine",
+      content:
+        "Controls how the AI understands customers, remembers context and answers only from knowledge you approve.",
+    },
+    {
+      anchor: "action",
+      title: "Status",
+      content: "Shows whether the engine is on. Define your topics and answers, test them, then publish to make them live.",
+    },
+  ],
+  "/follow-up-tasks": [
+    {
+      anchor: "header",
+      title: "Follow-up Tasks",
+      content: "Every scheduled lead follow-up in one place. A reminder popup appears when one comes due.",
+    },
+    {
+      anchor: "action",
+      title: "Schedule one",
+      content: "Click Schedule follow-up, pick a lead and a time, and add a note. Open a task later to mark it done or reschedule.",
+    },
+  ],
+  "/organizations/usage": [
+    {
+      anchor: "header",
+      title: "AWS Reconciliation",
+      content: "Actual AWS infrastructure cost, how it is split across organizations, and what is left unallocated.",
+    },
+    {
+      anchor: "action",
+      title: "Close the period",
+      content: "Once a single month's numbers are final, close the period so they stop changing.",
+    },
+  ],
+  "/organizations/expiring": [
+    {
+      anchor: "header",
+      title: "Licenses expiring soon",
+      content: "Active licenses that are about to lapse. Renew them before access cuts off.",
+    },
+    {
+      anchor: "action",
+      title: "Lookahead window",
+      content: "Choose how many days ahead to look. Use the renew button on a row to renew in one click.",
+    },
+  ],
   "/support": [
     {
       anchor: "header",

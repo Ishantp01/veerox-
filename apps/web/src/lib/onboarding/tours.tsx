@@ -20,6 +20,11 @@ import {
   CreditCard,
   LifeBuoy,
   Building2,
+  Brain,
+  CalendarCheck,
+  Gauge,
+  Cloud,
+  Image as ImageIcon,
 } from "lucide-react";
 
 /** A single Onborda tour ({ tour, steps }). `Tour`/`Step` aren't re-exported
@@ -52,7 +57,12 @@ export const ONBORDA_NAV_IDS: Record<string, string> = {
   "/calling": "onborda-nav-calling",
   "/whatsapp": "onborda-nav-whatsapp",
   "/whatsapp/templates": "onborda-nav-templates",
+  "/whatsapp/media": "onborda-nav-media",
+  "/conversation-engine": "onborda-nav-conversation-engine",
+  "/follow-up-tasks": "onborda-nav-followup-tasks",
+  "/usage": "onborda-nav-usage",
   "/plans": "onborda-nav-plans",
+  "/organizations/usage": "onborda-nav-org-usage",
   "/crm/contacts": "onborda-nav-contacts",
   "/crm/leads": "onborda-nav-leads",
   "/crm/appointments": "onborda-nav-appointments",
@@ -187,6 +197,21 @@ export const ALL_STEPS: Step[] = [
     "Create a template, submit it for WhatsApp's approval (usually minutes to a few hours), then choose it when sending a campaign or outbound message.",
   ),
 
+  navStep(
+    "onborda-nav-media",
+    ImageIcon,
+    "WhatsApp Media",
+    "Files the AI agent can send on WhatsApp when a contact asks for them: a price list, brochure or short video.",
+    "Click Upload, give the file a clear name and a note on when to send it. The agent picks the right file on its own during a chat.",
+  ),
+  navStep(
+    "onborda-nav-conversation-engine",
+    Brain,
+    "Conversation Engine",
+    "Controls how the AI understands customers, remembers context and answers only from knowledge you approve.",
+    "Add the topics and answers it may use, test a few conversations, then publish. Changes only go live after you publish.",
+  ),
+
   // CRM
   navStep(
     "onborda-nav-contacts",
@@ -208,6 +233,13 @@ export const ALL_STEPS: Step[] = [
     "Appointments",
     "Every meeting or callback the agents have booked.",
     "Switch between day and list views; click an appointment to see details, reschedule or cancel. Bookings the agents make land here automatically.",
+  ),
+  navStep(
+    "onborda-nav-followup-tasks",
+    CalendarCheck,
+    "Follow-up Tasks",
+    "Every scheduled lead follow-up in one place.",
+    "Click Schedule follow-up to pick a lead and a time. You get a reminder popup when one comes due; open it to mark it done or reschedule.",
   ),
   navStep(
     "onborda-nav-conversations",
@@ -238,6 +270,14 @@ export const ALL_STEPS: Step[] = [
     "Sales Dashboard",
     "A pipeline-focused view built for the sales team.",
     "See leads grouped by stage and owner, and spot deals that have gone quiet so someone can chase them.",
+  ),
+
+  navStep(
+    "onborda-nav-usage",
+    Gauge,
+    "Usage & Billing",
+    "What your organization used in a billing period and an estimate of what it costs.",
+    "Pick a month at the top to see calls, messages and AI usage for that period.",
   ),
 
   // Campaigns / Automated Follow-up
@@ -293,13 +333,6 @@ export const ALL_STEPS: Step[] = [
     "Open the AI Calling or AI WhatsApp tab and edit the Script: the wording the agent follows on every conversation. Calling also keeps a library of scripts and a preferred voice provider. Your Veerox team sets up the phone numbers for you.",
   ),
   navStep(
-    "onborda-nav-billing",
-    CreditCard,
-    "Billing",
-    "Your plan, usage and credit balance.",
-    "Top up credits, change plan, and review a breakdown of what calls and messages cost. Agents stop when credits hit zero, so keep some balance.",
-  ),
-  navStep(
     "onborda-nav-support",
     LifeBuoy,
     "Support",
@@ -322,6 +355,13 @@ export const ALL_STEPS: Step[] = [
     "Support Tickets",
     "The support queue across every organization.",
     "Assign a ticket to yourself, reply to the customer, and close it when it's resolved.",
+  ),
+  navStep(
+    "onborda-nav-org-usage",
+    Cloud,
+    "AWS Reconciliation",
+    "Actual AWS infrastructure cost, how it is split across organizations, and what is left unallocated.",
+    "Pick a month, review the allocation, then close the period when the numbers are final.",
   ),
 ];
 

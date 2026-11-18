@@ -167,7 +167,7 @@ export function ManageLicenseDialog({ org }: { org: AdminOrg }) {
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogTrigger>
-        <Button variant="ghost" size="sm" aria-label={`Manage license for ${org.name}`}>
+        <Button variant="ghost" size="sm" aria-label={`Manage license for ${org.name}`} title="Manage license">
           <KeyRound size={14} />
         </Button>
       </DialogTrigger>

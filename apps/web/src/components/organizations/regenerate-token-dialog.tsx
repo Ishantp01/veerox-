@@ -49,7 +49,7 @@ export function RegenerateTokenDialog({ orgId, orgName }: { orgId: string; orgNa
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogTrigger>
-        <Button variant="ghost" size="sm" aria-label={`Regenerate login token for ${orgName}`}>
+        <Button variant="ghost" size="sm" aria-label={`Regenerate login token for ${orgName}`} title="Regenerate login token">
           <KeyRound size={14} />
         </Button>
       </DialogTrigger>

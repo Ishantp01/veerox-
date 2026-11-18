@@ -36,7 +36,7 @@ export function QuickRenewButton({ org }: { org: AdminOrg }) {
       variant="ghost"
       size="sm"
       aria-label={`Renew ${org.name} for ${days} days`}
-      title={`Renew for ${days} days`}
+      title={`Renew license for ${days} days`}
       loading={renewLicense.isPending}
       onClick={handleClick}
     >

@@ -206,7 +206,7 @@ export function EditOrgDialog({ org }: { org: AdminOrg }) {
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogTrigger>
-        <Button variant="ghost" size="sm" aria-label={`Edit ${org.name}`}>
+        <Button variant="ghost" size="sm" aria-label={`Edit ${org.name}`} title="Edit organization">
           <Pencil size={14} />
         </Button>
       </DialogTrigger>
