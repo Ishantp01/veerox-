@@ -209,15 +209,11 @@ export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
             so it reads as a compact logo mark instead of a wide letterboxed
             clip with its dark background showing as a bar. */}
         <div className="mb-6 px-3 flex items-center justify-between gap-2.5">
-          <div className="w-full max-w-[240px] overflow-hidden rounded-2xl">
-            <video
-              src="/logo.mp4"
-              autoPlay
-              loop
-              muted
-              playsInline
-              aria-label="Work Assign Ai"
-              className="aspect-video w-full object-cover"
+          <div className="w-full max-w-[240px] overflow-hidden rounded-xl dark:bg-white dark:px-2 dark:py-1">
+            <img
+              src="/logo-wordmark.png"
+              alt="Work Assign Ai"
+              className="h-auto w-full object-contain"
             />
           </div>
           <button
