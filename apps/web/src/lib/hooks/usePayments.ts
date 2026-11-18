@@ -170,6 +170,14 @@ export function useCreatePaymentPlan() {
   });
 }
 
+export function useDeletePaymentPlan() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, string>({
+    mutationFn: (id) => apiFetch(`/payments/admin/plans/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["payments"] }),
+  });
+}
+
 export function useUpdatePaymentPlan() {
   const qc = useQueryClient();
   return useMutation<PaymentPlan, Error, { id: string; patch: Partial<Omit<PlanInput, "code">> }>({

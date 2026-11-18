@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, CreditCard, Pencil, Plus } from "lucide-react";
+import { Check, CreditCard, Pencil, Plus, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
 import {
@@ -26,6 +26,7 @@ import {
   type PaymentPlan,
   useAdminPaymentPlans,
   useCreatePaymentPlan,
+  useDeletePaymentPlan,
   useUpdatePaymentPlan,
 } from "@/lib/hooks/usePayments";
 
@@ -177,6 +178,8 @@ export function PlanManager() {
   const { toast } = useToast();
   const plans = useAdminPaymentPlans();
   const update = useUpdatePaymentPlan();
+  const remove = useDeletePaymentPlan();
+  const [deleting, setDeleting] = useState<PaymentPlan | null>(null);
   const [editing, setEditing] = useState<PaymentPlan | null>(null);
   const [creating, setCreating] = useState(false);
   const [creatingAddon, setCreatingAddon] = useState(false);
@@ -269,6 +272,15 @@ export function PlanManager() {
                 <Button variant="ghost" disabled={update.isPending} onClick={() => toggle(p)}>
                   {p.is_active ? "Hide" : "Activate"}
                 </Button>
+                <Button
+                  variant="ghost"
+                  aria-label={`Delete ${p.name}`}
+                  title="Delete"
+                  className="text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10"
+                  onClick={() => setDeleting(p)}
+                >
+                  <Trash2 size={15} aria-hidden />
+                </Button>
               </div>
             </Card>
           ))}
@@ -283,6 +295,40 @@ export function PlanManager() {
       </QueryBoundary>
 
       {/* key remounts the form so each open starts from the right plan's values */}
+      {deleting && (
+        <Dialog open onOpenChange={(next) => !next && !remove.isPending && setDeleting(null)}>
+          <DialogContent className="max-w-md">
+            <DialogTitle>Delete {deleting.name}?</DialogTitle>
+            <DialogBody>
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                This permanently removes the {deleting.is_addon ? "add-on" : "plan"}. It can&apos;t be undone. If a
+                customer has already bought it, it can&apos;t be deleted &mdash; use Hide instead.
+              </p>
+            </DialogBody>
+            <DialogFooter>
+              <Button variant="outline" disabled={remove.isPending} onClick={() => setDeleting(null)}>
+                Cancel
+              </Button>
+              <Button
+                className="bg-red-600 text-white hover:bg-red-700"
+                disabled={remove.isPending}
+                onClick={() =>
+                  remove.mutate(deleting.id, {
+                    onSuccess: () => {
+                      toast({ title: "Deleted", variant: "success" });
+                      setDeleting(null);
+                    },
+                    onError: (err) =>
+                      toast({ title: "Could not delete", description: err.message, variant: "error" }),
+                  })
+                }
+              >
+                {remove.isPending ? "Deleting…" : "Delete"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
       {creating && <PlanDialog key="new" plan={null} open onClose={() => setCreating(false)} />}
       {creatingAddon && <PlanDialog key="new-addon" plan={null} addon open onClose={() => setCreatingAddon(false)} />}
       {editing && <PlanDialog key={editing.id} plan={editing} open onClose={() => setEditing(null)} />}

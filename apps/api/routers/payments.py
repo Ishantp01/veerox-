@@ -15,7 +15,7 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
 from apps.api.config import settings
@@ -402,3 +402,30 @@ async def admin_update_plan(
     await db.commit()
     await db.refresh(plan)
     return plan
+
+
+@router.delete("/admin/plans/{plan_id}")
+async def admin_delete_plan(plan_id: UUID, db: DbDep, _admin: PlatformAdminDep) -> dict[str, bool]:
+    """Delete a plan nobody has paid for. A plan with a paid purchase is part of
+    an org's payment history and its usage limits, so it can only be hidden."""
+    plan = await db.get(PaymentPlan, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    paid = await db.scalar(
+        select(func.count())
+        .select_from(RazorpayPayment)
+        .where(RazorpayPayment.plan_id == plan_id, RazorpayPayment.status == "paid")
+    )
+    if paid:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This plan has already been bought by a customer, so it can't be deleted. "
+                "Use Hide instead - customers who paid keep their plan."
+            ),
+        )
+    # Abandoned / failed checkouts only: they would otherwise block the delete.
+    await db.execute(delete(RazorpayPayment).where(RazorpayPayment.plan_id == plan_id))
+    await db.delete(plan)
+    await db.commit()
+    return {"ok": True}

@@ -318,3 +318,40 @@ async def test_campaign_traffic_not_counted_in_message_or_minute_limits(
     msgs = await get_resource_usage(db_session, ORG_ID, "whatsapp_messages")
     assert calls is not None and calls.used == 0.5  # only the 30s normal call
     assert msgs is not None and msgs.used == 1  # only the normal send
+
+
+async def test_admin_can_delete_unbought_plan_but_not_a_bought_one(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from apps.api.db.models.razorpay_payment import RazorpayPayment
+
+    db_session.add(Org(id=ORG_ID, name="Del Co"))
+    await db_session.commit()
+
+    def body(code: str) -> dict:
+        return {"code": code, "name": code, "price_paise": 100, "duration_days": 30}
+
+    free = (await client.post("/payments/admin/plans", headers=ADMIN, json=body("free"))).json()
+    bought = (await client.post("/payments/admin/plans", headers=ADMIN, json=body("bought"))).json()
+    now = datetime.now(UTC)
+    db_session.add_all(
+        [
+            # an abandoned checkout must not block deleting its plan
+            RazorpayPayment(org_id=ORG_ID, plan_id=uuid.UUID(free["id"]), razorpay_order_id="o_abandoned",
+                            amount_paise=100, status="created"),
+            RazorpayPayment(org_id=ORG_ID, plan_id=uuid.UUID(bought["id"]), razorpay_order_id="o_paid",
+                            amount_paise=100, status="paid", period_start=now,
+                            period_end=now + timedelta(days=30)),
+        ]
+    )
+    await db_session.commit()
+
+    ok = await client.delete(f"/payments/admin/plans/{free['id']}", headers=ADMIN)
+    assert ok.status_code == 200 and ok.json() == {"ok": True}
+    blocked = await client.delete(f"/payments/admin/plans/{bought['id']}", headers=ADMIN)
+    assert blocked.status_code == 409 and "Hide" in blocked.json()["detail"]
+    assert (await client.delete(f"/payments/admin/plans/{free['id']}", headers=ADMIN)).status_code == 404
+    codes = [p["code"] for p in (await client.get("/payments/admin/plans", headers=ADMIN)).json()]
+    assert codes == ["bought"]
