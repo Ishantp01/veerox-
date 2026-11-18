@@ -116,3 +116,12 @@ button {
   );
   background-size: 200% 100%;
 }
+
+/* Razorpay Checkout renders in a light iframe. When the app is in dark theme the
+   page declares color-scheme: dark, and Chrome then paints a scheme-mismatched
+   iframe with an OPAQUE canvas — hiding the page behind the checkout. Declaring
+   the frame light keeps its backdrop transparent so the page shows dimmed behind. */
+.razorpay-container iframe,
+iframe.razorpay-checkout-frame {
+  color-scheme: light;
+}

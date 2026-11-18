@@ -23,6 +23,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from apps.api.core.plan_limits import enforce_plan_limit
 from apps.api.core.security import generate_login_token, hash_token
 from apps.api.core.sessions import invalidate_user_sessions
 from apps.api.db.models.account_user import AccountUser
@@ -164,6 +165,8 @@ async def invite_member(
             raise HTTPException(
                 status_code=409, detail="Team member limit reached for this organization"
             )
+
+    await enforce_plan_limit(db, org.org_id, "team_members")
 
     existing_result = await db.execute(select(AccountUser).where(AccountUser.email == payload.email))
     account_user = existing_result.scalar_one_or_none()

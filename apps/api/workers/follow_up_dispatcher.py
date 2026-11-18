@@ -47,7 +47,7 @@ from apps.api.core.org_credentials import (
     resolve_plivo_credentials,
     resolve_twilio_credentials,
 )
-from apps.api.core.usage import record_usage
+from apps.api.core.usage import record_usage, record_whatsapp_sent
 from apps.api.db.models import Appointment, Contact, FollowUpRule, FollowUpTask, Lead
 from apps.api.db.models.org import Org
 from apps.api.db.models.template import WhatsAppTemplate
@@ -552,6 +552,9 @@ async def _execute_task(task_id: UUID) -> None:
         await _resolve_task(task_id, "failed")
         return
 
+    await record_whatsapp_sent(
+        lead.org_id, source="follow_up_dispatcher", fallback_key=f"follow_up:{task_id}"
+    )
     await _resolve_task(task_id, "sent")
 
 

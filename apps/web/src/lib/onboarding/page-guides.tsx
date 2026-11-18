@@ -606,6 +606,47 @@ export const PAGE_GUIDES: Record<string, GuideStep[]> = {
       content: "Pick the plan that fits your monthly volume and confirm — new limits apply straight away.",
     },
   ],
+  "/plans": [
+    {
+      anchor: "header",
+      title: "Plans & Payments",
+      content:
+        "Plans decide how long you have access and how much you can use. Customers buy and renew them here; the platform owner creates them.",
+    },
+    {
+      selector: '[data-tour="plan-usage"]',
+      side: "bottom",
+      title: "Your usage",
+      content:
+        "Each bar shows how much of a plan limit you have used: call minutes, WhatsApp messages, team members and campaigns. When one fills up, that feature is paused until you renew or upgrade.",
+    },
+    {
+      selector: '[data-tour="plan-store"]',
+      side: "top",
+      title: "Choose a plan",
+      content:
+        "Click Buy plan (or Renew) and pay securely with Razorpay in the popup. Renewals start right away: your limits reset and the days you have left are kept. Only an organization admin can buy.",
+    },
+    {
+      selector: '[data-tour="plan-history"]',
+      side: "top",
+      title: "Payment history",
+      content: "Every payment with its date, amount, the date your access runs until, and whether it was paid.",
+    },
+    {
+      selector: '[data-tour="plan-catalog"]',
+      side: "top",
+      title: "Your plans",
+      content:
+        "Each card is a plan customers can buy. Edit changes its price, length or limits for new purchases only; Hide removes it from the store without affecting people who already paid.",
+    },
+    {
+      anchor: "action",
+      title: "Create a plan",
+      content:
+        "Click New plan, then enter a name, price in rupees, length in days and the limits. Leave a limit blank for unlimited.",
+    },
+  ],
   "/support": [
     {
       anchor: "header",

@@ -143,3 +143,46 @@ async def record_usage(
         logger.info("usage_event_duplicate_ignored", event_id=event_id, org_id=str(organization_id))
         return None
     return event
+
+
+async def record_whatsapp_sent(
+    org_id: UUID | None,
+    *,
+    source: str,
+    response: dict[str, Any] | None = None,
+    fallback_key: str | None = None,
+) -> None:
+    """Count one outbound WhatsApp message toward the plan's ``whatsapp_messages``.
+
+    Call right after Meta accepts a send. Uses its own session so the caller's
+    transaction is untouched, is keyed to Meta's message id (``fallback_key``
+    when absent) so a retry can't double-count, and never raises - a metering
+    failure must not fail a send that already went out.
+    """
+    if org_id is None:
+        return
+    from apps.api.db.session import AsyncSessionLocal  # lazy: avoid import cycle
+
+    wa_id: str | None = None
+    messages = response.get("messages") if isinstance(response, dict) else None
+    if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+        raw = messages[0].get("id")
+        wa_id = raw if isinstance(raw, str) else None
+    key = wa_id or fallback_key or str(uuid.uuid4())
+    try:
+        async with AsyncSessionLocal() as db:
+            await record_usage(
+                db,
+                organization_id=org_id,
+                event_id=deterministic_event_id("whatsapp_outbound", key),
+                service="whatsapp",
+                usage_type="whatsapp_messages",
+                quantity=1,
+                unit="messages",
+                provider="meta",
+                source=source,
+                metadata={"direction": "outbound"},
+            )
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("usage_metering_failed", source=source)

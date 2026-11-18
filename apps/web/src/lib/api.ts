@@ -68,6 +68,26 @@ function humanizeApiError(status: number, raw: string): string {
 }
 
 /**
+ * Client-ready message for a failed `fetch` Response, for the few call sites
+ * that can't use `apiFetch` (multipart uploads). Same rules as `apiFetch`:
+ * the server's own plain-English text (a string `detail`, or a structured
+ * `detail.message` such as plan_limit_reached) wins; otherwise a friendly
+ * per-status fallback - never a bare "403 Forbidden".
+ */
+export async function readApiError(res: Response): Promise<string> {
+  let raw = "";
+  try {
+    const body = await res.json();
+    if (typeof body?.detail === "string") raw = body.detail;
+    else if (typeof body?.detail?.message === "string") raw = body.detail.message;
+    else if (typeof body?.message === "string") raw = body.message;
+  } catch {
+    // non-JSON body - use the status fallback
+  }
+  return humanizeApiError(res.status, raw);
+}
+
+/**
  * Typed fetch wrapper for the Veerox API.
  *
  * - Prepends NEXT_PUBLIC_API_URL to `path`.
@@ -105,6 +125,11 @@ export async function apiFetch<T>(
       } else if (body?.detail?.error === "license_inactive") {
         licenseStatus = body.detail.status;
         message = body.detail.message ?? message;
+      } else if (typeof body?.detail?.message === "string") {
+        // Structured errors with a client-ready message, e.g. plan_limit_reached
+        // ("You've reached your plan's limit of 3 team members…") or
+        // feature_disabled — show the server's own wording, not a generic 403.
+        message = body.detail.message;
       } else if (typeof body?.message === "string") {
         message = body.message;
       }

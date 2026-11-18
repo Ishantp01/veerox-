@@ -56,6 +56,15 @@ class Settings(BaseSettings):
     startup_seed_required: bool = False
     test_database_url: str = "sqlite+aiosqlite:///:memory:"
 
+    # Razorpay (plan payments — independent of the manual org license)
+    razorpay_key_id: str | None = None
+    razorpay_key_secret: str | None = None
+    razorpay_webhook_secret: str | None = None
+    # When true, an org (other than the owner org) with no active paid plan is
+    # sent to the plans screen right after login until it picks one. Off by
+    # default so existing license-only clients are never locked out on deploy.
+    plan_required_on_login: bool = False
+
     # OpenAI
     openai_api_key: str | None = None
     openai_chat_model: str = "gpt-4o-mini"

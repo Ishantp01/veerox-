@@ -1076,6 +1076,7 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
             if stream_id:
                 state.stream_id = stream_id
             state.call_uuid = call_uuid or None
+            state.usage.is_campaign = campaign_target_id is not None
             state.diag_on = voice_adapter.diag_enabled()  # VOICE_PIPELINE_DIAG, pilot only
             state.call_ws = ws
             call_state = state
@@ -1515,6 +1516,7 @@ async def _authorized_voice_stream(ws: WebSocket) -> None:
                                 provider=provider,
                                 source="realtime_bridge",
                                 request_id=call_uuid,
+                                metadata={"campaign": True} if campaign_target_id is not None else None,
                             )
                             await usage_db.commit()
                 except Exception:  # noqa: BLE001

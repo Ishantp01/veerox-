@@ -52,6 +52,7 @@ from apps.api.channels.whatsapp.webhook_registration import fire_and_forget_regi
 from apps.api.channels.voice.realtime_bridge import start_precall_connect
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.config import settings
+from apps.api.core.plan_limits import enforce_plan_limit
 from apps.api.core.crypto import decrypt_secret, encrypt_secret, mask_secret
 from apps.api.core.llm import chat_completion
 from apps.api.core.phone import normalize_phone
@@ -67,7 +68,7 @@ from apps.api.core.tools import (
     _normalize_phone,
     get_or_create_lead_for_user,
 )
-from apps.api.core.usage import deterministic_event_id, record_usage
+from apps.api.core.usage import deterministic_event_id, record_usage, record_whatsapp_sent
 from apps.api.core.whatsapp_assets import (
     MAX_ASSET_BYTES,
     asset_public_url,
@@ -2208,6 +2209,10 @@ async def create_campaign(
     """
     if channel is not None:
         await _require_campaign_channel_feature(db, org, channel)
+    # Plan limit: a channel-locked upload creates that channel's campaign; an
+    # unlocked one may create either, so both must have room.
+    for limited in (channel,) if channel else ("voice", "whatsapp"):
+        await enforce_plan_limit(db, org, f"{limited}_campaigns")
     if start_mode == "scheduled" and (
         scheduled_start_at is None or scheduled_start_at <= datetime.now(UTC)
     ):
@@ -4204,6 +4209,7 @@ async def outbound_whatsapp(
     behaviour — useful for local development without Meta credentials.
     """
     org_id = org
+    await enforce_plan_limit(db, org_id, "whatsapp_messages")
     payload.phone = normalize_phone(payload.phone, await _org_country_code(db, org_id))
 
     # Find or create the recipient user under the default org.
@@ -4350,6 +4356,8 @@ async def outbound_whatsapp(
         detail = wa_client.friendly_error_message(meta_error)
         raise HTTPException(status_code=502, detail=detail) from exc
 
+    await record_whatsapp_sent(org_id, source="outbound_whatsapp", response=graph_response)
+
     wa_message_id: str | None = None
     messages_block = graph_response.get("messages")
     if isinstance(messages_block, list) and messages_block:
@@ -4404,6 +4412,7 @@ async def outbound_call(
     ``channels/voice/webhook.py`` — which currently speaks a test message.
     """
     org_id = org
+    await enforce_plan_limit(db, org_id, "call_minutes")
     payload.to_phone = normalize_phone(payload.to_phone, await _org_country_code(db, org_id))
 
     # Refused BEFORE anything is written: a number outside the allowlist must not even create a

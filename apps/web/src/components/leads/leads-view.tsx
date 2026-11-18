@@ -11,7 +11,7 @@ import { NewContactDialog } from "@/components/crm/new-contact-dialog";
 import { LeadTable } from "@/components/leads/lead-table";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_OPTIONS } from "@/components/leads/status-badge";
 import { Button, EmptyState, Input, Pagination, Select, SkeletonRows, Table, useToast } from "@/components/ui";
-import { SESSION_TOKEN_KEY } from "@/lib/api";
+import { readApiError, SESSION_TOKEN_KEY } from "@/lib/api";
 import { downloadCsv } from "@/lib/download-csv";
 import { useCreateLeadFromContact, useLeads, useLeadStatusPresets } from "@/lib/hooks";
 import type { LeadStatus } from "@/lib/types";
@@ -75,7 +75,7 @@ async function importLeadsFile(
     body: form,
   });
   if (!res.ok) {
-    throw new Error(`Import failed (${res.status} ${res.statusText})`);
+    throw new Error(await readApiError(res));
   }
   return res.json();
 }

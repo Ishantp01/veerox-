@@ -7,7 +7,7 @@ import { QueryBoundary } from "@/components/layout/query-boundary";
 import { ContactTable } from "@/components/crm/contact-table";
 import { NewContactDialog } from "@/components/crm/new-contact-dialog";
 import { Button, EmptyState, Input, Pagination, SkeletonRows, Table, useToast } from "@/components/ui";
-import { SESSION_TOKEN_KEY } from "@/lib/api";
+import { readApiError, SESSION_TOKEN_KEY } from "@/lib/api";
 import { downloadCsv } from "@/lib/download-csv";
 import { useClientPagination, useContacts } from "@/lib/hooks";
 
@@ -47,7 +47,7 @@ async function importContactsFile(file: File): Promise<ImportContactsResult> {
     body: form,
   });
   if (!res.ok) {
-    throw new Error(`Import failed (${res.status} ${res.statusText})`);
+    throw new Error(await readApiError(res));
   }
   return res.json();
 }

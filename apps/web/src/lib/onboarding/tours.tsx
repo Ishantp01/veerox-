@@ -52,6 +52,7 @@ export const ONBORDA_NAV_IDS: Record<string, string> = {
   "/calling": "onborda-nav-calling",
   "/whatsapp": "onborda-nav-whatsapp",
   "/whatsapp/templates": "onborda-nav-templates",
+  "/plans": "onborda-nav-plans",
   "/crm/contacts": "onborda-nav-contacts",
   "/crm/leads": "onborda-nav-leads",
   "/crm/appointments": "onborda-nav-appointments",
@@ -270,6 +271,13 @@ export const ALL_STEPS: Step[] = [
   ),
 
   // Settings
+  navStep(
+    "onborda-nav-plans",
+    CreditCard,
+    "Plans & Payments",
+    "Your plan decides how long you have access and how much you can use: call minutes, WhatsApp messages, team members and campaigns.",
+    "Pick a plan and pay securely with Razorpay in the popup. Renewals start right away: your limits reset and the days you have left are kept. The usage bars show how much of each limit you have used. Only an organization admin can buy.",
+  ),
   navStep(
     "onborda-nav-team",
     UsersRound,

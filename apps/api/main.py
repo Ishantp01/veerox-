@@ -24,6 +24,7 @@ from apps.api.routers import (
     appointments,
     auth,
     billing,
+    payments,
     conversation_engine,
     conversation_engine_config,
     conversation_internal,
@@ -174,6 +175,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(billing.router)
+    app.include_router(payments.router)
     app.include_router(conversations.router)
     app.include_router(conversation_engine.router)
     app.include_router(conversation_engine_config.router)

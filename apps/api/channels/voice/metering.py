@@ -68,6 +68,8 @@ class CallUsage:
     # last checkpoint. Checkpoint 0 keeps the original ids.
     flushed: dict[str, float] = field(default_factory=dict)
     seq: int = 0
+    # Campaign calls are limited by the campaign count, not by call minutes.
+    is_campaign: bool = False
     _pending: dict[str, float] = field(default_factory=dict, repr=False)
 
     def add_response(self, response: dict[str, Any] | None) -> bool:
@@ -217,7 +219,8 @@ async def flush_call_usage(
                {"retry_characters": delta.get("tts_retry", 0), "model": platform_model_id()})
     await emit("judge_in", "ai_input_tokens", "tokens", "openai", "voice_turn_judge", {})
     await emit("judge_out", "ai_output_tokens", "tokens", "openai", "voice_turn_judge", {})
-    await emit("call_seconds", "voice_seconds", "seconds", provider, "realtime_bridge", {}, service="voice")
+    await emit("call_seconds", "voice_seconds", "seconds", provider, "realtime_bridge",
+               {"campaign": True} if usage.is_campaign else {}, service="voice")
     return written
 
 

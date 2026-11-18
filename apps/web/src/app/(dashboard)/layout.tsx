@@ -5,6 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { DashboardShell } from "@/components/layout/dashboard-shell";
 import { SocialLinksFloatingBar } from "@/components/layout/social-links-floating-bar";
 import { OnboardingTour } from "@/components/onboarding/onboarding-tour";
+import { PlanGate } from "@/components/billing/plan-gate";
+import { PlanLimitBanner } from "@/components/billing/plan-limit-banner";
 import { LicenseLockedScreen } from "@/components/organizations/license-locked-screen";
 import { Spinner } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
@@ -88,11 +90,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <OnboardingTour>
-      <DashboardShell>
-        {children}
-        <SocialLinksFloatingBar />
-      </DashboardShell>
-    </OnboardingTour>
+    <PlanGate>
+      <OnboardingTour>
+        <DashboardShell>
+          <PlanLimitBanner />
+          {children}
+          <SocialLinksFloatingBar />
+        </DashboardShell>
+      </OnboardingTour>
+    </PlanGate>
   );
 }

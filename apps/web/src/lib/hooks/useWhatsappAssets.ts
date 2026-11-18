@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiFetch, SESSION_TOKEN_KEY } from "@/lib/api";
+import { apiFetch, readApiError, SESSION_TOKEN_KEY } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
 import type { WhatsAppAsset } from "@/lib/types";
 
@@ -49,14 +49,7 @@ async function uploadWhatsappAsset(input: UploadWhatsappAssetInput): Promise<Wha
     body: form,
   });
   if (!res.ok) {
-    let message = `Upload failed (${res.status} ${res.statusText})`;
-    try {
-      const body = await res.json();
-      if (typeof body?.detail === "string") message = body.detail;
-    } catch {
-      // ignore JSON parse failure — use the status message
-    }
-    throw new Error(message);
+    throw new Error(await readApiError(res));
   }
   return res.json();
 }

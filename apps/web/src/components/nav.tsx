@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  CreditCard,
   LayoutDashboard,
   FileText,
   Paperclip,
@@ -108,6 +109,7 @@ const GROUPS: NavGroup[] = [
   {
     label: "Settings",
     items: [
+      { href: "/plans", label: "Plans & Payments", Icon: CreditCard },
       { href: "/team", label: "Team", Icon: UsersRound },
       { href: "/settings", label: "Settings", Icon: Settings },
       { href: "/support", label: "Support", Icon: LifeBuoy },
@@ -151,7 +153,7 @@ export interface NavProps {
 // Org-level pages (team management, connection settings) — visible to the
 // org's admin, hidden for a plain "member" so they land on their working
 // tools only, not the org's back office.
-const MEMBER_RESTRICTED_HREFS = new Set(["/team", "/settings", "/conversation-engine"]);
+const MEMBER_RESTRICTED_HREFS = new Set(["/plans", "/team", "/settings", "/conversation-engine"]);
 
 export default function Nav({ mobileOpen = false, onCloseMobile }: NavProps) {
   const pathname = usePathname();

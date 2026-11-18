@@ -38,7 +38,8 @@ from apps.api.core.org_credentials import (
     resolve_plivo_credentials,
     resolve_twilio_credentials,
 )
-from apps.api.core.usage import deterministic_event_id, record_usage
+from apps.api.core.plan_limits import is_within_plan_limit
+from apps.api.core.usage import deterministic_event_id, record_usage, record_whatsapp_sent
 from apps.api.core.whatsapp_assets import asset_public_url, load_org_assets, resolve_asset
 from apps.api.core.whatsapp_template_catalog import load_active_templates, resolve_template
 from apps.api.db.models.account_user import AccountUser
@@ -1708,7 +1709,7 @@ async def _send_appointment_confirmation_template(
     ).scalars().first()
     body_params = await _appointment_body_params(db, template_name, name=name, date=date, time=time)
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
-    await wa_client.send_template(
+    sent = await wa_client.send_template(
         access_token,
         to_e164,
         template_name,
@@ -1716,6 +1717,7 @@ async def _send_appointment_confirmation_template(
         body_params=body_params,
         phone_number_id=phone_number_id,
     )
+    await record_whatsapp_sent(org_id, source="appointment_confirmation", response=sent)
 
 
 async def send_whatsapp_message(
@@ -1764,6 +1766,8 @@ async def send_whatsapp_message(
     meta_creds = resolve_meta_credentials(org)
     if meta_creds is None:
         return {"status": "error", "reason": "whatsapp_not_configured"}
+    if not await is_within_plan_limit(db, org_id, "whatsapp_messages"):
+        return {"status": "error", "reason": "plan_limit_reached"}
 
     normalized = normalize_phone(target_phone, org.default_country_code if org else None)
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
@@ -1808,7 +1812,10 @@ async def send_whatsapp_message(
         }
 
     try:
-        await wa_client.send_text(meta_creds.access_token, normalized, message, phone_number_id=phone_number_id)
+        sent_text = await wa_client.send_text(
+            meta_creds.access_token, normalized, message, phone_number_id=phone_number_id
+        )
+        await record_whatsapp_sent(org_id, source="send_whatsapp_message_tool", response=sent_text)
     except httpx.HTTPStatusError as exc:
         if _meta_error_code(exc) == _REENGAGEMENT_ERROR_CODE:
             logger.info("send_whatsapp_message_tool_outside_window", phone=normalized)
@@ -2061,6 +2068,8 @@ async def send_whatsapp_template(
     meta_creds = resolve_meta_credentials(org)
     if meta_creds is None:
         return {"status": "error", "reason": "whatsapp_not_configured"}
+    if not await is_within_plan_limit(db, org_id, "whatsapp_messages"):
+        return {"status": "error", "reason": "plan_limit_reached"}
 
     normalized = normalize_phone(target_phone, org.default_country_code if org else None)
     phone_number_id = await get_default_whatsapp_number_id(db, org_id)
@@ -2093,7 +2102,7 @@ async def send_whatsapp_template(
     )
 
     try:
-        await wa_client.send_template(
+        sent_tpl = await wa_client.send_template(
             meta_creds.access_token,
             normalized,
             resolved.name,
@@ -2104,6 +2113,7 @@ async def send_whatsapp_template(
             button_params=button_params,
             phone_number_id=phone_number_id,
         )
+        await record_whatsapp_sent(org_id, source="send_whatsapp_template_tool", response=sent_tpl)
     except httpx.HTTPError as exc:
         logger.warning(
             "send_whatsapp_template_tool_failed",

@@ -271,3 +271,16 @@ def _reset_conversation_config_cache() -> None:
     from apps.api.core.conversation.config import reset_config_cache
 
     reset_config_cache()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_db_for_usage_metering(monkeypatch: pytest.MonkeyPatch) -> None:
+    """core.usage.record_whatsapp_sent opens its own session via a lazy import of
+    apps.api.db.session.AsyncSessionLocal. Never let a test reach the configured
+    (real) database through it: fail fast instead - the helper swallows the error."""
+    import apps.api.db.session as session_module
+
+    def _blocked(*_a: object, **_k: object) -> None:
+        raise RuntimeError("real DB blocked in tests")
+
+    monkeypatch.setattr(session_module, "AsyncSessionLocal", _blocked)
