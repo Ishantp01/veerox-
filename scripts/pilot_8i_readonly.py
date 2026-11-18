@@ -37,7 +37,7 @@ async def audit(provider_metadata: bool = False) -> dict:
     from apps.api.core.conversation.config import config_from_json
 
     pilot = parse_env((ROOT / ".env.pilot").read_text(encoding="utf-8"))
-    main = parse_env((ROOT / ".env").read_text(encoding="utf-8"))
+    main = parse_env(((ROOT / ".env.local") if (ROOT / ".env.local").exists() else (ROOT / ".env")).read_text(encoding="utf-8"))
     checks = check_pilot_env(pilot, main)
     base = urlsplit(settings.public_base_url)
     allowed = [re.sub(r"\D", "", n) for n in settings.pilot_allowed_numbers.split(",") if n.strip()]

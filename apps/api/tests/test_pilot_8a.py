@@ -409,7 +409,7 @@ def test_the_env_file_can_be_redirected_so_the_real_dotenv_is_not_read(monkeypat
     # by offline validation. Resolving a path does not read the real dotenv.
     monkeypatch.delenv("VEEROX_ENV_FILE", raising=False)
     default = config_module.resolve_env_file()
-    assert default.name == ".env"
+    assert default.name in (".env", ".env.local")
     monkeypatch.setenv("VEEROX_ENV_FILE", str(tmp_path / "pilot.env"))
     assert config_module.resolve_env_file() == (tmp_path / "pilot.env").resolve()
     monkeypatch.delenv("VEEROX_ENV_FILE")

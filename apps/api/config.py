@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def resolve_env_file() -> Path:
-    """The dotenv file to load: the repository's ``.env`` unless ``VEEROX_ENV_FILE`` names another one.
+    """The dotenv file to load: the repository's ``.env.local`` (else ``.env``) unless ``VEEROX_ENV_FILE`` names another one.
 
     A pilot sets ``VEEROX_ENV_FILE`` to its own file so the process reads ONLY that file. Without this the real
     ``.env`` would still be read for every variable the pilot file leaves out, silently lending a pilot the
@@ -15,7 +15,10 @@ def resolve_env_file() -> Path:
     override = os.environ.get("VEEROX_ENV_FILE")
     if override:
         return Path(override).expanduser().resolve()
-    return Path(__file__).resolve().parents[2] / ".env"
+    root = Path(__file__).resolve().parents[2]
+    # Local dev keeps its settings in ``.env.local``; the production server only has ``.env`` (docker-compose env_file).
+    local = root / ".env.local"
+    return local if local.exists() else root / ".env"
 
 
 ENV_FILE = resolve_env_file()
