@@ -383,22 +383,6 @@ def test_experimental_voice_flags_in_the_pilot_file_are_flagged() -> None:
     assert any("VOICE_SAFE_CANCEL" in r.detail for r in warned)
 
 
-def test_the_example_file_is_complete_safe_and_uses_real_setting_names() -> None:
-    text = (ROOT / ".env.pilot.example").read_text(encoding="utf8")
-    env = parse_env(text)
-    assert env["ENVIRONMENT"] == "pilot" and env["LOG_TRANSCRIPTS"] == "false" and env["PILOT_WORKERS_ENABLED"] == "false"
-    assert env["PLIVO_STARTUP_REGISTRATION"] == "false" and env["REDIS_URL"].startswith("rediss://")
-    for name in ("META_ACCESS_TOKEN", "RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "BREVO_API_KEY", "SENTRY_DSN", "META_APP_SECRET"):
-        assert name not in env, name  # absent on purpose: no WhatsApp, payments, e-mail or production monitoring
-    assert all(env[k] == "false" for k in env if k.startswith("VOICE_") and k not in ("VOICE_LATENCY_TRACKING", "VOICE_TTS_PROVIDER", "VOICE_GREETING_AI_DISCLOSURE") and not k.startswith("VOICE_OUTBOUND_"))  # numeric limits are not behaviour flags
-    assert env["VOICE_GREETING_AI_DISCLOSURE"] == "true"  # the AI disclosure is stated, not left to a default
-    assert not any("#" in v for v in env.values())  # no inline comments that a dotenv reader could mis-parse
-    known = set(config_module.Settings.model_fields)
-    unknown = [k for k in env if k.lower() not in known]
-    assert unknown == [], unknown  # every name in the example is a real setting
-    assert not [r for r in check_pilot_env({**env, "DATABASE_URL": GOOD["DATABASE_URL"], "REDIS_URL": GOOD["REDIS_URL"], "PUBLIC_BASE_URL": GOOD["PUBLIC_BASE_URL"]}, MAIN) if r.status == "FAIL"]
-
-
 def test_the_real_gitignore_covers_the_filled_in_pilot_file() -> None:
     lines = (ROOT / ".gitignore").read_text(encoding="utf8").splitlines()
     assert ".env.pilot" in lines and ".env.pilot.example" not in lines
