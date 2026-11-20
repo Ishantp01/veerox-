@@ -19,11 +19,12 @@ from __future__ import annotations
 import re
 import time
 from collections import OrderedDict
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.core.conversation.types import ALLOWED_ACTIONS
@@ -474,18 +475,27 @@ async def load_active_config(db: AsyncSession, org_id: UUID) -> EngineConfig:
     return config
 
 
-async def resolve_config(db: AsyncSession, org_id: UUID, conversation_id: UUID | None) -> EngineConfig:
+async def resolve_config(
+    db: AsyncSession,
+    org_id: UUID,
+    conversation_id: UUID | None,
+    since: datetime | None = None,
+) -> EngineConfig:
     """The configuration for this turn.
 
     A conversation keeps the version its first logged turn used; only a
     conversation with no turns yet takes the currently published version. So
     publishing or rolling back never changes a call that is under way.
+
+    ``since`` (WhatsApp's one-long-thread-per-customer model) restricts "first
+    logged turn" to the current session, so a customer returning after a long
+    gap picks up the currently published version, as a fresh row used to.
     """
     from apps.api.db.models.conversation_engine import ConversationTurn
 
     if conversation_id is None:
         return await load_active_config(db, org_id)
-    if conversation_id in _pin_cache:
+    if since is None and conversation_id in _pin_cache:
         pinned = _pin_cache[conversation_id]
         if pinned is None:
             return default_config()
@@ -498,6 +508,7 @@ async def resolve_config(db: AsyncSession, org_id: UUID, conversation_id: UUID |
             .where(
                 ConversationTurn.org_id == org_id,
                 ConversationTurn.conversation_id == conversation_id,
+                ConversationTurn.created_at >= since if since is not None else true(),
             )
             .order_by(ConversationTurn.created_at.asc())
             .limit(1)
@@ -505,7 +516,8 @@ async def resolve_config(db: AsyncSession, org_id: UUID, conversation_id: UUID |
     ).first()
     if first is not None:
         version_id = first[0]
-        _remember(_pin_cache, conversation_id, version_id)
+        if since is None:
+            _remember(_pin_cache, conversation_id, version_id)
         if version_id is None:
             return default_config()
         loaded = await load_version_config(db, org_id, version_id)

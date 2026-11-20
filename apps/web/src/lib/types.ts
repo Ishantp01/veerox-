@@ -857,3 +857,66 @@ export interface ScriptSuggestions {
   dropped: string[];
   model_used: boolean;
 }
+
+// ---- Unified Chat module (GET /admin/chat/...) ----
+
+export interface ChatLead {
+  user_id: string;
+  name: string | null;
+  phone: string;
+  last_message_preview: string | null;
+  last_message_role: string | null;
+  last_message_channel: string | null;
+  last_activity_at: string | null;
+  unread_count: number;
+  conversation_count: number;
+  lead_status: string | null;
+  staff_name: string | null;
+}
+
+export interface ChatConversationInfo {
+  id: string;
+  channel: "voice" | "whatsapp";
+  started_at: string;
+  ended_at: string | null;
+  recording_url: string | null;
+  recording_duration_secs: number | null;
+  summary: string | null;
+  tags: string[];
+}
+
+export interface ChatMessage {
+  id: string;
+  conversation_id: string;
+  role: string;
+  channel: string;
+  content: string;
+  audio_secs: number | null;
+  created_at: string;
+}
+
+export interface ChatThread {
+  contact: {
+    user_id: string;
+    name: string | null;
+    phone: string;
+    first_seen_at: string;
+  };
+  lead: {
+    id: string;
+    name: string | null;
+    status: string;
+    intent: string | null;
+    tags: string[];
+    qualification_status: string;
+    follow_up_at: string | null;
+    created_at: string;
+    staff_name: string | null;
+    email: string | null;
+    company: string | null;
+  } | null;
+  conversations: ChatConversationInfo[];
+  messages: ChatMessage[];
+  has_more: boolean;
+  next_before: string | null;
+}

@@ -51,6 +51,7 @@ from apps.api.channels.voice.metering import CallUsage
 from apps.api import pilot
 from apps.api.config import settings
 from apps.api.core import privacy
+from apps.api.core.user_lookup import find_user_by_phone
 from apps.api.core.conversation import dialogue, runtime_stats, voice_decision
 from apps.api.core.conversation.silence import SilenceMonitor
 from apps.api.core.conversation.shadow import schedule_voice_shadow
@@ -2187,8 +2188,7 @@ def _normalize_phone(phone: str) -> str:
 
 
 async def _get_or_create_user(db: AsyncSession, org_id: UUID, phone: str) -> User:
-    stmt = select(User).where(User.org_id == org_id, User.phone == phone)
-    existing = (await db.execute(stmt)).scalar_one_or_none()
+    existing = await find_user_by_phone(db, org_id, phone)
     if existing is not None:
         return existing
     user = User(org_id=org_id, phone=phone)

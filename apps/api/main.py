@@ -24,6 +24,7 @@ from apps.api.routers import (
     appointments,
     auth,
     billing,
+    chat,
     payments,
     conversation_engine,
     conversation_engine_config,
@@ -194,6 +195,7 @@ def create_app() -> FastAPI:
     app.include_router(usage.admin_router)
     app.include_router(usage.internal_router)
     app.include_router(admin.router)
+    app.include_router(chat.router)
     app.include_router(media.router)
     app.include_router(diag.router)
     app.include_router(whatsapp_router)

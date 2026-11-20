@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     # Any failure falls back to the older duration-based rules; set false to
     # turn it off entirely (saves the extra connection per call).
     voice_live_turn_detection: bool = True
+    # One WhatsApp conversation per customer for life (core/chat_threads.py)
+    # instead of a fresh row after 30 idle minutes. Set UNIFIED_WHATSAPP_THREAD=false
+    # to restore the old per-session rows if it ever misbehaves.
+    unified_whatsapp_thread: bool = True
     # Register each org's Plivo numbers' inbound answer URL at every server
     # start (channels/voice/plivo_provisioning.py). Leave ON in production;
     # set PLIVO_STARTUP_REGISTRATION=false in any dev .env, otherwise starting

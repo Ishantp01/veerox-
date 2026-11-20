@@ -33,7 +33,9 @@ export function formatRelative(iso: string | null | undefined): string {
 /** Group an E.164-ish phone for readability; falls back to the raw string. */
 export function formatPhone(phone: string | null | undefined): string {
   if (!phone) return "—";
-  const digits = phone.replace(/[^\d+]/g, "");
+  let digits = phone.replace(/[^\d+]/g, "");
+  // Some channels store the number without its leading "+" (919179609988).
+  if (/^91\d{10}$/.test(digits)) digits = `+${digits}`;
   // +91 98765 43210 style grouping for Indian numbers; otherwise return cleaned.
   const m = digits.match(/^(\+\d{1,3})(\d{5})(\d{5})$/);
   return m ? `${m[1]} ${m[2]} ${m[3]}` : digits;

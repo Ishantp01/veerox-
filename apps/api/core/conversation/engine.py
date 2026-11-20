@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -123,7 +124,15 @@ def _default_llm(api_key: str | None) -> LLMCall:
     return call
 
 
-async def _last_state(db: AsyncSession, org_id: UUID, conversation_id: UUID | None) -> str | None:
+async def _last_state(
+    db: AsyncSession,
+    org_id: UUID,
+    conversation_id: UUID | None,
+    since: datetime | None = None,
+) -> str | None:
+    """State of the latest clean turn. ``since`` (WhatsApp's one-thread-per-customer
+    model) ignores turns from before the current session, so a customer returning
+    after a long gap starts from a fresh state exactly as a new row used to."""
     if conversation_id is None:
         return None
     stmt = (
@@ -136,6 +145,8 @@ async def _last_state(db: AsyncSession, org_id: UUID, conversation_id: UUID | No
         .order_by(ConversationTurn.created_at.desc())
         .limit(1)
     )
+    if since is not None:
+        stmt = stmt.where(ConversationTurn.created_at >= since)
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
@@ -232,6 +243,7 @@ async def run_engine(
     llm: LLMCall | None = None,
     config: EngineConfig | None = None,
     smart_script: bool = False,
+    session_since: datetime | None = None,
 ) -> EngineResult:
     """Run one customer turn through the engine.
 
@@ -273,9 +285,11 @@ async def run_engine(
         return EngineResult(None, reason, tokens_in, tokens_out)
 
     try:
-        config = config or await resolve_config(db, org_id, conversation_id)
+        config = config or await resolve_config(
+            db, org_id, conversation_id, since=session_since
+        )
         log_ctx["config"] = config
-        state = await _last_state(db, org_id, conversation_id)
+        state = await _last_state(db, org_id, conversation_id, since=session_since)
         memory = await load_memory(db, org_id, user_id)
 
         try:

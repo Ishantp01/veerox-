@@ -40,6 +40,7 @@ from apps.api.core.org_credentials import (
 )
 from apps.api.core.plan_limits import is_within_plan_limit
 from apps.api.core.usage import deterministic_event_id, record_usage, record_whatsapp_sent
+from apps.api.core.whatsapp_render import record_outbound_template, record_outbound_whatsapp
 from apps.api.core.whatsapp_assets import asset_public_url, load_org_assets, resolve_asset
 from apps.api.core.whatsapp_template_catalog import load_active_templates, resolve_template
 from apps.api.db.models.account_user import AccountUser
@@ -1718,6 +1719,7 @@ async def _send_appointment_confirmation_template(
         phone_number_id=phone_number_id,
     )
     await record_whatsapp_sent(org_id, source="appointment_confirmation", response=sent)
+    await record_outbound_template(org_id, to_e164, template_name, body_params)
 
 
 async def send_whatsapp_message(
@@ -1816,6 +1818,7 @@ async def send_whatsapp_message(
             meta_creds.access_token, normalized, message, phone_number_id=phone_number_id
         )
         await record_whatsapp_sent(org_id, source="send_whatsapp_message_tool", response=sent_text)
+        await record_outbound_whatsapp(org_id, normalized, message)
     except httpx.HTTPStatusError as exc:
         if _meta_error_code(exc) == _REENGAGEMENT_ERROR_CODE:
             logger.info("send_whatsapp_message_tool_outside_window", phone=normalized)
@@ -2114,6 +2117,9 @@ async def send_whatsapp_template(
             phone_number_id=phone_number_id,
         )
         await record_whatsapp_sent(org_id, source="send_whatsapp_template_tool", response=sent_tpl)
+        await record_outbound_template(
+            org_id, normalized, resolved.name, body_params, [header_value] if header_value else None
+        )
     except httpx.HTTPError as exc:
         logger.warning(
             "send_whatsapp_template_tool_failed",

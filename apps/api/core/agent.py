@@ -47,6 +47,11 @@ from apps.api.db.models.org import Org
 from apps.api.db.models.org_phone_number import OrgPhoneNumber
 from apps.api.db.models.script import Script
 from apps.api.db.session import AsyncSessionLocal
+from apps.api.core.chat_threads import (
+    get_or_create_whatsapp_conversation,
+    session_since,
+    unified_whatsapp_enabled,
+)
 from apps.api.redis_client import get_redis_pool
 
 logger = structlog.get_logger(__name__)
@@ -203,6 +208,9 @@ async def _get_or_open_conversation(
     Beyond the window a fresh row is opened so stale context doesn't bleed
     into a new session.
     """
+    if channel == "whatsapp" and unified_whatsapp_enabled():
+        return await get_or_create_whatsapp_conversation(db, org_id, user_id)
+
     threshold = datetime.now(UTC) - OPEN_CONVERSATION_WINDOW
     stmt = (
         select(Conversation)
@@ -546,6 +554,13 @@ class AgentCore:
                 api_key=openai_api_key,
                 dispatch=_engine_dispatch,
                 smart_script=org_row.conversation_mode == "smart_script",
+                # One long-lived thread per customer: the engine must still
+                # treat a return after a long gap as a fresh session.
+                session_since=(
+                    session_since()
+                    if channel == "whatsapp" and unified_whatsapp_enabled()
+                    else None
+                ),
             )
             engine_guidance = engine_result.guidance
             if engine_result.reply is not None:

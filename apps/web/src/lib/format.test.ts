@@ -46,6 +46,11 @@ describe("formatPhone", () => {
     expect(formatPhone("+919876543210")).toBe("+91 98765 43210");
   });
 
+  it("treats a 91-prefixed number stored without + the same as +91", () => {
+    expect(formatPhone("919179609988")).toBe("+91 91796 09988");
+    expect(formatPhone("+919179609988")).toBe("+91 91796 09988");
+  });
+
   it("strips junk but returns cleaned digits when no grouping match", () => {
     expect(formatPhone("98765-43210")).toBe("9876543210");
   });

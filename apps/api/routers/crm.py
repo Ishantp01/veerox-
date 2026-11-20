@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from apps.api.core.phone import normalize_phone
 from apps.api.core.tools import get_or_create_lead_for_user
+from apps.api.core.user_lookup import find_user_by_phone
 from apps.api.db.models import Contact, Lead, LeadStatusPreset, Org, User
 from apps.api.deps import (
     DbDep,
@@ -133,9 +134,7 @@ async def create_lead_from_contact(
         raise HTTPException(status_code=404, detail="Contact not found")
 
     # Leads hang off the messaging User (one per org+phone), not the Contact.
-    user = (
-        await db.execute(select(User).where(User.org_id == org_id, User.phone == contact.phone))
-    ).scalar_one_or_none()
+    user = await find_user_by_phone(db, org_id, contact.phone)
     if user is None:
         user = User(org_id=org_id, phone=contact.phone, name=contact.name)
         db.add(user)

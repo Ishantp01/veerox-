@@ -48,6 +48,7 @@ export const FEATURE_GATED_ROUTES: { prefix: string; feature: string }[] = [
   { prefix: "/crm/appointments", feature: "appointments" },
   { prefix: "/crm/leads", feature: "leads" },
   { prefix: "/conversations", feature: "conversations" },
+  { prefix: "/chat", feature: "conversations" },
   { prefix: "/human-support", feature: "human_support" },
   { prefix: "/calling/human-support", feature: "human_support" },
   { prefix: "/whatsapp/human-support", feature: "human_support" },

@@ -26,6 +26,7 @@ from apps.api.core.agent import agent_core, appointment_booked_this_turn
 from apps.api.core.org_credentials import resolve_meta_credentials
 from apps.api.core.org_openai_key import resolve_openai_api_key
 from apps.api.core.tools import get_or_create_lead_for_user, mark_not_interested
+from apps.api.core.user_lookup import find_user_by_phone
 from apps.api.core.transcribe import transcribe
 from apps.api.core.usage import deterministic_event_id, record_usage
 from apps.api.db.models.campaign_target import CampaignTarget
@@ -297,8 +298,7 @@ async def _get_or_create_user(db: AsyncSession, org_id: UUID, phone: str) -> Use
     Logic mirrors ``apps.api.core.tools._get_or_create_user_by_phone`` — we
     deliberately don't import it so the channel layer stays self-contained.
     """
-    stmt = select(User).where(User.org_id == org_id, User.phone == phone)
-    existing = (await db.execute(stmt)).scalar_one_or_none()
+    existing = await find_user_by_phone(db, org_id, phone)
     if existing is not None:
         return existing
 

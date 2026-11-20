@@ -110,6 +110,12 @@ from apps.api.deps import (
     require_feature,
     verify_admin_or_session,
 )
+from apps.api.core.chat_threads import (
+    get_or_create_whatsapp_conversation,
+    unified_whatsapp_enabled,
+)
+from apps.api.core.user_lookup import find_user_by_phone
+from apps.api.core.whatsapp_render import render_template_message
 from apps.api.rate_limit import limiter
 from apps.api.redis_client import ERROR_COUNTER_KEY_FMT
 from apps.api.schemas.admin import (
@@ -4213,8 +4219,7 @@ async def outbound_whatsapp(
     payload.phone = normalize_phone(payload.phone, await _org_country_code(db, org_id))
 
     # Find or create the recipient user under the default org.
-    user_stmt = select(User).where(User.org_id == org_id, User.phone == payload.phone)
-    user = (await db.execute(user_stmt)).scalar_one_or_none()
+    user = await find_user_by_phone(db, org_id, payload.phone)
     if user is None:
         user = User(org_id=org_id, phone=payload.phone)
         db.add(user)
@@ -4228,25 +4233,44 @@ async def outbound_whatsapp(
     )
 
     # Find an open WhatsApp conversation for this user, otherwise open a new one.
-    conv_stmt = (
-        select(Conversation)
-        .where(
-            Conversation.org_id == org_id,
-            Conversation.user_id == user.id,
-            Conversation.channel == "whatsapp",
-            Conversation.ended_at.is_(None),
+    if unified_whatsapp_enabled():
+        conversation = await get_or_create_whatsapp_conversation(db, org_id, user.id)
+    else:
+        conv_stmt = (
+            select(Conversation)
+            .where(
+                Conversation.org_id == org_id,
+                Conversation.user_id == user.id,
+                Conversation.channel == "whatsapp",
+                Conversation.ended_at.is_(None),
+            )
+            .order_by(Conversation.started_at.desc())
+            .limit(1)
         )
-        .order_by(Conversation.started_at.desc())
-        .limit(1)
-    )
-    conversation = (await db.execute(conv_stmt)).scalar_one_or_none()
-    if conversation is None:
-        conversation = Conversation(org_id=org_id, user_id=user.id, channel="whatsapp")
-        db.add(conversation)
-        await db.flush()
+        conversation = (await db.execute(conv_stmt)).scalar_one_or_none()
+        if conversation is None:
+            conversation = Conversation(org_id=org_id, user_id=user.id, channel="whatsapp")
+            db.add(conversation)
+            await db.flush()
 
     # What we record in history: the literal text, or a marker for templates.
-    body_for_record = payload.text or f"[template:{payload.template_name}]"
+    if payload.template_name:
+        recorded_template = (
+            await db.execute(
+                select(WhatsAppTemplate).where(
+                    WhatsAppTemplate.org_id == org_id,
+                    WhatsAppTemplate.name == payload.template_name,
+                )
+            )
+        ).scalars().first()
+        body_for_record = render_template_message(
+            recorded_template,
+            payload.template_name,
+            payload.template_params,
+            payload.template_header_params,
+        )
+    else:
+        body_for_record = payload.text or ""
     message = Message(
         org_id=org_id,
         conversation_id=conversation.id,

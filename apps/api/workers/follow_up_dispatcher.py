@@ -48,6 +48,7 @@ from apps.api.core.org_credentials import (
     resolve_twilio_credentials,
 )
 from apps.api.core.usage import record_usage, record_whatsapp_sent
+from apps.api.core.whatsapp_render import record_outbound_template, record_outbound_whatsapp
 from apps.api.db.models import Appointment, Contact, FollowUpRule, FollowUpTask, Lead
 from apps.api.db.models.org import Org
 from apps.api.db.models.template import WhatsAppTemplate
@@ -543,10 +544,14 @@ async def _execute_task(task_id: UUID) -> None:
                 button_params=task.template_button_params,
                 phone_number_id=phone_number_id,
             )
+            await record_outbound_template(
+                lead.org_id, lead.phone, task.template_name, body_params, header_params
+            )
         else:
             await wa_client.send_text(
                 meta_creds.access_token, lead.phone, message, phone_number_id=phone_number_id
             )
+            await record_outbound_whatsapp(lead.org_id, lead.phone, message)
     except httpx.HTTPError:
         logger.warning("follow_up_dispatcher_send_failed", task_id=str(task_id))
         await _resolve_task(task_id, "failed")

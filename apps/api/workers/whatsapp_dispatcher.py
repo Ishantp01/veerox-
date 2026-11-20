@@ -34,6 +34,7 @@ from apps.api.channels.whatsapp import client as wa_client
 from apps.api.core.agent import _is_kill_switch_active
 from apps.api.core.org_credentials import resolve_meta_credentials
 from apps.api.core.usage import record_usage
+from apps.api.core.whatsapp_render import record_outbound_template, record_outbound_whatsapp
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.org import Org
@@ -331,10 +332,13 @@ async def _send_one(
                 button_params=template_button_params,
                 phone_number_id=phone_number_id,
             )
+            await record_outbound_template(org_id, phone, template_name, body_params, header_params)
         else:
+            opening = _opening_message(criteria)
             await wa_client.send_text(
-                meta_creds.access_token, phone, _opening_message(criteria), phone_number_id=phone_number_id
+                meta_creds.access_token, phone, opening, phone_number_id=phone_number_id
             )
+            await record_outbound_whatsapp(org_id, phone, opening)
     except httpx.HTTPError as exc:
         reason = wa_client.friendly_error_message(wa_client._meta_error_detail(exc))
         logger.warning("whatsapp_dispatcher_send_failed", target_id=target_id, reason=reason)
@@ -360,6 +364,7 @@ async def _send_one(
     # visible disposition_reason on an otherwise-"completed" target instead.
     try:
         await wa_client.send_text(meta_creds.access_token, phone, custom_message, phone_number_id=phone_number_id)
+        await record_outbound_whatsapp(org_id, phone, custom_message)
     except httpx.HTTPError as exc:
         reason = wa_client.friendly_error_message(wa_client._meta_error_detail(exc))
         logger.warning(

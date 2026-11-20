@@ -35,6 +35,9 @@ export function makeQueryClient(): QueryClient {
  */
 export const queryKeys = {
   stats: () => ["stats"] as const,
+  chatLeads: (filters?: { channel?: string; search?: string }) =>
+    ["chat", "leads", filters ?? {}] as const,
+  chatThread: (userId: string, limit: number) => ["chat", "thread", userId, limit] as const,
   conversations: (filters?: { channel?: string; status?: string }) =>
     ["conversations", filters ?? {}] as const,
   conversationMessages: (id: string) => ["conversation", id, "messages"] as const,
@@ -95,6 +98,7 @@ export const POLL = {
   humanSupport: 3_000,
   dashboard: 4_000,
   conversationList: 4_000,
+  chatThread: 3_000,
   leads: 10_000,
   campaigns: 3_000,
   leadFollowUps: 30_000,
