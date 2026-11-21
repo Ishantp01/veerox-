@@ -11,7 +11,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.db.models import Conversation, Lead, Message, User
+from apps.api.db.models import Contact, Conversation, Lead, Message, User
 from apps.api.routers import chat as chat_router
 from apps.api.tests.test_admin_endpoints import (  # noqa: F401  (fixtures + helpers)
     ORG_ID,
@@ -221,3 +221,98 @@ def _admin_token() -> str:
     from apps.api.config import settings
 
     return settings.admin_token
+
+
+async def test_own_crm_contact_without_chat_is_listed_and_can_be_opened(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    with _require_session_auth(True):
+        headers, member_id = await _member_and_id(client, db_session, "contacts-member@example.com")
+        db_session.add_all(
+            [
+                Contact(org_id=ORG_ID, name="Mine", phone="+913333333333", created_by_account_user_id=member_id),
+                Contact(org_id=ORG_ID, name="Not mine", phone="+914444444444"),
+            ]
+        )
+        await db_session.commit()
+
+        rows = (await client.get("/admin/chat/leads", headers=headers)).json()
+        assert [r["name"] for r in rows] == ["Mine"]  # only their own contact
+        assert rows[0]["user_id"] is None and rows[0]["contact_id"]
+
+        searched = (await client.get("/admin/chat/leads?search=zzz", headers=headers)).json()
+        assert searched == []
+
+        opened = await client.post(f"/admin/chat/contacts/{rows[0]['contact_id']}/open", headers=headers)
+        assert opened.status_code == 200
+        user_id = opened.json()["user_id"]
+        # Opening twice reuses the same chat identity.
+        again = await client.post(f"/admin/chat/contacts/{rows[0]['contact_id']}/open", headers=headers)
+        assert again.json()["user_id"] == user_id
+
+        # A member may read the thread of a contact they own.
+        thread = await client.get(f"/admin/chat/leads/{user_id}", headers=headers)
+        assert thread.status_code == 200 and thread.json()["messages"] == []
+
+
+async def test_saved_contact_name_shows_in_list_and_is_searchable(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    with _require_session_auth(True):
+        headers, member_id = await _member_and_id(client, db_session, "named-member@example.com")
+        user = await _seed_customer(db_session, "919555555555")  # webhook form: no "+", no name
+        conv = Conversation(org_id=ORG_ID, user_id=user.id, channel="whatsapp", started_at=T0)
+        db_session.add(conv)
+        await db_session.flush()
+        db_session.add(_msg(user, conv, "user", "hi", T0, "whatsapp"))
+        db_session.add(Lead(org_id=ORG_ID, user_id=user.id, claimed_by_account_user_id=member_id))
+        db_session.add(
+            Contact(org_id=ORG_ID, name="Ravi Kumar", phone="+919555555555", created_by_account_user_id=member_id)
+        )
+        await db_session.commit()
+
+        rows = (await client.get("/admin/chat/leads", headers=headers)).json()
+        assert rows[0]["name"] == "Ravi Kumar"
+        found = (await client.get("/admin/chat/leads?search=ravi", headers=headers)).json()
+        assert len(found) == 1
+
+
+async def test_channel_filter_shows_only_that_channels_chats_and_history(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await _seed_org(db_session)
+    both = await _seed_customer(db_session, "+917000000001", "Both")
+    wa_only = await _seed_customer(db_session, "+917000000002", "WaOnly")
+    wa = Conversation(org_id=ORG_ID, user_id=both.id, channel="whatsapp", started_at=T0)
+    call = Conversation(org_id=ORG_ID, user_id=both.id, channel="voice", started_at=T0 + timedelta(hours=1))
+    wa2 = Conversation(org_id=ORG_ID, user_id=wa_only.id, channel="whatsapp", started_at=T0)
+    db_session.add_all([wa, call, wa2])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            _msg(both, wa, "user", "wa text", T0, "whatsapp"),
+            _msg(both, call, "user", "spoken line", T0 + timedelta(hours=1), "voice"),
+            _msg(wa_only, wa2, "user", "only wa", T0, "whatsapp"),
+        ]
+    )
+    await db_session.commit()
+    h = {"X-Admin-Token": _admin_token()}
+
+    voice = (await client.get("/admin/chat/leads?channel=voice", headers=h)).json()
+    assert [r["name"] for r in voice] == ["Both"]
+    assert voice[0]["last_message_preview"] == "spoken line"  # not the newer-or-older WhatsApp text
+
+    whatsapp = (await client.get("/admin/chat/leads?channel=whatsapp", headers=h)).json()
+    assert {r["name"] for r in whatsapp} == {"Both", "WaOnly"}
+    both_row = next(r for r in whatsapp if r["name"] == "Both")
+    assert both_row["last_message_preview"] == "wa text"
+
+    thread_voice = (await client.get(f"/admin/chat/leads/{both.id}?channel=voice", headers=h)).json()
+    assert [m["content"] for m in thread_voice["messages"]] == ["spoken line"]
+    assert {c["channel"] for c in thread_voice["conversations"]} == {"voice"}
+    thread_wa = (await client.get(f"/admin/chat/leads/{both.id}?channel=whatsapp", headers=h)).json()
+    assert [m["content"] for m in thread_wa["messages"]] == ["wa text"]
+    thread_all = (await client.get(f"/admin/chat/leads/{both.id}", headers=h)).json()
+    assert [m["content"] for m in thread_all["messages"]] == ["wa text", "spoken line"]

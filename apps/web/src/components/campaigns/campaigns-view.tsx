@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -176,8 +176,30 @@ export function CampaignsView({ channel }: CampaignsViewProps) {
   const { toast } = useToast();
   const countryCode = useOrgCountryCode();
   const { data, isLoading, isError, error, refetch } = useCampaigns(channel);
-  const campaigns = data ?? [];
-  const pager = useClientPagination(campaigns, 20, channel);
+  const [campaignSort, setCampaignSort] = useState<
+    "newest" | "oldest" | "name_asc" | "name_desc" | "status"
+  >("newest");
+  // The list isn't paginated server-side, so sorting here is exact.
+  const campaigns = useMemo(() => {
+    const rows = [...(data ?? [])];
+    const byDate = (a: { created_at: string }, b: { created_at: string }) =>
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    const byName = (a: { name: string }, b: { name: string }) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    switch (campaignSort) {
+      case "oldest":
+        return rows.sort(byDate);
+      case "name_asc":
+        return rows.sort(byName);
+      case "name_desc":
+        return rows.sort((a, b) => byName(b, a));
+      case "status":
+        return rows.sort((a, b) => a.status.localeCompare(b.status) || byDate(b, a));
+      default:
+        return rows.sort((a, b) => byDate(b, a));
+    }
+  }, [data, campaignSort]);
+  const pager = useClientPagination(campaigns, 20, `${channel}|${campaignSort}`);
   // Only shown to admins — a "member" only ever gets their own campaigns back,
   // so the API leaves created_by_name null for them.
   const showCreator = campaigns.some((c) => c.created_by_name);
@@ -1087,6 +1109,19 @@ export function CampaignsView({ channel }: CampaignsViewProps) {
           />
         }
       >
+        <div className="mb-3 flex justify-end">
+          <Select
+            value={campaignSort}
+            onChange={(v) => setCampaignSort(v as typeof campaignSort)}
+            aria-label="Sort campaigns"
+          >
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="name_asc">Name A–Z</option>
+            <option value="name_desc">Name Z–A</option>
+            <option value="status">Status</option>
+          </Select>
+        </div>
         <div
           data-tour="page-table"
           className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900"

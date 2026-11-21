@@ -14,6 +14,7 @@ import { Button, EmptyState, Input, Pagination, Select, SkeletonRows, Table, use
 import { readApiError, SESSION_TOKEN_KEY } from "@/lib/api";
 import { downloadCsv } from "@/lib/download-csv";
 import { useCreateLeadFromContact, useLeads, useLeadStatusPresets } from "@/lib/hooks";
+import type { LeadSort } from "@/lib/hooks/useLeads";
 import type { LeadStatus } from "@/lib/types";
 
 interface ImportLeadsResult {
@@ -108,6 +109,7 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
   );
   const { data: statusPresetsData } = useLeadStatusPresets();
   const statusPresets = statusPresetsData ?? [];
+  const [sort, setSort] = useState<LeadSort>("recent");
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -133,12 +135,13 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
   const [page, setPage] = useState(0);
   useEffect(() => {
     setPage(0);
-  }, [effectiveChannel, status, search]);
+  }, [effectiveChannel, status, search, sort]);
 
   const filters = {
     channel: effectiveChannel,
     ...(status ? { status } : {}),
     ...(search ? { search } : {}),
+    sort,
     limit: LEADS_PAGE_SIZE,
     offset: page * LEADS_PAGE_SIZE,
   };
@@ -234,6 +237,18 @@ export function LeadsView({ title, description, channel, detailBasePath }: Leads
                 <option value="whatsapp">WhatsApp leads</option>
               </Select>
             )}
+            <Select
+              value={sort}
+              onChange={(v) => setSort(v as LeadSort)}
+              aria-label="Sort leads"
+            >
+              <option value="recent">Recent activity</option>
+              <option value="oldest">Oldest activity</option>
+              <option value="created_new">Newest added</option>
+              <option value="created_old">Oldest added</option>
+              <option value="name_asc">Name A–Z</option>
+              <option value="name_desc">Name Z–A</option>
+            </Select>
             <Select
               value={stageFilter}
               onChange={(v) => setStageFilter(v)}

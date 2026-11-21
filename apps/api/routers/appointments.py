@@ -40,7 +40,7 @@ router = APIRouter(
 )
 
 _STATUS_PATTERN = f"^({'|'.join(APPOINTMENT_STATUSES)})$"
-_SORT_PATTERN = "^(newest|oldest)$"
+_SORT_PATTERN = "^(newest|oldest|soonest|latest|name_asc|name_desc)$"
 
 
 def _appointment_out(appointment: Appointment, name: str | None, phone: str | None) -> AppointmentOut:
@@ -95,11 +95,14 @@ async def list_appointments(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[AppointmentOut]:
-    order_by = (
-        Appointment.created_at.desc()
-        if sort == "newest"
-        else Appointment.created_at.asc()
-    )
+    order_by = {
+        "newest": Appointment.created_at.desc(),
+        "oldest": Appointment.created_at.asc(),
+        "soonest": Appointment.scheduled_at.asc(),
+        "latest": Appointment.scheduled_at.desc(),
+        "name_asc": func.lower(func.coalesce(Lead.name, Contact.name, "")).asc(),
+        "name_desc": func.lower(func.coalesce(Lead.name, Contact.name, "")).desc(),
+    }[sort]
     # Outer-joined so a page of results resolves name/phone in one query
     # instead of one extra lookup per row. Lead takes priority over Contact
     # when both happen to be set, matching _resolve_name_phone above.

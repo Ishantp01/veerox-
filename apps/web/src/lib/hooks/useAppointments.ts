@@ -4,7 +4,13 @@ import { apiFetch } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
 import type { Appointment, AppointmentStatus } from "@/lib/types";
 
-export type AppointmentSort = "newest" | "oldest";
+export type AppointmentSort =
+  | "newest"
+  | "oldest"
+  | "soonest"
+  | "latest"
+  | "name_asc"
+  | "name_desc";
 
 export interface AppointmentFilters {
   status?: AppointmentStatus;

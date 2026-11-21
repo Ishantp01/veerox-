@@ -584,6 +584,7 @@ async def list_conversations(
     scope_org_id: AnalyticsScopeDep,
     org: CurrentOrgDep,
     payload: SessionPayloadDep,
+    account_user_id: RequestAccountUserDep,
     x_admin_token: str | None = Header(None),
     channel: str | None = Query(None, pattern="^(voice|whatsapp)$"),
     phone: str | None = Query(
@@ -594,6 +595,7 @@ async def list_conversations(
         None, description="Substring match against the contact's name/phone or this"
         " conversation's tags — the dashboard's unified conversation search box."
     ),
+    sort: str = Query("newest", pattern="^(newest|oldest|name_asc|name_desc|most_messages)$"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[dict]:
@@ -640,16 +642,54 @@ async def list_conversations(
                 cast(Conversation.tags, String).ilike(f"%{search}%"),
             )
         )
-    stmt = stmt.order_by(Conversation.started_at.desc()).limit(limit).offset(offset)
+    convo_order = {
+        "newest": (Conversation.started_at.desc(),),
+        "oldest": (Conversation.started_at.asc(),),
+        "name_asc": (func.lower(func.coalesce(User.name, User.phone)).asc(), Conversation.started_at.desc()),
+        "name_desc": (func.lower(func.coalesce(User.name, User.phone)).desc(), Conversation.started_at.desc()),
+        "most_messages": (message_count.desc(), Conversation.started_at.desc()),
+    }[sort]
+    stmt = stmt.order_by(*convo_order, Conversation.id).limit(limit).offset(offset)
 
     rows = (await db.execute(stmt)).all()
 
+    # A number that came in without a name shows the lead's name, else the name
+    # of the caller's own saved CRM contact (contacts are private to their creator).
+    lead_names: dict[UUID, str] = {}
+    contact_names: dict[str, str] = {}
+    unnamed = [conv for conv, _, _, uname, _ in rows if not uname]
+    if unnamed:
+        lead_names = {
+            uid: lname
+            for uid, lname in (
+                await db.execute(
+                    select(Lead.user_id, Lead.name).where(
+                        Lead.user_id.in_({c.user_id for c in unnamed}), Lead.name.is_not(None)
+                    )
+                )
+            ).all()
+        }
+        digits = {re.sub(r"\D", "", ph) for _, _, ph, uname, _ in rows if not uname}
+        contact_names = {
+            re.sub(r"\D", "", ph): nm
+            for ph, nm in (
+                await db.execute(
+                    select(Contact.phone, Contact.name).where(
+                        Contact.created_by_account_user_id == account_user_id,
+                        Contact.name.is_not(None),
+                        Contact.phone.in_([f for d in digits for f in (d, f"+{d}")]),
+                    )
+                )
+            ).all()
+        }
     return [
         {
             **ConversationOut.model_validate(conv).model_dump(mode="json"),
             "message_count": int(count),
             "user_phone": phone,
-            "user_name": name,
+            "user_name": name
+            or lead_names.get(conv.user_id)
+            or contact_names.get(re.sub(r"\D", "", phone or "")),
             "staff_name": staff_name,
         }
         for conv, count, phone, name, staff_name in rows
@@ -945,10 +985,19 @@ async def list_leads(
     search: str | None = Query(
         None, description="Match against name, phone, intent, status, qualification status, or tags"
     ),
+    sort: str = Query("recent", pattern="^(recent|oldest|name_asc|name_desc|created_new|created_old)$"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[LeadOut]:
-    stmt = select(Lead).order_by(Lead.last_activity_at.desc()).limit(limit).offset(offset)
+    lead_order = {
+        "recent": (Lead.last_activity_at.desc(),),
+        "oldest": (Lead.last_activity_at.asc(),),
+        "name_asc": (func.lower(func.coalesce(Lead.name, "")).asc(), Lead.last_activity_at.desc()),
+        "name_desc": (func.lower(func.coalesce(Lead.name, "")).desc(), Lead.last_activity_at.desc()),
+        "created_new": (Lead.created_at.desc(),),
+        "created_old": (Lead.created_at.asc(),),
+    }[sort]
+    stmt = select(Lead).order_by(*lead_order, Lead.id).limit(limit).offset(offset)
     if scope_org_id is not None:
         stmt = stmt.where(Lead.org_id == scope_org_id)
     member_scope = _member_lead_scope(scope_org_id, org, payload)

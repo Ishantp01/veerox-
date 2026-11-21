@@ -4,7 +4,10 @@ import { apiFetch } from "@/lib/api";
 import { POLL, queryKeys } from "@/lib/query";
 import type { Conversation, Message } from "@/lib/types";
 
+export type ConversationSort = "newest" | "oldest" | "name_asc" | "name_desc" | "most_messages";
+
 export interface ConversationFilters {
+  sort?: ConversationSort;
   channel?: "voice" | "whatsapp";
   /** Substring match against the contact's name/phone or tags — the
    * dashboard's unified conversation search box. */
@@ -17,6 +20,7 @@ function buildConversationsPath(filters?: ConversationFilters): string {
   const params = new URLSearchParams();
   if (filters?.channel) params.set("channel", filters.channel);
   if (filters?.search) params.set("search", filters.search);
+  if (filters?.sort) params.set("sort", filters.sort);
   if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
   if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
   const qs = params.toString();

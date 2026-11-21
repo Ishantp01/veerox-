@@ -77,13 +77,19 @@ export function useDeleteFollowUpRule() {
   });
 }
 
+export type FollowUpTaskSort = "run_desc" | "run_asc" | "created_new" | "created_old" | "status";
+
 export interface FollowUpTaskFilters {
   status?: FollowUpTaskStatus;
+  sort?: FollowUpTaskSort;
 }
 
 /** GET /follow-up-tasks → FollowUpTask[] */
 export function useFollowUpTasks(filters?: FollowUpTaskFilters) {
-  const qs = filters?.status ? `?status=${filters.status}` : "";
+  const params = new URLSearchParams();
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.sort) params.set("sort", filters.sort);
+  const qs = params.toString() ? `?${params.toString()}` : "";
   return useQuery<FollowUpTask[]>({
     queryKey: queryKeys.followUpTasks(filters),
     queryFn: () => apiFetch<FollowUpTask[]>(`/follow-up-tasks${qs}`),

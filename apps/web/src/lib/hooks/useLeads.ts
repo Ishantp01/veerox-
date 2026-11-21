@@ -4,7 +4,16 @@ import { apiFetch } from "@/lib/api";
 import { POLL, queryKeys } from "@/lib/query";
 import type { Lead, LeadDetail, LeadQualificationStatus, LeadStatus } from "@/lib/types";
 
+export type LeadSort =
+  | "recent"
+  | "oldest"
+  | "name_asc"
+  | "name_desc"
+  | "created_new"
+  | "created_old";
+
 export interface LeadFilters {
+  sort?: LeadSort;
   intent?: string;
   channel?: "voice" | "whatsapp";
   status?: LeadStatus;
@@ -26,6 +35,7 @@ function buildLeadsPath(filters?: LeadFilters): string {
   if (filters?.qualification_status) params.set("qualification_status", filters.qualification_status);
   if (filters?.tag) params.set("tag", filters.tag);
   if (filters?.search) params.set("search", filters.search);
+  if (filters?.sort) params.set("sort", filters.sort);
   if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
   if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
   const qs = params.toString();

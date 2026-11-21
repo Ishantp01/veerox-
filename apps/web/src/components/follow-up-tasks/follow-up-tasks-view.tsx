@@ -297,6 +297,7 @@ function ScheduleDialog({ onClose }: { onClose: () => void }) {
 export function FollowUpTasksView() {
   const [tab, setTab] = useState<Bucket>("all");
   const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<"soonest" | "latest" | "name_asc" | "name_desc">("soonest");
   const [editing, setEditing] = useState<LeadFollowUp | null>(null);
   const [scheduling, setScheduling] = useState(false);
   const { data, isLoading, isError, error, refetch } = useLeadFollowUps();
@@ -315,8 +316,26 @@ export function FollowUpTasksView() {
     : all;
   const counts = { all: searched.length, due: 0, today: 0, upcoming: 0 };
   searched.forEach((f) => (counts[bucketOf(f, now)] += 1));
-  const rows =
+  const filtered =
     tab === "all" ? searched : searched.filter((f) => bucketOf(f, now) === tab);
+  const rows = [...filtered].sort((a, b) => {
+    const byTime = new Date(a.follow_up_at).getTime() - new Date(b.follow_up_at).getTime();
+    const byName = (a.lead_name ?? a.lead_phone ?? "").localeCompare(
+      b.lead_name ?? b.lead_phone ?? "",
+      undefined,
+      { sensitivity: "base" },
+    );
+    switch (sort) {
+      case "latest":
+        return -byTime;
+      case "name_asc":
+        return byName || byTime;
+      case "name_desc":
+        return -byName || byTime;
+      default:
+        return byTime;
+    }
+  });
 
   function markDone(f: LeadFollowUp) {
     update.mutate(
@@ -344,6 +363,16 @@ export function FollowUpTasksView() {
             <Button onClick={() => setScheduling(true)}>
               <Plus size={15} aria-hidden /> Schedule follow-up
             </Button>
+            <Select
+              value={sort}
+              onChange={(v) => setSort(v as typeof sort)}
+              aria-label="Sort follow-up tasks"
+            >
+              <option value="soonest">Soonest first</option>
+              <option value="latest">Latest first</option>
+              <option value="name_asc">Name A–Z</option>
+              <option value="name_desc">Name Z–A</option>
+            </Select>
             <div className="relative">
               <Search
                 size={14}

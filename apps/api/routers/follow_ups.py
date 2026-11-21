@@ -199,13 +199,21 @@ async def list_follow_up_tasks(
     org: RequestOrgDep,
     member_scope: MemberScopeDep,
     status: str | None = Query(None),
+    sort: str = Query("run_desc", pattern="^(run_desc|run_asc|created_new|created_old|status)$"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[FollowUpTask]:
+    task_order = {
+        "run_desc": (FollowUpTask.run_at.desc(),),
+        "run_asc": (FollowUpTask.run_at.asc(),),
+        "created_new": (FollowUpTask.created_at.desc(),),
+        "created_old": (FollowUpTask.created_at.asc(),),
+        "status": (FollowUpTask.status.asc(), FollowUpTask.run_at.desc()),
+    }[sort]
     stmt = (
         select(FollowUpTask)
         .where(FollowUpTask.org_id == org)
-        .order_by(FollowUpTask.run_at.desc())
+        .order_by(*task_order, FollowUpTask.id)
     )
     if member_scope is not None:
         stmt = stmt.where(FollowUpTask.lead_id.in_(owned_lead_ids(member_scope)))

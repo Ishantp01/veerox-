@@ -4,7 +4,10 @@ import { apiFetch } from "@/lib/api";
 import { POLL, queryKeys } from "@/lib/query";
 import type { ChatLead, ChatThread } from "@/lib/types";
 
+export type ChatSort = "recent" | "oldest" | "name_asc" | "name_desc";
+
 export interface ChatLeadFilters {
+  sort?: ChatSort;
   channel?: "voice" | "whatsapp";
   search?: string;
 }
@@ -22,6 +25,7 @@ export function useChatLeads(filters?: ChatLeadFilters) {
       const params = new URLSearchParams({ limit: "200" });
       if (filters?.channel) params.set("channel", filters.channel);
       if (filters?.search) params.set("search", filters.search);
+      if (filters?.sort) params.set("sort", filters.sort);
       return apiFetch<ChatLead[]>(`/admin/chat/leads?${params.toString()}`);
     },
     refetchInterval: POLL.conversationList,
@@ -36,10 +40,17 @@ export function useChatLeads(filters?: ChatLeadFilters) {
  *
  * GET /admin/chat/leads/{userId} → ChatThread
  */
-export function useChatThread(userId: string | null | undefined, limit: number) {
+export function useChatThread(
+  userId: string | null | undefined,
+  limit: number,
+  channel?: "voice" | "whatsapp",
+) {
   return useQuery<ChatThread>({
-    queryKey: queryKeys.chatThread(userId ?? "", limit),
-    queryFn: () => apiFetch<ChatThread>(`/admin/chat/leads/${userId}?limit=${limit}`),
+    queryKey: queryKeys.chatThread(userId ?? "", limit, channel),
+    queryFn: () =>
+      apiFetch<ChatThread>(
+        `/admin/chat/leads/${userId}?limit=${limit}${channel ? `&channel=${channel}` : ""}`,
+      ),
     enabled: Boolean(userId),
     refetchInterval: POLL.chatThread,
     placeholderData: keepPreviousData,
@@ -54,6 +65,20 @@ export function useMarkChatRead() {
   return useMutation<void, Error, string>({
     mutationFn: (userId) =>
       apiFetch<void>(`/admin/chat/leads/${userId}/read`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["chat", "leads"] });
+    },
+  });
+}
+
+/** Starts a chat with one of the signed-in user's CRM contacts; returns the chat's user_id.
+ *
+ * POST /admin/chat/contacts/{contactId}/open → { user_id } */
+export function useOpenContactChat() {
+  const queryClient = useQueryClient();
+  return useMutation<{ user_id: string }, Error, string>({
+    mutationFn: (contactId) =>
+      apiFetch<{ user_id: string }>(`/admin/chat/contacts/${contactId}/open`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["chat", "leads"] });
     },

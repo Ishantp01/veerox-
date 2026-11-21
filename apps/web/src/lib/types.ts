@@ -861,7 +861,9 @@ export interface ScriptSuggestions {
 // ---- Unified Chat module (GET /admin/chat/...) ----
 
 export interface ChatLead {
-  user_id: string;
+  /** null for a CRM contact that has never been chatted with — use contact_id to open one. */
+  user_id: string | null;
+  contact_id: string | null;
   name: string | null;
   phone: string;
   last_message_preview: string | null;
@@ -901,6 +903,12 @@ export interface ChatThread {
     name: string | null;
     phone: string;
     first_seen_at: string;
+    email: string | null;
+    company: string | null;
+    tags: string[];
+    last_interaction_at: string | null;
+    /** true once this number is saved as a CRM contact (the lead's, or one you created). */
+    in_contacts: boolean;
   };
   lead: {
     id: string;

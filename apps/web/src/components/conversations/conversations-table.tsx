@@ -9,6 +9,7 @@ import {
   EmptyState,
   Input,
   Pagination,
+  Select,
   SkeletonRows,
   Table,
   TableCell,
@@ -18,6 +19,7 @@ import {
 import { ChannelBadge } from "@/components/conversations/channel-badge";
 import { LiveDot } from "@/components/conversations/live-dot";
 import { useConversations } from "@/lib/hooks";
+import type { ConversationSort } from "@/lib/hooks/useConversations";
 import { formatDateTime } from "@/lib/format";
 
 export interface ConversationsTableProps {
@@ -49,14 +51,16 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
   // Reset to page 1 whenever the channel filter or search term changes — an
   // offset from the previous filter's result set wouldn't make sense against
   // this one.
+  const [sort, setSort] = useState<ConversationSort>("newest");
   const [page, setPage] = useState(0);
   useEffect(() => {
     setPage(0);
-  }, [channel, search]);
+  }, [channel, search, sort]);
 
   const conversations = useConversations({
     channel,
     search: search || undefined,
+    sort,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   });
@@ -68,7 +72,8 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
 
   return (
     <div>
-      <div className="relative mb-3 w-full max-w-xs">
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+      <div className="relative w-full max-w-xs">
         <Search
           size={14}
           aria-hidden
@@ -83,6 +88,18 @@ export function ConversationsTable({ channel, detailBasePath }: ConversationsTab
           aria-label="Search conversations by name, number, or tag"
           className="w-full pl-8"
         />
+      </div>
+        <Select
+          value={sort}
+          onChange={(v) => setSort(v as ConversationSort)}
+          aria-label="Sort conversations"
+        >
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="most_messages">Most messages</option>
+          <option value="name_asc">Name A–Z</option>
+          <option value="name_desc">Name Z–A</option>
+        </Select>
       </div>
       <div
         data-tour="page-table"

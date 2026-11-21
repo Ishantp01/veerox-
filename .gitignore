@@ -89,3 +89,5 @@ readme.md
 # Local validation artifacts (test logs, junit files, evidence); never commit
 .validation-*
 .env.example
+# Pre-merge customer data snapshots (real chats) - never commit.
+/backups/

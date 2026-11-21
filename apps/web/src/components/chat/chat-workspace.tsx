@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
@@ -9,12 +10,15 @@ import {
   MessagesSquare,
   Phone,
   Search,
+  UserPlus,
 } from "lucide-react";
 
 import { ChannelBadge } from "@/components/conversations/channel-badge";
-import { EmptyState, Skeleton } from "@/components/ui";
+import { AddContactDialog } from "@/components/chat/add-contact-dialog";
+import { Button, EmptyState, Select, Skeleton } from "@/components/ui";
 import { formatDuration, formatPhone } from "@/lib/format";
-import { useChatLeads, useChatThread, useMarkChatRead } from "@/lib/hooks";
+import { useChatLeads, useChatThread, useMarkChatRead, useOpenContactChat } from "@/lib/hooks";
+import type { ChatSort } from "@/lib/hooks/useChat";
 import type { ChatConversationInfo, ChatLead, ChatMessage, ChatThread } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -142,7 +146,7 @@ function LeadRow({
         aria-hidden
         className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-200 text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-200"
       >
-        {displayName(lead).slice(0, 1).toUpperCase()}
+        {lead.name?.trim() ? lead.name.trim().slice(0, 1).toUpperCase() : <Phone size={16} />}
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline justify-between gap-2">
@@ -298,6 +302,8 @@ function DetailRow({ label, value }: { label: string; value: string | null | und
 
 function ContactPanel({ thread }: { thread: ChatThread }) {
   const { contact, lead } = thread;
+  const queryClient = useQueryClient();
+  const [adding, setAdding] = useState(false);
   const calls = thread.conversations.filter((c) => c.channel === "voice").length;
   const chats = thread.conversations.length - calls;
   return (
@@ -310,23 +316,61 @@ function ContactPanel({ thread }: { thread: ChatThread }) {
           aria-hidden
           className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-200 text-xl font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-200"
         >
-          {displayName(contact).slice(0, 1).toUpperCase()}
+          {contact.name?.trim() ? contact.name.trim().slice(0, 1).toUpperCase() : <Phone size={24} />}
         </span>
         <h2 className="mt-3 text-base font-semibold text-slate-900 dark:text-slate-100">
           {displayName(contact)}
         </h2>
         <p className="text-sm text-slate-500">{formatPhone(contact.phone)}</p>
+        {contact.in_contacts ? (
+          <span className="mt-3 rounded-full bg-green-50 px-3 py-1 text-[11px] font-medium text-green-700 dark:bg-green-500/10 dark:text-green-300">
+            Saved in contacts
+          </span>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            className="mt-3"
+            onClick={() => setAdding(true)}
+          >
+            <UserPlus size={14} aria-hidden /> Add to contacts
+          </Button>
+        )}
+        {adding && (
+          <AddContactDialog
+            open
+            onOpenChange={setAdding}
+            phone={contact.phone}
+            initialName={contact.name}
+            onCreated={() => queryClient.invalidateQueries({ queryKey: ["chat"] })}
+          />
+        )}
       </div>
       <dl className="mt-6 space-y-4">
         <DetailRow label="Status" value={lead?.status} />
         <DetailRow label="Qualification" value={lead?.qualification_status} />
         <DetailRow label="Intent" value={lead?.intent} />
-        <DetailRow label="Email" value={lead?.email} />
-        <DetailRow label="Company" value={lead?.company} />
+        <DetailRow label="Phone" value={formatPhone(contact.phone)} />
+        <DetailRow label="Email" value={lead?.email ?? contact.email} />
+        <DetailRow label="Company" value={lead?.company ?? contact.company} />
         <DetailRow label="Assigned to" value={lead?.staff_name} />
         <DetailRow
           label="Next follow-up"
           value={lead?.follow_up_at ? new Date(lead.follow_up_at).toLocaleString() : null}
+        />
+        <DetailRow
+          label="Last interaction"
+          value={
+            contact.last_interaction_at
+              ? new Date(contact.last_interaction_at).toLocaleString(undefined, {
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                })
+              : null
+          }
         />
         <DetailRow
           label="First contact"
@@ -338,9 +382,9 @@ function ContactPanel({ thread }: { thread: ChatThread }) {
         />
         <DetailRow label="Interactions" value={`${chats} WhatsApp · ${calls} calls`} />
       </dl>
-      {lead && lead.tags.length > 0 && (
+      {(lead?.tags.length || contact.tags.length) > 0 && (
         <div className="mt-5 flex flex-wrap gap-1.5">
-          {lead.tags.map((t) => (
+          {Array.from(new Set([...(lead?.tags ?? []), ...contact.tags])).map((t) => (
             <span
               key={t}
               className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300"
@@ -368,13 +412,15 @@ function ThreadSkeleton() {
 
 function ConversationPane({
   userId,
+  channel,
   onBack,
 }: {
   userId: string;
+  channel?: "voice" | "whatsapp";
   onBack: () => void;
 }) {
   const [limit, setLimit] = useState(PAGE);
-  const thread = useChatThread(userId, limit);
+  const thread = useChatThread(userId, limit, channel);
   const markRead = useMarkChatRead();
   const scroller = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -496,6 +542,7 @@ export function ChatWorkspace() {
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
   const [channel, setChannel] = useState<ChannelFilter>("");
+  const [sort, setSort] = useState<ChatSort | "unread">("recent");
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search.trim()), 250);
@@ -505,8 +552,16 @@ export function ChatWorkspace() {
   const leads = useChatLeads({
     channel: channel || undefined,
     search: debounced || undefined,
+    sort: sort === "unread" ? "recent" : sort,
   });
-  const rows = leads.data ?? [];
+  const openContact = useOpenContactChat();
+  const rows = useMemo(() => {
+    const data = leads.data ?? [];
+    // "Unread first" is applied on top of the recent-activity order (stable sort).
+    return sort === "unread"
+      ? [...data].sort((a, b) => Number(b.unread_count > 0) - Number(a.unread_count > 0))
+      : data;
+  }, [leads.data, sort]);
 
   const select = (userId: string | null) => {
     router.replace(userId ? `/chat?lead=${userId}` : "/chat", { scroll: false });
@@ -538,6 +593,18 @@ export function ChatWorkspace() {
               className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/30 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
             />
           </label>
+          <Select
+            value={sort}
+            onChange={(v) => setSort(v as ChatSort | "unread")}
+            aria-label="Sort chats"
+            className="w-full"
+          >
+            <option value="recent">Latest activity</option>
+            <option value="unread">Unread first</option>
+            <option value="oldest">Oldest activity</option>
+            <option value="name_asc">Name A–Z</option>
+            <option value="name_desc">Name Z–A</option>
+          </Select>
           <div role="group" aria-label="Filter by channel" className="flex gap-1.5">
             {(
               [
@@ -579,10 +646,16 @@ export function ChatWorkspace() {
           ) : (
             rows.map((lead) => (
               <LeadRow
-                key={lead.user_id}
+                key={lead.user_id ?? `contact-${lead.contact_id}`}
                 lead={lead}
-                active={lead.user_id === selected}
-                onSelect={() => select(lead.user_id)}
+                active={lead.user_id !== null && lead.user_id === selected}
+                onSelect={() => {
+                  if (lead.user_id) {
+                    select(lead.user_id);
+                  } else if (lead.contact_id) {
+                    openContact.mutate(lead.contact_id, { onSuccess: (r) => select(r.user_id) });
+                  }
+                }}
               />
             ))
           )}
@@ -592,7 +665,11 @@ export function ChatWorkspace() {
       {/* Conversation + contact details */}
       <div className={cn("min-w-0 flex-1 lg:flex", selected ? "flex" : "hidden")}>
         {selected ? (
-          <ConversationPane userId={selected} onBack={() => select(null)} />
+          <ConversationPane
+            userId={selected}
+            channel={channel || undefined}
+            onBack={() => select(null)}
+          />
         ) : (
           <div className="flex flex-1 items-center justify-center bg-slate-50 dark:bg-slate-950">
             <EmptyState

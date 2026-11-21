@@ -35,13 +35,14 @@ export function makeQueryClient(): QueryClient {
  */
 export const queryKeys = {
   stats: () => ["stats"] as const,
-  chatLeads: (filters?: { channel?: string; search?: string }) =>
+  chatLeads: (filters?: { channel?: string; search?: string; sort?: string }) =>
     ["chat", "leads", filters ?? {}] as const,
-  chatThread: (userId: string, limit: number) => ["chat", "thread", userId, limit] as const,
-  conversations: (filters?: { channel?: string; status?: string }) =>
+  chatThread: (userId: string, limit: number, channel?: string) =>
+    ["chat", "thread", userId, limit, channel ?? ""] as const,
+  conversations: (filters?: { channel?: string; status?: string; sort?: string }) =>
     ["conversations", filters ?? {}] as const,
   conversationMessages: (id: string) => ["conversation", id, "messages"] as const,
-  leads: (filters?: { intent?: string; channel?: string; status?: string }) =>
+  leads: (filters?: { intent?: string; channel?: string; status?: string; sort?: string }) =>
     ["leads", filters ?? {}] as const,
   lead: (id: string) => ["leads", "detail", id] as const,
   humanSupport: (filters?: { channel?: string }) => ["humanSupport", filters ?? {}] as const,
@@ -70,7 +71,7 @@ export const queryKeys = {
   appointments: (filters?: { status?: string; sort?: string }) =>
     ["appointments", filters ?? {}] as const,
   followUpRules: (channel?: string) => ["follow-up-rules", channel ?? null] as const,
-  followUpTasks: (filters?: { status?: string }) => ["follow-up-tasks", filters ?? {}] as const,
+  followUpTasks: (filters?: { status?: string; sort?: string }) => ["follow-up-tasks", filters ?? {}] as const,
   leadFollowUps: (filters?: { due?: boolean }) => ["lead-follow-ups", filters ?? {}] as const,
   templates: (filters?: { active?: boolean }) => ["whatsapp-templates", filters ?? {}] as const,
   whatsappAssets: () => ["whatsapp-assets"] as const,

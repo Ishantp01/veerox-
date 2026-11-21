@@ -115,8 +115,12 @@ export default function AppointmentsPage() {
               onChange={(v) => setSort(v as AppointmentSort)}
               aria-label="Sort appointments"
             >
-              <option value="newest">Newest</option>
-              <option value="oldest">Oldest</option>
+              <option value="newest">Newest booked</option>
+              <option value="oldest">Oldest booked</option>
+              <option value="soonest">Appointment: soonest</option>
+              <option value="latest">Appointment: latest</option>
+              <option value="name_asc">Name A–Z</option>
+              <option value="name_desc">Name Z–A</option>
             </Select>
             <Select
               value={filter}

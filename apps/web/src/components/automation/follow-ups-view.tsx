@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Repeat, Ban, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { QueryBoundary } from "@/components/layout/query-boundary";
@@ -10,6 +11,7 @@ import {
   CardHeader,
   CardTitle,
   EmptyState,
+  Select,
   SkeletonRows,
   Table,
   TableCell,
@@ -28,6 +30,7 @@ import {
   useFollowUpTasks,
   useUpdateFollowUpRule,
 } from "@/lib/hooks";
+import type { FollowUpTaskSort } from "@/lib/hooks/useFollowUps";
 import { formatDateTime } from "@/lib/format";
 
 export interface FollowUpsViewProps {
@@ -41,7 +44,8 @@ export interface FollowUpsViewProps {
 export function FollowUpsView({ channel }: FollowUpsViewProps) {
   const rules = useFollowUpRules(channel);
   const { labelFor } = useLeadStatusOptions();
-  const tasks = useFollowUpTasks();
+  const [taskSort, setTaskSort] = useState<FollowUpTaskSort>("run_desc");
+  const tasks = useFollowUpTasks({ sort: taskSort });
   const updateRule = useUpdateFollowUpRule();
   const deleteRule = useDeleteFollowUpRule();
   const cancelTask = useCancelFollowUpTask();
@@ -162,8 +166,19 @@ export function FollowUpsView({ channel }: FollowUpsViewProps) {
       </Card>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between gap-3">
           <CardTitle>Activity</CardTitle>
+          <Select
+            value={taskSort}
+            onChange={(v) => setTaskSort(v as FollowUpTaskSort)}
+            aria-label="Sort follow-up activity"
+          >
+            <option value="run_desc">Run time: latest</option>
+            <option value="run_asc">Run time: soonest</option>
+            <option value="created_new">Newest created</option>
+            <option value="created_old">Oldest created</option>
+            <option value="status">Status</option>
+          </Select>
         </CardHeader>
         <CardContent className="p-0">
           <QueryBoundary
