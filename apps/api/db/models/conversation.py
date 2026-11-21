@@ -22,6 +22,12 @@ class Conversation(Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    # The customer's single ChatThread (db/models/chat_thread.py) — set automatically
+    # when the row is created, so every call and WhatsApp session of one lead hangs
+    # off one thread.
+    chat_thread_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("chat_threads.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     # Indexed: admin.py's list_conversations sorts on this for every page load.
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

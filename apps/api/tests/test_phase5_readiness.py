@@ -20,6 +20,7 @@ DEFAULT_ON = {
     "plivo_startup_registration", "sarvam_fallback_to_elevenlabs", "voice_greeting_ai_disclosure",
     "voice_latency_tracking", "voice_live_turn_detection",
     "voice_reply_brevity",  # instruction-only short-reply rule; VOICE_REPLY_BREVITY=false turns it off
+    "voice_greeting_first_inbound",  # greet-first inbound calls; VOICE_GREETING_FIRST_INBOUND=false (or VOICE_LISTEN_FIRST_INBOUND=true) turns it off
 }
 NEW_FLAGS = (
     "voice_tts_phrase_flush", "voice_script_authority", "voice_exact_lines", "voice_if_triggers",

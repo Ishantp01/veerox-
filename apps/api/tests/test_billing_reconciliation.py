@@ -16,6 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.api.core.usage import deterministic_event_id, record_usage
 from apps.api.db.models import Org
+
+
+@pytest.fixture(autouse=True)
+def _wide_sweep_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests lock invoices on fixed 2026 dates; the real sweep only looks back
+    90 days from today, so without this they start failing once those dates age out."""
+    from apps.api.workers import billing_worker
+
+    monkeypatch.setattr(billing_worker, "_SWEEP_LOOKBACK_DAYS", 36500)
 from apps.api.db.models.cost_allocation import CostAllocation
 from apps.api.db.models.cost_rate import CostRate
 from apps.api.db.models.invoice import Invoice

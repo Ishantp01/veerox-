@@ -4,6 +4,7 @@ from apps.api.db.models.aws_cost_pool import AwsCostPool
 from apps.api.db.models.call_campaign import CallCampaign
 from apps.api.db.models.campaign_target import CampaignTarget
 from apps.api.db.models.chat_read import ChatRead
+from apps.api.db.models.chat_thread import ChatThread
 from apps.api.db.models.contact import Contact
 from apps.api.db.models.conversation import Conversation
 from apps.api.db.models.conversation_engine import (
@@ -48,6 +49,7 @@ __all__ = [
     "CallCampaign",
     "CampaignTarget",
     "ChatRead",
+    "ChatThread",
     "Contact",
     "Conversation",
     "ConversationMemory",

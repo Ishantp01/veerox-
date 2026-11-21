@@ -102,7 +102,8 @@ PROCESS_LOCAL = {
         "greeting_cache",          # greeting audio; a miss just means synthesizing again
         "_inbound_calls",          # VOICE_LISTEN_FIRST_INBOUND marks; a miss just means the agent greets first
     },
-    "apps.api.channels.voice.greeting": {"greeting_cache"},
+    # greeting_cache: audio, a miss re-synthesizes. _derived: greeting text derived from a script, a miss re-derives it.
+    "apps.api.channels.voice.greeting": {"greeting_cache", "_derived"},
     "apps.api.channels.voice.recovery": {"fallback_audio"},       # apology audio; a miss means no spoken apology
     "apps.api.channels.voice.voice_preview": {"preview_limiter"},  # preview rate limit is per process (approximate)
     "apps.api.channels.voice.capacity": {"_active"},               # live-stream count; each instance enforces its own cap
@@ -186,7 +187,7 @@ def test_the_migration_chain_has_one_head_and_the_new_migration_is_additive() ->
         if rev:
             revisions[rev] = down
     heads = set(revisions) - {d for d in revisions.values() if d}
-    assert heads == {"e6c4f5a7b8d9"} and revisions["a7c9e1f3b5d2"] == "f3b5d7e9a1c2"
+    assert heads == {"b2d4f6a8c0e1"} and revisions["a7c9e1f3b5d2"] == "f3b5d7e9a1c2"
 
     text = next(t for n, t in sources.items() if n.startswith("a7c9e1f3b5d2"))
     tree = ast.parse(text)

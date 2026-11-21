@@ -510,7 +510,8 @@ async def test_book_appointment_schedules_three_reminders(
         assert task.status == "pending"
         assert task.template_name == "appointment_reminder"
         assert task.template_params == ["Priya", future.date().isoformat(), "3:00 PM"]
-        assert task.run_at == appointment.scheduled_at - timedelta(minutes=offset)
+        # SQLite returns naive datetimes while an already-loaded row can be aware: compare as naive UTC.
+        assert task.run_at.replace(tzinfo=None) == appointment.scheduled_at.replace(tzinfo=None) - timedelta(minutes=offset)
 
 
 async def test_book_appointment_skips_reminders_already_in_the_past(

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.db.models import (
     Appointment,
     ChatRead,
+    ChatThread,
     Contact,
     Conversation,
     ConversationMemory,
@@ -160,6 +161,33 @@ async def merge_contact(db: AsyncSession, org_id: UUID, digits: str) -> UserMerg
         .where(Appointment.assigned_user_id.in_(other_ids))
         .values(assigned_user_id=survivor.id)
     )
+
+    # Threads: the person keeps one. Adopt another's if the survivor has none,
+    # then hang every conversation off it and drop the emptied ones.
+    keep_thread = (
+        await db.execute(select(ChatThread).where(ChatThread.user_id == survivor.id))
+    ).scalars().first()
+    other_threads = (
+        await db.execute(select(ChatThread).where(ChatThread.user_id.in_(other_ids)))
+    ).scalars().all()
+    if keep_thread is None and other_threads:
+        keep_thread = other_threads[0]
+        keep_thread.user_id = survivor.id
+        await db.flush()
+        other_threads = other_threads[1:]
+    if keep_thread is not None:
+        if other_threads:
+            await db.execute(
+                update(Conversation)
+                .where(Conversation.chat_thread_id.in_([t.id for t in other_threads]))
+                .values(chat_thread_id=keep_thread.id)
+            )
+            await db.execute(delete(ChatThread).where(ChatThread.id.in_([t.id for t in other_threads])))
+        await db.execute(
+            update(Conversation)
+            .where(Conversation.user_id == survivor.id, Conversation.chat_thread_id.is_(None))
+            .values(chat_thread_id=keep_thread.id)
+        )
 
     # Memory facts: one per (scope, key) — the survivor's wins.
     have = {
