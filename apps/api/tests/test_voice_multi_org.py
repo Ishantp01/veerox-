@@ -187,7 +187,7 @@ def test_the_migration_chain_has_one_head_and_the_new_migration_is_additive() ->
         if rev:
             revisions[rev] = down
     heads = set(revisions) - {d for d in revisions.values() if d}
-    assert heads == {"b2d4f6a8c0e1"} and revisions["a7c9e1f3b5d2"] == "f3b5d7e9a1c2"
+    assert heads == {"c3e5a7b9d1f2"} and revisions["a7c9e1f3b5d2"] == "f3b5d7e9a1c2"
 
     text = next(t for n, t in sources.items() if n.startswith("a7c9e1f3b5d2"))
     tree = ast.parse(text)

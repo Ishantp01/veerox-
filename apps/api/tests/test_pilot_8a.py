@@ -687,7 +687,7 @@ def test_the_setup_script_refuses_apply_unless_every_offline_condition_holds(mon
     assert "preflight: database differs from main .env" in problems  # same server and name as the main database
     monkeypatch.setenv("VEEROX_ENV_FILE", str(pilot_file))
     assert "VEEROX_ENV_FILE must point at the pilot file in this shell" not in script.refusals(pilot_file, main_file)
-    assert script.expected_head() == "b2d4f6a8c0e1"
+    assert script.expected_head() == "c3e5a7b9d1f2"
 
 
 # --- inbound WhatsApp in pilot mode --------------------------------------------------------------------------------------------------------------------
