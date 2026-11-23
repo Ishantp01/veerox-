@@ -10,7 +10,7 @@ import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -44,7 +44,8 @@ class PlanIn(BaseModel):
     code: str = Field(min_length=1, max_length=30)
     name: str = Field(min_length=1, max_length=100)
     description: str | None = None
-    price_paise: int = Field(gt=0)
+    # 0 = a free plan: not purchasable (Razorpay takes no 0 orders); the platform owner grants it (POST /admin/grant).
+    price_paise: int = Field(ge=0)
     currency: str = "INR"
     duration_days: int = Field(gt=0)
     is_active: bool = True
@@ -59,7 +60,7 @@ class PlanIn(BaseModel):
 class PlanPatch(BaseModel):
     name: str | None = None
     description: str | None = None
-    price_paise: int | None = Field(default=None, gt=0)
+    price_paise: int | None = Field(default=None, ge=0)
     duration_days: int | None = Field(default=None, gt=0)
     is_active: bool | None = None
     is_addon: bool | None = None
@@ -216,7 +217,11 @@ async def _mark_paid(db: DbDep, order_id: str, payment_id: str | None) -> Razorp
 async def list_available_plans(org: CurrentOrgDep, db: DbDep) -> list[PaymentPlan]:
     result = await db.execute(
         select(PaymentPlan)
-        .where(PaymentPlan.is_active.is_(True), PaymentPlan.is_addon.is_(False))
+        .where(
+            PaymentPlan.is_active.is_(True),
+            PaymentPlan.is_addon.is_(False),
+            PaymentPlan.price_paise > 0,  # free plans are granted by the platform owner, not bought
+        )
         .order_by(PaymentPlan.price_paise)
     )
     return list(result.scalars())
@@ -290,6 +295,8 @@ async def create_checkout(payload: CheckoutIn, org: OrgAdminDep, db: DbDep) -> C
     plan = await db.get(PaymentPlan, payload.plan_id)
     if plan is None or not plan.is_active:
         raise HTTPException(status_code=404, detail="Plan not found")
+    if plan.price_paise <= 0:
+        raise HTTPException(status_code=400, detail="This plan is free and is granted by the platform owner")
     if plan.is_addon and await get_active_plan(db, org.org_id) is None:
         raise HTTPException(
             status_code=409, detail="Buy a base plan before purchasing an add-on"
@@ -402,6 +409,47 @@ async def admin_update_plan(
     await db.commit()
     await db.refresh(plan)
     return plan
+
+
+class GrantIn(BaseModel):
+    org_id: UUID
+    plan_id: UUID
+
+
+@router.post("/admin/grant", response_model=PaymentOut, status_code=201)
+async def admin_grant_free_plan(payload: GrantIn, db: DbDep, _admin: PlatformAdminDep) -> RazorpayPayment:
+    """Give ONE org a free (price 0) plan for the plan's duration, with no payment. Only orgs granted this way are
+    affected; every other org's limits stay exactly as they were. Recorded like a paid purchase (amount 0) so the
+    normal plan limits and usage counting apply unchanged."""
+    from apps.api.db.models.org import Org
+
+    plan = await db.get(PaymentPlan, payload.plan_id)
+    if plan is None or not plan.is_active:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    if plan.price_paise != 0 or plan.is_addon:
+        raise HTTPException(status_code=400, detail="Only a free (price 0) base plan can be granted")
+    if await db.get(Org, payload.org_id) is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if await _org_is_platform_admin_owned(db, payload.org_id):
+        raise HTTPException(status_code=400, detail="The owner organization is never limited by a plan")
+    if await get_active_plan(db, payload.org_id) is not None:
+        raise HTTPException(status_code=409, detail="This organization already has an active plan")
+    now = datetime.now(UTC)
+    payment = RazorpayPayment(
+        org_id=payload.org_id,
+        plan_id=plan.id,
+        razorpay_order_id=f"free-{uuid4()}",
+        amount_paise=0,
+        currency=plan.currency,
+        status="paid",
+        period_start=now,
+        period_end=now + timedelta(days=plan.duration_days),
+    )
+    db.add(payment)
+    await db.commit()
+    await db.refresh(payment)
+    logger.info("free_plan_granted org=%s plan=%s", payload.org_id, plan.code)
+    return payment
 
 
 @router.delete("/admin/plans/{plan_id}")
