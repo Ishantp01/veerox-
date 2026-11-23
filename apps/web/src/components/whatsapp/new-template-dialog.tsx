@@ -45,7 +45,7 @@ function emptyButton(type: TemplateButton["type"]): TemplateButton {
   return { type, text: "", url: "", phone_number: "", example: "" };
 }
 
-export function NewTemplateDialog() {
+export function NewTemplateDialog({ numberId }: { numberId?: string } = {}) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [language, setLanguage] = useState("en_US");
@@ -131,6 +131,7 @@ export function NewTemplateDialog() {
         header_asset_id: isMediaHeader ? headerAssetId : undefined,
         footer_text: footerText.trim() || undefined,
         buttons: buttons.filter((b) => b.type === "QUICK_REPLY" || (b.text ?? "").trim()),
+        number_id: numberId,
       },
       {
         onSuccess: () => {

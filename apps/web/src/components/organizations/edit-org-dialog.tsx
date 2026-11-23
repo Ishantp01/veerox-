@@ -76,7 +76,7 @@ function whatsappNumbersFromOrg(org: AdminOrg): PhoneNumberEntry[] {
   // Meta's phone_number_id, not an E.164 number — no "+" re-added.
   return org.phone_numbers
     .filter((n) => n.provider === "whatsapp")
-    .map((n) => ({ phone_number: n.phone_number, is_default: n.is_default }));
+    .map((n) => ({ phone_number: n.phone_number, is_default: n.is_default, waba_id: n.waba_id ?? null }));
 }
 
 /**

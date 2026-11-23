@@ -245,7 +245,14 @@ export function CampaignsView({ channel }: CampaignsViewProps) {
   const createPreset = useCreateQualificationCriteriaPreset();
   const deletePreset = useDeleteQualificationCriteriaPreset();
 
-  const { data: templatesData } = useTemplates({ active: true });
+  // Templates live on a WABA, and a number belongs to one: show the templates of the number this campaign sends from
+  // (the org default number when none is picked), so a template from another WhatsApp account can't be chosen.
+  const templateNumber =
+    whatsappNumbers.find((n) => n.id === whatsappNumberId) ?? whatsappNumbers.find((n) => n.is_default);
+  const { data: templatesData } = useTemplates({
+    active: true,
+    numberId: whatsappNumbers.length > 1 ? templateNumber?.id : undefined,
+  });
   // Every Meta-approved template — including ones with {{1}}/{{2}} params,
   // which are mapped below (contact name from the file, the send date/time,
   // or a fixed value) rather than hidden.
@@ -860,7 +867,10 @@ export function CampaignsView({ channel }: CampaignsViewProps) {
                   <Select
                     id="campaign-whatsapp-number"
                     value={whatsappNumberId}
-                    onChange={setWhatsappNumberId}
+                    onChange={(value) => {
+                      setWhatsappNumberId(value);
+                      handleTemplateChange(""); // a template belongs to one number's WhatsApp account
+                    }}
                     className="w-full max-w-xs"
                   >
                     <option value="">Use org default WhatsApp number</option>

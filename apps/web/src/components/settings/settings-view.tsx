@@ -773,7 +773,7 @@ function WhatsAppNumberSection() {
     draft ??
     serverEntries
       .filter((n) => n.provider === "whatsapp")
-      .map((n) => ({ phone_number: n.phone_number, is_default: n.is_default }));
+      .map((n) => ({ phone_number: n.phone_number, is_default: n.is_default, waba_id: n.waba_id ?? null }));
 
   return (
     <QueryBoundary
@@ -799,7 +799,13 @@ function WhatsAppNumberSection() {
             validate={(trimmed) => (trimmed ? undefined : "Enter a phone_number_id")}
             multipleHint=""
             defaultLabel="Default"
+            showWabaId
           />
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Templates belong to a WhatsApp Business Account (WABA), not to a number. If this number is on a different
+            WABA than the Business Account ID above, enter that WABA ID next to it; its own templates then show for
+            this number. Leave it empty to use the account above.
+          </p>
           <div>
             <Button
               variant="primary"

@@ -73,7 +73,8 @@ export const queryKeys = {
   followUpRules: (channel?: string) => ["follow-up-rules", channel ?? null] as const,
   followUpTasks: (filters?: { status?: string; sort?: string }) => ["follow-up-tasks", filters ?? {}] as const,
   leadFollowUps: (filters?: { due?: boolean }) => ["lead-follow-ups", filters ?? {}] as const,
-  templates: (filters?: { active?: boolean }) => ["whatsapp-templates", filters ?? {}] as const,
+  templates: (filters?: { active?: boolean; numberId?: string }) =>
+    ["whatsapp-templates", filters ?? {}] as const,
   whatsappAssets: () => ["whatsapp-assets"] as const,
   conversationEngineStatus: () => ["conversation-engine", "status"] as const,
   conversationEngineKnowledge: () => ["conversation-engine", "knowledge"] as const,

@@ -31,6 +31,9 @@ class TemplateCreate(BaseModel):
     footer_text: str | None = None
     buttons: list[TemplateButton] = []
     active: bool = True
+    # Which WABA to submit this template to: a WhatsApp number's id (org_phone_numbers.id) or a WABA id. Omit = the org's default WABA.
+    number_id: UUID | None = None
+    waba_id: str | None = None
 
 
 class TemplateOut(BaseModel):
@@ -48,6 +51,7 @@ class TemplateOut(BaseModel):
     header_example: str | None = None
     footer_text: str | None = None
     buttons: list[TemplateButton] = []
+    waba_id: str | None = None
     active: bool
     created_at: datetime
     # Live Meta review status (PENDING/APPROVED/REJECTED), matched by name+
@@ -63,6 +67,9 @@ class TemplateSyncResult(BaseModel):
     updated: list[TemplateOut] = []
     skipped: int
     total_on_meta: int
+    # Local templates of this WABA that are no longer on Meta: switched off (kept, not deleted) so they stop showing.
+    deactivated: int = 0
+    waba_id: str | None = None
 
 
 class TemplateUpdateIn(BaseModel):

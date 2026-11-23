@@ -188,6 +188,7 @@ async def replace_org_phone_numbers(
                 org_id=org_id,
                 provider=entry.provider,
                 phone_number=re.sub(r"\D", "", entry.phone_number),
+                waba_id=(re.sub(r"\D", "", entry.waba_id or "") or None) if entry.provider == "whatsapp" else None,
                 is_default=default_index.get(entry.provider) == i,
                 position=position,
             )

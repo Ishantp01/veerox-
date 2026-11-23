@@ -190,6 +190,8 @@ export interface Template {
   header_example: string | null;
   footer_text: string | null;
   buttons: TemplateButton[];
+  /** The WABA this template lives on; null = the org's default WABA. */
+  waba_id?: string | null;
   active: boolean;
   created_at: string;
   /** Live Meta review status (PENDING/APPROVED/REJECTED), matched by
@@ -511,6 +513,10 @@ export interface OrgPhoneNumber {
   id: string;
   provider: "plivo" | "twilio" | "whatsapp";
   phone_number: string;
+  /** whatsapp only: the Meta WhatsApp Business Account this number belongs to.
+   * Templates live on a WABA, so this decides which templates the number can
+   * use. null = the org's default WABA. */
+  waba_id: string | null;
   is_default: boolean;
   created_at: string;
 }
@@ -525,6 +531,8 @@ export interface OrgNumbers {
 export interface OrgPhoneNumberIn {
   provider: "plivo" | "twilio" | "whatsapp";
   phone_number: string;
+  /** whatsapp only; omit/empty = the org's default WABA. */
+  waba_id?: string | null;
   is_default: boolean;
 }
 

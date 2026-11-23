@@ -9,6 +9,9 @@ import { E164_MESSAGE, E164_REGEX } from "@/lib/phone";
 export interface PhoneNumberEntry {
   phone_number: string;
   is_default: boolean;
+  /** WhatsApp only: the Meta WhatsApp Business Account this number is on.
+   * Empty/absent = the org's default WABA. */
+  waba_id?: string | null;
 }
 
 export interface PhoneNumberListFieldProps {
@@ -31,6 +34,9 @@ export interface PhoneNumberListFieldProps {
    * (a display-only label), "Default" for WhatsApp (load-bearing: the
    * fallback number for any send with no more specific choice). */
   defaultLabel?: string;
+  /** WhatsApp numbers: also edit each number's WABA ID (templates belong to a
+   * WABA, so this decides which templates the number can use). */
+  showWabaId?: boolean;
 }
 
 const DEFAULT_MULTIPLE_HINT =
@@ -50,6 +56,7 @@ export function PhoneNumberListField({
   validate = (trimmed) => (E164_REGEX.test(trimmed) ? undefined : E164_MESSAGE),
   multipleHint = DEFAULT_MULTIPLE_HINT.replace("{count}", String(value.length)),
   defaultLabel = "Primary",
+  showWabaId = false,
 }: PhoneNumberListFieldProps) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | undefined>();
@@ -94,11 +101,29 @@ export function PhoneNumberListField({
           {value.map((entry, i) => (
             <div
               key={entry.phone_number}
-              className="flex items-center gap-2 rounded-md border border-slate-200 px-2.5 py-1.5 dark:border-slate-800"
+              className="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 px-2.5 py-1.5 dark:border-slate-800"
             >
               <span className="flex-1 font-mono text-xs text-slate-700 dark:text-slate-300">
                 {entry.phone_number}
               </span>
+              {showWabaId && (
+                <Input
+                  aria-label={`WhatsApp Business Account ID for ${entry.phone_number}`}
+                  title="WhatsApp Business Account ID this number belongs to. Leave empty for the org's default account."
+                  inputMode="numeric"
+                  maxLength={32}
+                  placeholder="WABA ID (default if empty)"
+                  className="h-7 w-52 text-xs"
+                  value={entry.waba_id ?? ""}
+                  onChange={(e) =>
+                    onChange(
+                      value.map((v, idx) =>
+                        idx === i ? { ...v, waba_id: e.target.value.replace(/\D/g, "") || null } : v,
+                      ),
+                    )
+                  }
+                />
+              )}
               {entry.is_default ? (
                 <Badge variant="success" icon={null}>
                   {defaultLabel}

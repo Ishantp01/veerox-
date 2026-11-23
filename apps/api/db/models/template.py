@@ -40,6 +40,9 @@ class WhatsAppTemplate(Base):
     # {"type": "QUICK_REPLY"|"URL"|"PHONE_NUMBER"|"COPY_CODE", "text": str,
     # "url": str | None, "phone_number": str | None, "example": str | None}.
     buttons: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    # The WABA this template lives on (templates belong to a WABA, not to a phone number). NULL = the org's default WABA,
+    # which is what every row was before this column existed.
+    waba_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

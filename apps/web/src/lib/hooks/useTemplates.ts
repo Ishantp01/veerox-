@@ -6,14 +6,21 @@ import type { Template, TemplateButton } from "@/lib/types";
 
 export interface TemplateFilters {
   active?: boolean;
+  /** A WhatsApp number's id (org_numbers row): only the templates of the
+   * WABA that number belongs to. Omit for every template of the org. */
+  numberId?: string;
 }
 
-/** GET /whatsapp-templates → Template[] */
-export function useTemplates(filters?: TemplateFilters) {
-  const qs = filters?.active !== undefined ? `?active=${filters.active}` : "";
+/** GET /whatsapp-templates[?active=&number_id=] → Template[] */
+export function useTemplates(filters?: TemplateFilters, options?: { enabled?: boolean }) {
+  const params = new URLSearchParams();
+  if (filters?.active !== undefined) params.set("active", String(filters.active));
+  if (filters?.numberId) params.set("number_id", filters.numberId);
+  const qs = params.toString() ? `?${params.toString()}` : "";
   return useQuery<Template[]>({
     queryKey: queryKeys.templates(filters),
     queryFn: () => apiFetch<Template[]>(`/whatsapp-templates${qs}`),
+    enabled: options?.enabled ?? true,
   });
 }
 
@@ -32,6 +39,8 @@ export interface TemplateCreateInput {
   footer_text?: string;
   buttons?: TemplateButton[];
   active?: boolean;
+  /** Submit to the WABA of this WhatsApp number (omit = the org's default WABA). */
+  number_id?: string;
 }
 
 /** POST /whatsapp-templates → Template */
@@ -99,16 +108,24 @@ export interface TemplateSyncResult {
   updated: Template[];
   skipped: number;
   total_on_meta: number;
+  /** Local templates of this WABA that Meta no longer has: switched off (not
+   * deleted) so a WABA with no templates shows none. */
+  deactivated: number;
+  waba_id: string | null;
 }
 
-/** POST /whatsapp-templates/sync → adds a local row for every template that
- * exists on Meta but doesn't have one yet. */
+/** POST /whatsapp-templates/sync[?number_id=] → adds a local row for every
+ * template that exists on Meta for that number's WABA but doesn't have one
+ * yet, and switches off the ones Meta no longer has. */
 export function useSyncTemplates() {
   const queryClient = useQueryClient();
 
-  return useMutation<TemplateSyncResult, Error, void>({
-    mutationFn: () =>
-      apiFetch<TemplateSyncResult>("/whatsapp-templates/sync", { method: "POST" }),
+  return useMutation<TemplateSyncResult, Error, { numberId?: string } | void>({
+    mutationFn: (vars) =>
+      apiFetch<TemplateSyncResult>(
+        `/whatsapp-templates/sync${vars && vars.numberId ? `?number_id=${encodeURIComponent(vars.numberId)}` : ""}`,
+        { method: "POST" },
+      ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["whatsapp-templates"] });
     },

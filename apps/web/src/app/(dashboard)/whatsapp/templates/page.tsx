@@ -13,6 +13,7 @@ import {
   EmptyState,
   Input,
   Pagination,
+  Select,
   SkeletonRows,
   Table,
   TableCell,
@@ -24,6 +25,7 @@ import { NewTemplateDialog } from "@/components/whatsapp/new-template-dialog";
 import {
   useClientPagination,
   useDeleteTemplate,
+  useOrgNumbers,
   useSyncTemplates,
   useTemplates,
   useUpdateTemplate,
@@ -94,7 +96,22 @@ function StatusBadge({ status }: { status: string | null }) {
 }
 
 export default function TemplatesPage() {
-  const templates = useTemplates();
+  // Templates live on a WhatsApp Business Account (WABA), and each WhatsApp number belongs to one. With more than one
+  // number, pick which number's WABA to look at; the list and "Sync from Meta" then only touch that WABA, and a WABA
+  // with no templates shows none. With a single number nothing changes: every template is shown.
+  const orgNumbers = useOrgNumbers();
+  const whatsappNumbers = (orgNumbers.data?.phone_numbers ?? []).filter((n) => n.provider === "whatsapp");
+  const [pickedNumberId, setPickedNumberId] = useState("");
+  const scoped = whatsappNumbers.length > 1;
+  const selectedNumber = scoped
+    ? (whatsappNumbers.find((n) => n.id === pickedNumberId) ??
+      whatsappNumbers.find((n) => n.is_default) ??
+      whatsappNumbers[0])
+    : undefined;
+  const templates = useTemplates(
+    selectedNumber ? { numberId: selectedNumber.id, active: true } : undefined,
+    { enabled: !scoped || selectedNumber !== undefined },
+  );
   const pager = useClientPagination(templates.data ?? [], 20);
   const updateTemplate = useUpdateTemplate();
   const deleteTemplate = useDeleteTemplate();
@@ -102,14 +119,28 @@ export default function TemplatesPage() {
   const { toast } = useToast();
 
   function handleSync() {
-    syncTemplates.mutate(undefined, {
+    syncTemplates.mutate(selectedNumber ? { numberId: selectedNumber.id } : undefined, {
       onSuccess: (result) => {
         const changed = result.created.length + result.updated.length;
         const titleParts: string[] = [];
         if (result.created.length > 0) titleParts.push(`Added ${result.created.length}`);
         if (result.updated.length > 0) titleParts.push(`Updated ${result.updated.length}`);
+        if (result.deactivated > 0) titleParts.push(`Switched off ${result.deactivated} no longer on Meta`);
+        if (result.total_on_meta === 0) {
+          toast({
+            title: "No templates on this WhatsApp account",
+            description:
+              result.deactivated > 0
+                ? `${result.deactivated} saved template(s) are no longer on Meta and were switched off.`
+                : "Create a template in Meta (or here) for this account to use it.",
+          });
+          return;
+        }
         toast({
-          title: changed > 0 ? `${titleParts.join(", ")} template(s) from Meta` : "Already up to date",
+          title:
+            changed > 0 || result.deactivated > 0
+              ? `${titleParts.join(", ")}${changed > 0 ? " template(s) from Meta" : ""}`
+              : "Already up to date",
           description:
             changed > 0
               ? [...result.created, ...result.updated].map((t) => t.name).join(", ")
@@ -140,6 +171,23 @@ export default function TemplatesPage() {
         description="Meta-approved templates, saved once and picked from a dropdown when sending — no more retyping the name, language, or parameters."
         action={
           <div className="flex items-center gap-2">
+            {scoped && selectedNumber && (
+              <Select
+                aria-label="WhatsApp number"
+                title="Templates belong to the WhatsApp account this number is on"
+                value={selectedNumber.id}
+                onChange={setPickedNumberId}
+                className="w-56"
+              >
+                {whatsappNumbers.map((n) => (
+                  <option key={n.id} value={n.id}>
+                    {n.phone_number}
+                    {n.waba_id ? ` · WABA …${n.waba_id.slice(-4)}` : " · default WABA"}
+                    {n.is_default ? " (primary)" : ""}
+                  </option>
+                ))}
+              </Select>
+            )}
             <Button
               variant="outline"
               onClick={handleSync}
@@ -148,7 +196,7 @@ export default function TemplatesPage() {
               {!syncTemplates.isPending && <RefreshCw size={15} aria-hidden />}
               Sync from Meta
             </Button>
-            <NewTemplateDialog />
+            <NewTemplateDialog numberId={selectedNumber?.id} />
           </div>
         }
       />
@@ -171,8 +219,12 @@ export default function TemplatesPage() {
             emptyFallback={
               <EmptyState
                 icon={FileText}
-                title="No templates yet"
-                description="Add a template to select it from a dropdown on the WhatsApp send form."
+                title={scoped ? "No templates on this WhatsApp account" : "No templates yet"}
+                description={
+                  scoped
+                    ? "This number's WhatsApp account has no templates. Sync from Meta, or add one here."
+                    : "Add a template to select it from a dropdown on the WhatsApp send form."
+                }
                 className="border-0"
               />
             }

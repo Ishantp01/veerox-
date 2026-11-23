@@ -21,6 +21,11 @@ class OrgPhoneNumberIn(BaseModel):
         "whatsapp, Meta's phone_number_id from the WhatsApp Manager "
         "dashboard instead — not the displayed phone number.",
     )
+    waba_id: str | None = Field(
+        None,
+        description="whatsapp only: Meta's WhatsApp Business Account ID this number belongs to. Templates are per WABA, "
+        "so this decides which templates the number can use. Leave empty to use the org's default WABA.",
+    )
     is_default: bool = Field(
         False,
         description="The 'Primary' badge for this provider — display only "
@@ -38,5 +43,6 @@ class OrgPhoneNumberOut(BaseModel):
     id: UUID
     provider: Literal["plivo", "twilio", "whatsapp"]
     phone_number: str
+    waba_id: str | None = None
     is_default: bool
     created_at: datetime

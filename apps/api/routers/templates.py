@@ -8,12 +8,12 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api.core.org_credentials import resolve_meta_credentials
 from apps.api.core.whatsapp_assets import asset_public_url
-from apps.api.db.models import Org, WhatsAppAsset, WhatsAppTemplate
+from apps.api.db.models import Org, OrgPhoneNumber, WhatsAppAsset, WhatsAppTemplate
 from apps.api.deps import DbDep, RedisDep, RequestOrgDep, require_feature, verify_admin_or_session
 from apps.api.schemas.template import TemplateCreate, TemplateOut, TemplateSyncResult, TemplateUpdateIn
 
@@ -31,20 +31,60 @@ _META_STATUS_CACHE_KEY = "veerox:cache:wa_template_status"
 _META_STATUS_CACHE_TTL_SECS = 60
 
 
+# Templates live on a WABA (a WhatsApp Business Account), not on a phone number. A WhatsApp number says which WABA it is on
+# (org_phone_numbers.waba_id); NULL on a number or a template means "the org's default WABA" (the one in its Meta
+# credentials), which is what everything was before multiple WABAs per org were supported.
+_DIGITS = re.compile(r"\D")
+_META_LIST_PAGE = 200  # wa_client.list_templates reads one page of at most this many; a full page may not be everything
+
+
+async def _target_waba(
+    db: DbDep, org_id: UUID, default_waba: str | None, number_id: UUID | None, waba_id: str | None
+) -> str | None:
+    """The WABA a request is about: the chosen WhatsApp number's, else an explicit ``waba_id``, else ``None`` (no
+    scoping; the caller keeps its old behaviour)."""
+    if number_id is not None:
+        number = await db.get(OrgPhoneNumber, number_id)
+        if number is None or number.org_id != org_id or number.provider != "whatsapp":
+            raise HTTPException(status_code=404, detail="WhatsApp number not found")
+        waba = number.waba_id or default_waba
+        if not waba:
+            raise HTTPException(
+                status_code=400,
+                detail="This number has no WhatsApp Business Account ID. Set it on the number, or save the org's default one.",
+            )
+        return waba
+    cleaned = _DIGITS.sub("", waba_id or "")
+    return cleaned or None
+
+
+def _in_waba(target: str, default_waba: str | None):
+    """SQL condition: templates on ``target``. Rows with no WABA stamp count as the org's default WABA."""
+    if default_waba and target == default_waba:
+        return or_(WhatsAppTemplate.waba_id == target, WhatsAppTemplate.waba_id.is_(None))
+    return WhatsAppTemplate.waba_id == target
+
+
 @router.get("/whatsapp-templates", response_model=list[TemplateOut])
 async def list_templates(
     db: DbDep,
     redis: RedisDep,
     org_id: RequestOrgDep,
     active: bool | None = Query(None),
+    number_id: UUID | None = Query(None, description="Only the templates of this WhatsApp number's WABA"),
+    waba_id: str | None = Query(None, description="Only the templates of this WABA"),
 ) -> list[TemplateOut]:
     org_record = await db.get(Org, org_id)
     meta_creds = resolve_meta_credentials(org_record)
+    default_waba = meta_creds.business_account_id if meta_creds else None
+    target = await _target_waba(db, org_id, default_waba, number_id, waba_id)
     stmt = (
         select(WhatsAppTemplate)
         .where(WhatsAppTemplate.org_id == org_id)
         .order_by(WhatsAppTemplate.created_at.desc())
     )
+    if target is not None:
+        stmt = stmt.where(_in_waba(target, default_waba))
     if active is not None:
         stmt = stmt.where(WhatsAppTemplate.active == active)
 
@@ -56,25 +96,23 @@ async def list_templates(
     # the slower of the two, so this halves the endpoint's latency instead
     # of paying for both one after the other.
     async def _load_meta_status() -> dict[str, str]:
-        if meta_creds is None or not meta_creds.business_account_id:
+        status_waba = target or (meta_creds.business_account_id if meta_creds else None)
+        if meta_creds is None or not status_waba:
             return {}
-        cached = await redis.get(_META_STATUS_CACHE_KEY)
+        cache_key = _META_STATUS_CACHE_KEY if target is None else f"{_META_STATUS_CACHE_KEY}:{target}"
+        cached = await redis.get(cache_key)
         if cached is not None:
             return json.loads(cached)
         try:
             status_by_key = {
                 f"{t['name']} {t['language']}": t.get("status", "")
-                for t in await wa_client.list_templates(
-                    meta_creds.access_token, meta_creds.business_account_id
-                )
+                for t in await wa_client.list_templates(meta_creds.access_token, status_waba)
                 if t.get("name") and t.get("language")
             }
         except httpx.HTTPError as exc:
             logger.warning("whatsapp_templates_status_fetch_failed", error=str(exc))
             return {}
-        await redis.set(
-            _META_STATUS_CACHE_KEY, json.dumps(status_by_key), ex=_META_STATUS_CACHE_TTL_SECS
-        )
+        await redis.set(cache_key, json.dumps(status_by_key), ex=_META_STATUS_CACHE_TTL_SECS)
         return status_by_key
 
     db_result, status_by_key = await asyncio.gather(db.execute(stmt), _load_meta_status())
@@ -136,6 +174,10 @@ async def create_template(payload: TemplateCreate, db: DbDep, org_id: RequestOrg
     """
     org_record = await db.get(Org, org_id)
     meta_creds = resolve_meta_credentials(org_record)
+    target_waba = await _target_waba(
+        db, org_id, meta_creds.business_account_id if meta_creds else None, payload.number_id, payload.waba_id
+    )
+    submit_waba = target_waba or (meta_creds.business_account_id if meta_creds else None)
     media_header_types = {"IMAGE", "VIDEO", "DOCUMENT"}
     header_type = (payload.header_type or "").upper() or None
     header_handle: str | None = None
@@ -194,14 +236,14 @@ async def create_template(payload: TemplateCreate, db: DbDep, org_id: RequestOrg
         header_example = asset_public_url(asset)
 
     if payload.body_preview:
-        if meta_creds is None or not meta_creds.business_account_id:
+        if meta_creds is None or not submit_waba:
             raise HTTPException(
                 status_code=400, detail="This org's Meta WhatsApp App isn't configured yet."
             )
         try:
             await wa_client.create_template(
                 meta_creds.access_token,
-                meta_creds.business_account_id,
+                submit_waba,
                 name=payload.name,
                 body_text=payload.body_preview,
                 category=category,
@@ -243,6 +285,7 @@ async def create_template(payload: TemplateCreate, db: DbDep, org_id: RequestOrg
         header_example=header_example,
         footer_text=payload.footer_text,
         buttons=[b.model_dump(exclude_none=True) for b in payload.buttons],
+        waba_id=target_waba,
         active=payload.active,
     )
     db.add(template)
@@ -287,7 +330,12 @@ def _normalize_meta_buttons(raw_buttons: list[dict]) -> list[dict]:
 
 
 @router.post("/whatsapp-templates/sync", response_model=TemplateSyncResult)
-async def sync_templates_from_meta(db: DbDep, org_id: RequestOrgDep) -> TemplateSyncResult:
+async def sync_templates_from_meta(
+    db: DbDep,
+    org_id: RequestOrgDep,
+    number_id: UUID | None = Query(None, description="Sync the WABA this WhatsApp number belongs to"),
+    waba_id: str | None = Query(None, description="Sync this WABA"),
+) -> TemplateSyncResult:
     """Pull every template that exists on the WABA in Meta: add a local row
     for any that don't have one yet (matched by name+language), and backfill
     HEADER/FOOTER/BUTTONS structure onto existing rows that are missing it.
@@ -312,10 +360,11 @@ async def sync_templates_from_meta(db: DbDep, org_id: RequestOrgDep) -> Template
     meta_creds = resolve_meta_credentials(org_record)
     if meta_creds is None or not meta_creds.business_account_id:
         raise HTTPException(status_code=400, detail="This org's Meta WhatsApp App isn't configured yet.")
+    default_waba = meta_creds.business_account_id
+    # The WABA being synced: the chosen number's, else an explicit id, else the org's default (the old behaviour).
+    target = await _target_waba(db, org_id, default_waba, number_id, waba_id) or default_waba
     try:
-        meta_templates = await wa_client.list_templates(
-            meta_creds.access_token, meta_creds.business_account_id
-        )
+        meta_templates = await wa_client.list_templates(meta_creds.access_token, target)
     except httpx.HTTPStatusError as exc:
         message = wa_client.friendly_error_message(wa_client._meta_error_detail(exc))
         raise HTTPException(status_code=400, detail=f"Couldn't fetch templates from Meta. {message}") from exc
@@ -327,13 +376,14 @@ async def sync_templates_from_meta(db: DbDep, org_id: RequestOrgDep) -> Template
     existing_rows = (
         (
             await db.execute(
-                select(WhatsAppTemplate).where(WhatsAppTemplate.org_id == org_id)
+                select(WhatsAppTemplate).where(WhatsAppTemplate.org_id == org_id, _in_waba(target, default_waba))
             )
         )
         .scalars()
         .all()
     )
     existing_by_key = {(t.name, t.language): t for t in existing_rows}
+    meta_keys = {(t.get("name"), t.get("language")) for t in meta_templates if t.get("name") and t.get("language")}
 
     created: list[WhatsAppTemplate] = []
     updated: list[WhatsAppTemplate] = []
@@ -355,6 +405,9 @@ async def sync_templates_from_meta(db: DbDep, org_id: RequestOrgDep) -> Template
         existing = existing_by_key.get((name, language))
         if existing is not None:
             changed = False
+            if existing.waba_id is None:
+                existing.waba_id = target  # pin a legacy row to the WABA it was just found on
+                changed = True
             if not existing.header_type and header:
                 existing.header_type = header.get("format")
                 existing.header_text = header.get("text")
@@ -387,13 +440,23 @@ async def sync_templates_from_meta(db: DbDep, org_id: RequestOrgDep) -> Template
             header_text=header.get("text") if header else None,
             footer_text=footer.get("text") if footer else None,
             buttons=meta_buttons,
+            waba_id=target,
             active=True,
         )
         db.add(template)
         created.append(template)
         existing_by_key[(name, language)] = template
 
-    if created or updated:
+    # Templates of this WABA that Meta no longer has: switch them off (never delete: a campaign may still name one) so a
+    # WABA with no templates shows none. Only when Meta's answer is complete: a full page may hide the rest of the list.
+    deactivated: list[WhatsAppTemplate] = []
+    if len(meta_templates) < _META_LIST_PAGE:
+        for row in existing_rows:
+            if row.active and (row.name, row.language) not in meta_keys:
+                row.active = False
+                deactivated.append(row)
+
+    if created or updated or deactivated:
         await db.commit()
         for template in created + updated:
             await db.refresh(template)
@@ -403,6 +466,8 @@ async def sync_templates_from_meta(db: DbDep, org_id: RequestOrgDep) -> Template
         updated=[TemplateOut.model_validate(t) for t in updated],
         skipped=len(meta_templates) - len(created) - len(updated),
         total_on_meta=len(meta_templates),
+        deactivated=len(deactivated),
+        waba_id=target,
     )
 
 

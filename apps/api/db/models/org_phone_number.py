@@ -54,6 +54,10 @@ class OrgPhoneNumber(Base):
     # numeric id from the Meta dashboard, not the E.164 number itself) — see
     # channels/whatsapp/adapter.py and channels/whatsapp/client.py.
     phone_number: Mapped[str] = mapped_column(String(32), nullable=False)
+    # WhatsApp rows only: the WhatsApp Business Account (Meta "WABA") this number belongs to. Message templates live on a
+    # WABA, not on a number, so this is what ties a number to its templates. NULL = the org's default WABA (the one in its
+    # Meta credentials), which is what every number was before this column existed.
+    waba_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     # This provider's 0-based rotation order — see class docstring.
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

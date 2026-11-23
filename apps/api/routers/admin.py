@@ -56,6 +56,7 @@ from apps.api.core.plan_limits import enforce_plan_limit
 from apps.api.core.crypto import decrypt_secret, encrypt_secret, mask_secret
 from apps.api.core.llm import chat_completion
 from apps.api.core.phone import normalize_phone
+from apps.api.core.template_scope import ensure_template_matches_number
 from apps.api.core.org_credentials import (
     resolve_meta_credentials,
     resolve_plivo_credentials,
@@ -2309,6 +2310,7 @@ async def create_campaign(
             raise HTTPException(
                 status_code=400, detail="whatsapp_number_id does not belong to this org"
             )
+        await ensure_template_matches_number(db, org_id, wa_number, template_name)
 
     # A media (IMAGE/VIDEO/DOCUMENT) header is itself the header parameter —
     # resolve a saved-file name to its public URL once, here, rather than on
@@ -2580,6 +2582,9 @@ async def update_campaign(
                 raise HTTPException(
                     status_code=400, detail="whatsapp_number_id does not belong to this org"
                 )
+            await ensure_template_matches_number(
+                db, campaign.org_id, wa_number, fields.get("template_name", campaign.template_name)
+            )
         campaign.whatsapp_number_id = fields["whatsapp_number_id"]
     if "max_attempts" in fields:
         if fields["max_attempts"] is None or fields["max_attempts"] < 1:
