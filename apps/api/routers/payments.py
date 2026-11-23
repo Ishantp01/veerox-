@@ -452,6 +452,45 @@ async def admin_grant_free_plan(payload: GrantIn, db: DbDep, _admin: PlatformAdm
     return payment
 
 
+class EndPlanIn(BaseModel):
+    org_id: UUID
+
+
+class EndPlanOut(BaseModel):
+    ended: list[str]  # codes of the plans / add-ons that were ended
+
+
+@router.post("/admin/end-plan", response_model=EndPlanOut)
+async def admin_end_plan(payload: EndPlanIn, db: DbDep, _admin: PlatformAdminDep) -> EndPlanOut:
+    """End an org's running plan (and its add-ons) NOW by closing the period, e.g. to swap it for a free plan.
+    Nothing is deleted: every payment row, its amount and its start date stay in the history; only ``period_end``
+    moves to the present. After this the org has no active plan, so no plan limits apply until one is bought/granted."""
+    from apps.api.db.models.org import Org
+
+    if await db.get(Org, payload.org_id) is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    now = datetime.now(UTC)
+    rows = await db.execute(
+        select(RazorpayPayment, PaymentPlan)
+        .join(PaymentPlan, PaymentPlan.id == RazorpayPayment.plan_id)
+        .where(
+            RazorpayPayment.org_id == payload.org_id,
+            RazorpayPayment.status == "paid",
+            RazorpayPayment.period_start <= now,
+            RazorpayPayment.period_end > now,
+        )
+    )
+    found = list(rows.all())
+    if not found:
+        raise HTTPException(status_code=409, detail="This organization has no active plan")
+    for payment, _plan in found:
+        payment.period_end = now
+    await db.commit()
+    codes = [plan.code for _payment, plan in found]
+    logger.info("plan_ended org=%s plans=%s", payload.org_id, ",".join(codes))
+    return EndPlanOut(ended=codes)
+
+
 @router.delete("/admin/plans/{plan_id}")
 async def admin_delete_plan(plan_id: UUID, db: DbDep, _admin: PlatformAdminDep) -> dict[str, bool]:
     """Delete a plan nobody has paid for. A plan with a paid purchase is part of

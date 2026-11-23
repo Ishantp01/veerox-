@@ -126,3 +126,54 @@ async def test_free_plan_is_hidden_from_the_shop(client: AsyncClient, db_session
     assert all(p["price_paise"] > 0 for p in resp.json())
     assert not [p for p in resp.json() if p["code"] == "free"]
     assert RazorpayPayment is not None  # model import kept for readability of the grant tests
+
+
+async def test_end_plan_closes_the_period_keeps_history_and_lets_a_free_plan_be_granted(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from apps.api.db.models.razorpay_payment import PaymentPlan
+
+    db_session.add(Org(id=ORG_ID, name="Dignity"))
+    await db_session.flush()
+    basic = PaymentPlan(code="basic", name="Basic", price_paise=100, duration_days=30, max_whatsapp_messages=2)
+    db_session.add(basic)
+    await db_session.flush()
+    now = datetime.now(UTC)
+    db_session.add(
+        RazorpayPayment(
+            org_id=ORG_ID, plan_id=basic.id, razorpay_order_id="order_basic", amount_paise=100, status="paid",
+            period_start=now - timedelta(days=1), period_end=now + timedelta(days=29),
+        )
+    )
+    await db_session.commit()
+    free_id = await _free_plan(client, max_whatsapp_messages=1000)
+
+    # While the paid plan runs, a free grant is refused (the case seen in prod).
+    blocked = await client.post("/payments/admin/grant", headers=ADMIN, json={"org_id": str(ORG_ID), "plan_id": free_id})
+    assert blocked.status_code == 409
+
+    ended = await client.post("/payments/admin/end-plan", headers=ADMIN, json={"org_id": str(ORG_ID)})
+    assert ended.status_code == 200 and ended.json() == {"ended": ["basic"]}
+    await db_session.rollback()  # see the committed change from the request's session
+    assert await get_active_plan(db_session, ORG_ID) is None
+    kept = (await db_session.execute(select(RazorpayPayment).where(RazorpayPayment.razorpay_order_id == "order_basic"))).scalar_one()
+    assert kept.amount_paise == 100 and kept.status == "paid"  # history intact, only the period was closed
+
+    granted = await client.post("/payments/admin/grant", headers=ADMIN, json={"org_id": str(ORG_ID), "plan_id": free_id})
+    assert granted.status_code == 201
+    active = await get_active_plan(db_session, ORG_ID)
+    assert active is not None and active.plan.code == "free"
+
+
+async def test_end_plan_refuses_unknown_orgs_orgs_without_a_plan_and_missing_token(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    db_session.add(Org(id=ORG_ID, name="Dignity"))
+    await db_session.commit()
+    assert (await client.post("/payments/admin/end-plan", headers=ADMIN, json={"org_id": str(uuid.uuid4())})).status_code == 404
+    assert (await client.post("/payments/admin/end-plan", headers=ADMIN, json={"org_id": str(ORG_ID)})).status_code == 409
+    assert (await client.post("/payments/admin/end-plan", json={"org_id": str(ORG_ID)})).status_code in (401, 403)
