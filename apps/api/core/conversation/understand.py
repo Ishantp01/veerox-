@@ -70,11 +70,47 @@ _HINGLISH_WORDS = re.compile(
 _AMBIGUOUS_HINDI = frozenset({"do", "hu", "din", "sab", "toh", "chal", "fir", "pata", "lena", "dena", "ji"})
 
 
+# Letters of any script other than Latin/Devanagari (Indic scripts, Arabic, CJK, Cyrillic).
+_NON_LATIN_LETTERS = re.compile(
+    "[\u0600-\u06FF\u0980-\u0DFF\u0E00-\u0EFF\u1000-\u109F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF\u0400-\u04FF]"
+)
+_LANG_NAMES = (
+    "english|hindi|tamil|telugu|kannada|malayalam|marathi|gujarati|bengali|bangla|punjabi|odia|oriya|"
+    "assamese|urdu|nepali|konkani|maithili|sindhi|kashmiri|bodo|dogri|santali|manipuri|sanskrit|"
+    "arabic|french|spanish|german|chinese|japanese|korean|russian|portuguese|italian|turkish|"
+    "indonesian|malay|thai|vietnamese|tagalog|swahili|persian|farsi"
+)
+# "talk in Tamil", "Tamil mein baat karo", "reply in telugu please", "speak marathi"
+_ASK_LANGUAGE = re.compile(
+    rf"(?:\b(?:in|mein|me|main|speak|talk|reply|answer|chat|baat|bolo|bol)\s+(?:in\s+)?({_LANG_NAMES})\b"
+    rf"|\b({_LANG_NAMES})\s+(?:mein|me|main|may|language|bhasha|bolo|bol|baat|pl\w*|pleas\w*|only|"
+    rf"chahiye|chahie|chaiye|karo|kro|do|dijiye)\b)",
+    re.IGNORECASE,
+)
+# A message that is just a language name: "Tamil", "tamilll", "tamil ji".
+_SHORT_LANGUAGE = re.compile(rf"\W*({_LANG_NAMES})\w*\W*(?:ji|sir|bhai)?\W*", re.IGNORECASE)
+
+
+def _asked_language(text: str) -> str | None:
+    """The language the customer explicitly asked for, lower-cased, or None."""
+    m = _ASK_LANGUAGE.search(text) or _SHORT_LANGUAGE.fullmatch(text.strip())
+    if not m:
+        return None
+    name = (m.group(1) or (m.group(2) if m.re is _ASK_LANGUAGE else None) or "").lower()
+    return "bengali" if name == "bangla" else name
+
+
 def detect_language(text: str) -> str:
     """Cheap script/word-list language guess: hi (Devanagari), hinglish
     (Latin script with Hindi words), else en."""
     if _DEVANAGARI.search(text):
-        return "hi"
+        # Marathi/Nepali/etc. share the script; a named request wins.
+        return "other" if _asked_language(text) not in (None, "hindi") else "hi"
+    if _NON_LATIN_LETTERS.search(text):
+        return "other"  # Tamil, Telugu, Bengali, Gujarati, Arabic/Urdu, ... script
+    asked = _asked_language(text)
+    if asked is not None:
+        return "en" if asked == "english" else "hi" if asked == "hindi" else "other"
     # Collapse stretched spellings ("haiii", "kyaaa") before matching.
     normalized = re.sub(r"(.)\1{2,}", r"\1", text)
     hits = [w.lower() for w in _HINGLISH_WORDS.findall(normalized)]

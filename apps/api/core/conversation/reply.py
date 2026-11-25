@@ -206,6 +206,24 @@ _NEXT_STEP = {
 
 _LANGUAGE_NAME = {"en": "English", "hi": "Hindi (Devanagari)", "hinglish": "Hinglish (Hindi in Latin script)"}
 
+_KEEP_LANGUAGE = (
+    " If the customer asked for a particular language earlier in the conversation, or is writing"
+    " in a different language than this, reply in that language (same script they use) and keep"
+    " using it until they ask otherwise."
+)
+
+
+def language_directive(language: str) -> str:
+    """The "which language to reply in" clause for the reply model. Any language works."""
+    if language == "other":
+        return (
+            "Reply in the language and script the customer is writing in (or the language they "
+            "asked you to use, e.g. Tamil, Telugu, Bengali, Marathi, Arabic - any language), and "
+            "keep using it until they ask otherwise. Style: write"
+        )
+    return f"Reply in {_LANGUAGE_NAME.get(language, 'English')}.{_KEEP_LANGUAGE} Style: write"
+
+
 _MAX_FALLBACK_CHARS = 320
 
 
@@ -273,7 +291,7 @@ async def _guided_reply(
     if llm is None:
         return fallback, 0, 0
     parts = [
-        f"Reply in {_LANGUAGE_NAME.get(language, 'English')}, in at most two short sentences suited "
+        f"{language_directive(language)} in at most two short sentences suited "
         "to being read aloud. Follow the situation guidance below. Never invent prices, dates, "
         "offers or promises, and never claim an action was done unless told so."
     ]
@@ -336,7 +354,7 @@ async def build_reply(
                 {
                     "role": "system",
                     "content": (
-                        f"Reply in {_LANGUAGE_NAME.get(language, 'English')}, in at most two short "
+                        f"{language_directive(language)} in at most two short "
                         "sentences suited to being read aloud. Use ONLY the approved facts below. "
                         "Do not add prices, dates, promises or details that are not in them. If they "
                         "do not fully answer the question, say our team will confirm the rest.\n\n"

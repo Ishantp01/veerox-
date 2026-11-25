@@ -29,7 +29,9 @@ SCENARIOS = (
 
 EMOTIONS = ("neutral", "positive", "negative", "angry", "confused")
 
-LANGUAGES = ("hi", "en", "hinglish")
+# "other" = any language beyond these three (Tamil, Telugu, Bengali, Arabic, ...): the
+# reply model is told to mirror whatever language/script the customer uses.
+LANGUAGES = ("hi", "en", "hinglish", "other")
 
 # Action ids the engine may request. "none" = reply only. Everything else is
 # the name of an existing tool in core/tools.py::DISPATCH_TABLE — the backend

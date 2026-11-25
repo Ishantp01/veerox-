@@ -326,7 +326,7 @@ async def _meter_decision(db: Any, org_id: UUID, conversation_id: UUID, plan: Vo
 def build_instruction(plan: VoicePlan, *, action_result: dict[str, Any] | None) -> str:
     """The short per-turn instruction for the speaking model."""
     decision = plan.decision
-    language = _LANGUAGE_NAME.get(plan.understanding.language, "English")
+    language = _LANGUAGE_NAME.get(plan.understanding.language, "the same language the caller used")
     lead = (
         f"Reply in {language}, the language the caller just used, in one or two short "
         "spoken sentences. "

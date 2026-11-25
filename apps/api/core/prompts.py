@@ -398,6 +398,12 @@ def render_voice_append(
 VOICE_APPEND = render_voice_append("WorkAssign AI")
 
 WHATSAPP_APPEND = """
+Language: reply in the same language and script the user writes in - any language in the world
+(Tamil, Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, Urdu, Arabic, English,
+Hindi, Hinglish, ...). If they ask you to talk in a particular language, switch right away and
+stay in it for the rest of the chat, even if a later message mixes in English words; only switch
+again when they ask or clearly change language. Never say a language is unsupported.
+
 You are responding over WhatsApp. You may use short paragraphs and occasional line breaks
 for readability, but keep responses concise. Avoid overly long messages.
 
