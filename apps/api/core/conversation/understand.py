@@ -84,15 +84,32 @@ _LANG_NAMES = (
 _ASK_LANGUAGE = re.compile(
     rf"(?:\b(?:in|mein|me|main|speak|talk|reply|answer|chat|baat|bolo|bol)\s+(?:in\s+)?({_LANG_NAMES})\b"
     rf"|\b({_LANG_NAMES})\s+(?:mein|me|main|may|language|bhasha|bolo|bol|baat|pl\w*|pleas\w*|only|"
-    rf"chahiye|chahie|chaiye|karo|kro|do|dijiye)\b)",
+    rf"chahiye|chahie|chaiye|karo|kro|do|dijiye|kaho|kahiye|la|lo|il|pesu|sollu|matladu|maatladu|"
+    rf"cheppu|helu|parayu|bolun|bola|bolaa)\b)",
     re.IGNORECASE,
 )
 # A message that is just a language name: "Tamil", "tamilll", "tamil ji".
 _SHORT_LANGUAGE = re.compile(rf"\W*({_LANG_NAMES})\w*\W*(?:ji|sir|bhai)?\W*", re.IGNORECASE)
 
 
+# Language names as written in Devanagari ("तमिल में बोलो"), with a request word nearby.
+_DEVANAGARI_LANGS = {
+    "तमिल": "tamil", "तेलुगु": "telugu", "तेलगू": "telugu", "कन्नड़": "kannada", "कन्नड": "kannada",
+    "मलयालम": "malayalam", "मराठी": "marathi", "गुजराती": "gujarati", "बंगाली": "bengali",
+    "बांग्ला": "bengali", "पंजाबी": "punjabi", "उड़िया": "odia", "ओड़िया": "odia", "असमिया": "assamese",
+    "उर्दू": "urdu", "नेपाली": "nepali", "संस्कृत": "sanskrit", "अंग्रेजी": "english",
+    "अंग्रेज़ी": "english", "इंग्लिश": "english", "हिंदी": "hindi", "हिन्दी": "hindi",
+    "अरबी": "arabic", "फ्रेंच": "french", "स्पेनिश": "spanish",
+}
+_DEVANAGARI_ASK = re.compile(r"(में|मे|मैं|भाषा|बोल|बात|करो|कीजिए|कीजिये|चाहिए|प्लीज|please|pls)")
+
+
 def _asked_language(text: str) -> str | None:
     """The language the customer explicitly asked for, lower-cased, or None."""
+    if _DEVANAGARI.search(text) and _DEVANAGARI_ASK.search(text):
+        for name, canon in _DEVANAGARI_LANGS.items():
+            if name in text:
+                return canon
     m = _ASK_LANGUAGE.search(text) or _SHORT_LANGUAGE.fullmatch(text.strip())
     if not m:
         return None
