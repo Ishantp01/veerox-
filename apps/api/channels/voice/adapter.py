@@ -3050,6 +3050,18 @@ async def _dispatch_deduped(state: CallState, name: str, args_json: str, log: An
     if key is not None and isinstance(result, dict) and result.get("status") == "ok":
         state.action_results[key] = result
         state.completed_actions.append(name)
+    if (
+        name == "mark_not_interested"
+        and settings.voice_end_call_enabled
+        and isinstance(result, dict)
+        and result.get("status") == "ok"
+    ):
+        # The caller declined: let the agent say its short goodbye, then hang up. Abortable, so if the caller keeps
+        # talking (changes their mind) the call is not cut.
+        call_control.request_hangup(
+            state, log, reason="customer_requested", outcome="customer_requested_end",
+            after_response=True, abortable=True,
+        )
     return result
 
 
