@@ -62,11 +62,14 @@ def _state(**fields: Any) -> adapter.CallState:
 END_POSITIVE = [
     "phone rakh do", "please end the call", "call khatam karo", "ok thanks bye", "bye", "goodbye", "that's all",
     "bas ab", "ab bas", "theek hai, bye bye", "chalta hoon", "I have to go", "disconnect karo", "फोन रख दो", "bye bye, ab bas",
+    "I don't want to talk", "please don't call me again", "baat nahi karni", "call mat karo", "बात नहीं करनी",
+    "not interested", "interested nahi",
 ]
 END_NEGATIVE = [
     "ab bas thoda time chahiye", "that's all fine, but what about the margin?", "bye the way, what is the price?",
     "bas ek minute", "I have to go through the paperwork first", "what is the goodbye fee", "call me tomorrow",
     "main office jaa raha hoon", "chalta hai, aage bataiye", "", "   ", "haan ji", "mujhe bas itna jaanna hai ki rate kya hai",
+    "I am not interested in the premium plan, what about basic?", "call mat kaatna, ek minute",
 ]
 
 

@@ -273,7 +273,11 @@ _END_CALL_RE = re.compile(
 )
 # An explicit instruction to hang up is unmistakable anywhere in the sentence...
 _END_STRONG_RE = re.compile(
-    r"(phone rakh|\bcall (end|cut|khatam)\b|\bdisconnect\b|\bplease end\b|\bend (the )?call\b|फोन रख|कॉल खत्म)",
+    r"(phone rakh|\bcall (end|cut|khatam)\b|\bdisconnect\b|\bplease end\b|\bend (the )?call\b|"
+    # refusals: "I don't want to talk", "don't call me", "baat nahi karni", "call mat karo"
+    r"\b(?:don'?t|do not) want to (?:talk|speak)\b|\b(?:don'?t|do not) call\b|\bstop calling\b|"
+    r"\bbaat (?:nahi|nahin) (?:karni|karna)\b|\bcall (?:mat|na) kar|\bmat kar(?:o|na)? (?:call|phone)\b|\bphone mat\b|"
+    r"बात नहीं करनी|बात नहीं करना|कॉल मत|फोन मत|फोन रख|कॉल खत्म)",
     re.IGNORECASE,
 )
 # ...but "bye", "that's all", "ab bas", "I have to go" are only an ending when they ARE the utterance (maybe
@@ -282,7 +286,7 @@ _END_STRONG_RE = re.compile(
 _END_FILLER = r"(?:ok(?:ay)?|theek hai|thik hai|accha|achha|ji|haan|thanks?|thank you|dhanyavaad|shukriya|sir|madam)"
 _END_WEAK_CORE = (
     r"(?:that'?s all|that is all|bas(?: ab| itna hi| itna)?|ab bas|bye(?:[\s-]+bye)?|good ?bye|alvida|"
-    r"i have to go|i must go|chalta hoon|chalti hoon|rakhta hoon|rakhti hoon|rakh raha hoon|rakh rahi hoon)"
+    r"not interested|no interest|interested nahi|interest nahi|i have to go|i must go|chalta hoon|chalti hoon|rakhta hoon|rakhti hoon|rakh raha hoon|rakh rahi hoon)"
 )
 _END_WEAK_RE = re.compile(
     rf"^\W*(?:{_END_FILLER}[\s,.!]+)*{_END_WEAK_CORE}"
