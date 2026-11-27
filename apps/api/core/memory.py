@@ -101,6 +101,29 @@ async def load_last_n(
     return [{"role": m.role, "content": m.content} for m, _ in sized]
 
 
+async def save_user_message(
+    db: AsyncSession,
+    conversation_id: UUID,
+    user_id: UUID,
+    org_id: UUID,
+    channel: str,
+    user_text: str,
+) -> None:
+    """Store the inbound user message immediately, before the LLM runs, so the
+    admin chat shows it without waiting for the AI reply."""
+    db.add(
+        Message(
+            org_id=org_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            role="user",
+            content=user_text,
+            channel=channel,
+        )
+    )
+    await db.commit()
+
+
 async def persist_turn(
     db: AsyncSession,
     conversation_id: UUID,
@@ -112,8 +135,11 @@ async def persist_turn(
     tokens_in: int | None = None,
     tokens_out: int | None = None,
     audio_secs: float | None = None,
+    user_already_saved: bool = False,
 ) -> UUID:
     """Write the user + assistant rows for one turn in a single transaction.
+    With ``user_already_saved`` only the assistant row is written (the user row
+    was stored up front by ``save_user_message`` so the chat shows it at once).
     Returns the assistant `Message.id`, so a caller (core/agent.py) can key
     a usage-metering event to this specific turn.
 
@@ -141,7 +167,7 @@ async def persist_turn(
         tokens_out=tokens_out,
     )
 
-    db.add_all([user_msg, asst_msg])
+    db.add_all([asst_msg] if user_already_saved else [user_msg, asst_msg])
     await db.commit()
 
     logger.info(

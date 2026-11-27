@@ -24,7 +24,7 @@ from apps.api.config import settings
 from apps.api.core.conversation.engine import run_engine
 from apps.api.core.llm import ChatResult, ToolCall, chat_completion
 from apps.api.core.org_openai_key import resolve_openai_api_key
-from apps.api.core.memory import load_last_n, persist_turn
+from apps.api.core.memory import load_last_n, persist_turn, save_user_message
 from apps.api.core.prompts import (
     KNOWN_USER_HINT,
     OUTBOUND_CALL_PROMPT,
@@ -372,6 +372,7 @@ async def _persist_and_meter(
         assistant_text=assistant_text,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
+        user_already_saved=True,
     )
 
     # Usage metering (req §6): one AI usage event per turn, keyed to the
@@ -510,6 +511,10 @@ class AgentCore:
                     campaign_criteria = campaign.criteria if campaign else None
 
         history = await load_last_n(db, user_id)
+        # Save the user's message now (after history is loaded, so it isn't
+        # duplicated in the prompt) — the chat shows it immediately instead of
+        # waiting for the AI reply.
+        await save_user_message(db, conversation.id, user_id, org_id, channel, input_text)
         org_row = await db.get(Org, org_id)
         openai_api_key = resolve_openai_api_key(org_row)
 
