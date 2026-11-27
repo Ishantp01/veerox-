@@ -28,7 +28,7 @@ export function useChatLeads(filters?: ChatLeadFilters) {
       if (filters?.sort) params.set("sort", filters.sort);
       return apiFetch<ChatLead[]>(`/admin/chat/leads?${params.toString()}`);
     },
-    refetchInterval: POLL.conversationList,
+    refetchInterval: POLL.chatLeads,
     placeholderData: keepPreviousData,
   });
 }

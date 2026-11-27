@@ -100,6 +100,7 @@ export const POLL = {
   humanSupport: 3_000,
   dashboard: 4_000,
   conversationList: 4_000,
+  chatLeads: 1_000,
   chatThread: 1_000,
   leads: 10_000,
   campaigns: 3_000,
