@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.channels.whatsapp import client as wa_client
 from apps.api import pilot
 from apps.api.config import settings
-from apps.api.core.agent import agent_core, appointment_booked_this_turn
+from apps.api.core.agent import agent_core, appointment_booked_this_turn, record_inbound_message
 from apps.api.core.org_credentials import resolve_meta_credentials
 from apps.api.core.org_openai_key import resolve_openai_api_key
 from apps.api.core.tools import get_or_create_lead_for_user, mark_not_interested
@@ -439,6 +439,24 @@ async def process_inbound(payload: dict[str, Any]) -> None:
 
             user = await _get_or_create_user(db, org_id, msg.from_phone)
 
+            # Text messages are stored immediately so the admin chat shows them
+            # (and bumps the unread count) right away, not after the lead
+            # bookkeeping or the AI reply. Failure here must not block the reply.
+            early_saved = False
+            if msg.type == "text":
+                try:
+                    await record_inbound_message(
+                        db,
+                        user.id,
+                        "whatsapp",
+                        org_id,
+                        (msg.text or "").strip() or _UNSUPPORTED_PLACEHOLDER,
+                    )
+                    early_saved = True
+                except Exception:  # noqa: BLE001
+                    await db.rollback()
+                    logger.exception("early_inbound_save_failed", wa_message_id=msg.id)
+
             # Every inbound message guarantees a Lead exists for this
             # customer — not just when the AI decides to call capture_lead.
             # Placed as early as possible after user resolution so even a
@@ -513,6 +531,7 @@ async def process_inbound(payload: dict[str, Any]) -> None:
                 campaign_target_id=campaign_target_id,
                 org_id=org_id,
                 whatsapp_phone_number_id=phone_number_id,
+                user_message_saved=early_saved,
             )
             agent_done = time.monotonic()
 

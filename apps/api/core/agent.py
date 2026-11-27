@@ -434,6 +434,20 @@ async def _persist_and_meter(
     return assistant_text
 
 
+async def record_inbound_message(
+    db: AsyncSession,
+    user_id: UUID,
+    channel: Channel,
+    org_id: UUID,
+    text: str,
+) -> None:
+    """Store an inbound user message right away (open the conversation, save,
+    commit) so the admin chat shows it and bumps the unread count before the
+    slower lead/LLM work runs. Pair with ``handle_turn(user_message_saved=True)``."""
+    conversation = await _get_or_open_conversation(db, user_id, channel, org_id)
+    await save_user_message(db, conversation.id, user_id, org_id, channel, text)
+
+
 class AgentCore:
     """Channel-agnostic AI agent — one brain, two mouths.
 
@@ -450,6 +464,7 @@ class AgentCore:
         campaign_target_id: UUID | None = None,
         org_id: UUID | None = None,
         whatsapp_phone_number_id: str | None = None,
+        user_message_saved: bool = False,
     ) -> str:
         """Process one conversational turn and return the assistant reply.
 
@@ -475,6 +490,10 @@ class AgentCore:
                 paired with that number from the settings page, when no
                 campaign has already pinned a more specific script (see
                 `_resolve_whatsapp_script_content`). None for voice/CLI.
+
+            user_message_saved: True when the caller already stored this
+                inbound message via ``record_inbound_message`` (so the chat shows
+                it at once); handle_turn then won't save or prompt it twice.
 
         Returns:
             The assistant's reply as a plain string. The caller is responsible
@@ -514,7 +533,11 @@ class AgentCore:
         # Save the user's message now (after history is loaded, so it isn't
         # duplicated in the prompt) — the chat shows it immediately instead of
         # waiting for the AI reply.
-        await save_user_message(db, conversation.id, user_id, org_id, channel, input_text)
+        if user_message_saved:
+            if history and history[-1]["role"] == "user" and history[-1]["content"] == input_text:
+                history = history[:-1]  # it's passed separately as the new input
+        else:
+            await save_user_message(db, conversation.id, user_id, org_id, channel, input_text)
         org_row = await db.get(Org, org_id)
         openai_api_key = resolve_openai_api_key(org_row)
 
