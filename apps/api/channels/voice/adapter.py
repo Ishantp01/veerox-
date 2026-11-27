@@ -3056,11 +3056,11 @@ async def _dispatch_deduped(state: CallState, name: str, args_json: str, log: An
         and isinstance(result, dict)
         and result.get("status") == "ok"
     ):
-        # The caller declined: let the agent say its short goodbye, then hang up. Abortable, so if the caller keeps
-        # talking (changes their mind) the call is not cut.
+        # The caller declined: let the agent say its short goodbye, then hang up. Not abortable: a caller who keeps
+        # repeating "not interested" over the goodbye used to cancel the hang-up (voice_hangup_aborted_caller_spoke).
         call_control.request_hangup(
             state, log, reason="customer_requested", outcome="customer_requested_end",
-            after_response=True, abortable=True,
+            after_response=True, abortable=False,
         )
     return result
 
