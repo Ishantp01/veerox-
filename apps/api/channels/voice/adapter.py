@@ -1340,7 +1340,7 @@ async def _greeting_barge_in(oai_ws: Any, call_ws: WebSocket, state: CallState, 
         return
     started = time.monotonic() - GREETING_BARGE_IN_MIN_SPEECH_SECONDS
     deadline = started + 8.0
-    while True:
+    while not settings.voice_greeting_barge_in_any:  # ANY: any speech past the minimum stops the greeting
         text = state.utterance_text.strip()
         if text and not _is_greeting_reflex(text):
             break

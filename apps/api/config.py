@@ -347,6 +347,8 @@ class Settings(BaseSettings):
     voice_end_call_enabled: bool = False
     voice_end_call_max_wait_seconds: float = 8.0
     voice_end_call_grace_seconds: float = 0.8
+    # VOICE_GREETING_BARGE_IN_ANY: with the above on, ANY speech (even "hello?") for 0.4 s+ stops the greeting.
+    voice_greeting_barge_in_any: bool = False
     # Recover from ElevenLabs failures (connect error, silence, rejected settings): retry once with
     # safe settings, else play a pre-generated apology and end the call. Never silence.
     voice_tts_recovery: bool = False
