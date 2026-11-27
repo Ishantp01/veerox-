@@ -28,13 +28,6 @@ function getAuthMode(): AuthMode {
   return mode === "admin" ? "admin" : "session";
 }
 
-/** Auth header for the stored session (or admin) token, for raw `fetch` callers like the SSE stream. */
-export function getAuthHeaders(): Record<string, string> {
-  const token = getToken();
-  if (!token) return {};
-  return { [getAuthMode() === "admin" ? "X-Admin-Token" : "X-Session-Token"]: token };
-}
-
 /**
  * Plain-language fallback per HTTP status, used whenever the backend's
  * error text isn't safe to show a non-technical client as-is.

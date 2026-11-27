@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import settings
 from apps.api.db.models.message import Message
-from apps.api.core import chat_events
 
 logger = structlog.get_logger(__name__)
 
@@ -123,7 +122,6 @@ async def save_user_message(
         )
     )
     await db.commit()
-    chat_events.publish(org_id, user_id)
 
 
 async def persist_turn(
@@ -171,7 +169,6 @@ async def persist_turn(
 
     db.add_all([asst_msg] if user_already_saved else [user_msg, asst_msg])
     await db.commit()
-    chat_events.publish(org_id, user_id)
 
     logger.info(
         "turn_persisted",

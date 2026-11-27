@@ -1,63 +1,8 @@
-import { useEffect } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiFetch, getAuthHeaders } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { POLL, queryKeys } from "@/lib/query";
 import type { ChatLead, ChatThread } from "@/lib/types";
-
-/** True while the live event stream is connected; polling then drops to a slow backup. */
-let streamLive = false;
-const BACKUP_POLL_MS = 30_000;
-
-/**
- * Opens the server-sent event stream (GET /admin/chat/events) and refetches the
- * chat queries the instant a message is stored, so new messages and unread
- * counts show without waiting for a poll. Reconnects on its own; while it is
- * down, the hooks below fall back to fast polling. Mount once in the chat page.
- */
-export function useChatLiveUpdates() {
-  const queryClient = useQueryClient();
-  useEffect(() => {
-    const controller = new AbortController();
-    let retry: ReturnType<typeof setTimeout> | undefined;
-
-    const connect = async () => {
-      try {
-        const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8002";
-        const res = await fetch(`${base}/admin/chat/events`, {
-          headers: { ...getAuthHeaders(), Accept: "text/event-stream" },
-          signal: controller.signal,
-        });
-        if (!res.ok || !res.body) throw new Error(`events ${res.status}`);
-        streamLive = true;
-        queryClient.invalidateQueries({ queryKey: ["chat"] });
-        const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-        let buffer = "";
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += value;
-          const frames = buffer.split("\n\n");
-          buffer = frames.pop() ?? "";
-          if (frames.some((f) => f.includes("event: message"))) {
-            queryClient.invalidateQueries({ queryKey: ["chat"] });
-          }
-        }
-      } catch {
-        // aborted, offline or server restarting — fall through to reconnect
-      }
-      streamLive = false;
-      if (!controller.signal.aborted) retry = setTimeout(connect, 2000);
-    };
-
-    void connect();
-    return () => {
-      controller.abort();
-      clearTimeout(retry);
-      streamLive = false;
-    };
-  }, [queryClient]);
-}
 
 export type ChatSort = "recent" | "oldest" | "name_asc" | "name_desc";
 
@@ -83,7 +28,7 @@ export function useChatLeads(filters?: ChatLeadFilters) {
       if (filters?.sort) params.set("sort", filters.sort);
       return apiFetch<ChatLead[]>(`/admin/chat/leads?${params.toString()}`);
     },
-    refetchInterval: () => (streamLive ? BACKUP_POLL_MS : POLL.chatLeads),
+    refetchInterval: POLL.chatLeads,
     placeholderData: keepPreviousData,
   });
 }
@@ -107,7 +52,7 @@ export function useChatThread(
         `/admin/chat/leads/${userId}?limit=${limit}${channel ? `&channel=${channel}` : ""}`,
       ),
     enabled: Boolean(userId),
-    refetchInterval: () => (streamLive ? BACKUP_POLL_MS : POLL.chatThread),
+    refetchInterval: POLL.chatThread,
     placeholderData: keepPreviousData,
   });
 }
