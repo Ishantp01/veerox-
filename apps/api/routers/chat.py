@@ -11,12 +11,14 @@ re-pointed or deleted.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +32,7 @@ from apps.api.db.models import (
     User,
     WhatsAppTemplate,
 )
+from apps.api.core import chat_events
 from apps.api.core.user_lookup import find_user_by_phone, phone_forms
 from apps.api.core.whatsapp_render import LEGACY_TEMPLATE_MARKER, render_template_message
 from apps.api.deps import (
@@ -628,3 +631,34 @@ async def mark_chat_read(
     else:
         existing.last_read_at = now
     await db.commit()
+
+
+_SSE_HELLO = "retry: 2000\n: connected\n\n"
+_SSE_EVENT = "event: message\ndata: {user_id}\n\n"
+_SSE_PING = ": ping\n\n"
+
+
+@router.get("/events")
+async def chat_events_stream(org_id: RequestOrgDep) -> StreamingResponse:
+    """Server-sent events: one ``message`` event per stored chat message in this
+    org, so the chat page refetches immediately instead of waiting for a poll.
+    A comment line is sent every 15 s to keep proxies from closing the stream."""
+    queue = chat_events.subscribe(org_id)
+
+    async def stream():
+        try:
+            yield _SSE_HELLO
+            while True:
+                try:
+                    user_id = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield _SSE_EVENT.format(user_id=user_id)
+                except TimeoutError:
+                    yield _SSE_PING
+        finally:
+            chat_events.unsubscribe(org_id, queue)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
