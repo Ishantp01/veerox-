@@ -12,7 +12,7 @@ export {
   type InviteMemberResult,
   type UpdateMemberInput,
 } from "./useTeam";
-export { useChatLeads, useChatThread, useMarkChatRead, useOpenContactChat } from "./useChat";
+export { useChatLiveUpdates, useChatLeads, useChatThread, useMarkChatRead, useOpenContactChat } from "./useChat";
 export {
   useConversations,
   useConversationMessages,

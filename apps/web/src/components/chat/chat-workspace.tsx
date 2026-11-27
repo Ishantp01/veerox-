@@ -17,7 +17,7 @@ import { ChannelBadge } from "@/components/conversations/channel-badge";
 import { AddContactDialog } from "@/components/chat/add-contact-dialog";
 import { Button, EmptyState, Select, Skeleton } from "@/components/ui";
 import { formatDuration, formatPhone } from "@/lib/format";
-import { useChatLeads, useChatThread, useMarkChatRead, useOpenContactChat } from "@/lib/hooks";
+import { useChatLiveUpdates, useChatLeads, useChatThread, useMarkChatRead, useOpenContactChat } from "@/lib/hooks";
 import type { ChatSort } from "@/lib/hooks/useChat";
 import type { ChatConversationInfo, ChatLead, ChatMessage, ChatThread } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -536,6 +536,7 @@ function ConversationPane({
 // ---------- workspace ----------
 
 export function ChatWorkspace() {
+  useChatLiveUpdates();
   const router = useRouter();
   const params = useSearchParams();
   const selected = params.get("lead");
