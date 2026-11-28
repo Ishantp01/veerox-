@@ -23,6 +23,10 @@ def get_redis_pool() -> aioredis.Redis:
             settings.redis_url,
             encoding="utf-8",
             decode_responses=True,
+            # A stalled connection must fail fast, not hang every request (sessions are read from Redis).
+            socket_connect_timeout=3,
+            socket_timeout=5,
+            health_check_interval=30,
         )
     return _redis_pool
 

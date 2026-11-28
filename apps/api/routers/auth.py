@@ -33,7 +33,7 @@ from apps.api.core.org_credentials import (
     resolve_plivo_credentials,
     resolve_twilio_credentials,
 )
-from apps.api.core.security import generate_login_token, hash_token
+from apps.api.core.security import generate_login_token, hash_token, tokens_match
 from apps.api.core.sessions import create_session, delete_session, invalidate_user_sessions
 from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.org import CONVERSATION_MODES, Org
@@ -246,8 +246,13 @@ async def _record_last_login(account_user_id: UUID) -> None:
 
 
 @router.post("/login", response_model=SessionOut | LoginOrgChoiceOut)
+@limiter.limit("20/minute")  # per client IP (uvicorn trusts Caddy's X-Forwarded-For): slows token guessing
 async def login(
-    payload: LoginIn, db: DbDep, redis: RedisDep, background_tasks: BackgroundTasks
+    request: Request,
+    payload: LoginIn,
+    db: DbDep,
+    redis: RedisDep,
+    background_tasks: BackgroundTasks,
 ) -> SessionOut | LoginOrgChoiceOut:
     account_user: AccountUser | None
     membership: OrgMembership | None
@@ -261,7 +266,7 @@ async def login(
     license_expires_at: datetime | None = None
     enabled_features: list[str] | None = None
     default_country_code = "+91"
-    if payload.token == settings.admin_token:
+    if tokens_match(payload.token, settings.admin_token):
         account_user, membership, org_name = await _ensure_default_org_owner(db)
     else:
         # One outer-join query instead of a separate account lookup + a

@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.config import Settings, settings
+from apps.api.core.security import tokens_match
 from apps.api.core.sessions import get_session as get_session_payload
 from apps.api.db.models.account_user import AccountUser
 from apps.api.db.models.org_membership import OrgMembership
@@ -81,7 +82,7 @@ async def get_current_user(
     payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> AccountUser:
-    if x_admin_token is not None and x_admin_token == settings.admin_token:
+    if tokens_match(x_admin_token, settings.admin_token):
         result = await db.execute(select(AccountUser).where(AccountUser.id == DEFAULT_OWNER_ID))
         account_user = result.scalar_one_or_none()
         if account_user is not None and account_user.is_active:
@@ -103,7 +104,7 @@ async def get_current_org(
     payload: SessionPayloadDep,
     x_admin_token: str | None = Header(None),
 ) -> CurrentOrg:
-    if x_admin_token is not None and x_admin_token == settings.admin_token:
+    if tokens_match(x_admin_token, settings.admin_token):
         return CurrentOrg(org_id=DEFAULT_ORG_ID, role="admin")
 
     if payload is None:
@@ -265,7 +266,7 @@ async def verify_admin_or_session(
     (see plan §7 — phased rollout, admin.py migrated behind this flag before
     the shared token is ever retired).
     """
-    if x_admin_token is not None and x_admin_token == settings.admin_token:
+    if tokens_match(x_admin_token, settings.admin_token):
         return
 
     if settings.require_session_auth and membership_org_id is not None:
@@ -293,7 +294,7 @@ async def verify_platform_team_member(
     `settings.require_session_auth` — membership in the platform org is
     itself the authorization, on or off.
     """
-    if x_admin_token is not None and x_admin_token == settings.admin_token:
+    if tokens_match(x_admin_token, settings.admin_token):
         return
     if membership_org_id is not None and membership_org_id == DEFAULT_ORG_ID:
         return
@@ -370,7 +371,7 @@ async def resolve_member_scope_account_user_id(
     `RequestOrgDep` (appointments.py, conversations.py, follow_ups.py) rather
     than the analytics-scope dependency stack `admin.py` uses.
     """
-    if x_admin_token is not None and x_admin_token == settings.admin_token:
+    if tokens_match(x_admin_token, settings.admin_token):
         return None
     if payload is None:
         return None
@@ -432,7 +433,7 @@ async def resolve_analytics_scope_org_id(
     and the reason a superuser sees platform-wide totals while every
     customer sees only their own.
     """
-    if x_admin_token is not None and x_admin_token == settings.admin_token:
+    if tokens_match(x_admin_token, settings.admin_token):
         return None
 
     if payload is not None:
@@ -466,7 +467,7 @@ async def verify_platform_admin(
     valid session is not enough, since once self-signup is in use that would
     let any customer org edit pricing for every other org on the platform.
     """
-    if x_admin_token is not None and x_admin_token == settings.admin_token:
+    if tokens_match(x_admin_token, settings.admin_token):
         return
 
     if payload is not None:

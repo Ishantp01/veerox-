@@ -11,6 +11,7 @@ plaintext while still allowing an indexed equality lookup on login.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
 
 
@@ -20,3 +21,10 @@ def generate_login_token() -> str:
 
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def tokens_match(presented: str | None, expected: str) -> bool:
+    """Constant-time equality for secrets (a plain ``==`` leaks how many leading characters matched)."""
+    if presented is None:
+        return False
+    return hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))

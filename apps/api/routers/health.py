@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from apps.api.deps import DbDep, RedisDep
@@ -14,7 +15,7 @@ async def health() -> dict[str, str]:
 
 
 @router.api_route("/ready", methods=["GET", "HEAD"])
-async def ready(db: DbDep, redis: RedisDep) -> dict[str, str]:
+async def ready(db: DbDep, redis: RedisDep) -> JSONResponse:
     db_status = "ok"
     redis_status = "ok"
 
@@ -28,4 +29,5 @@ async def ready(db: DbDep, redis: RedisDep) -> dict[str, str]:
     except Exception:
         redis_status = "down"
 
-    return {"db": db_status, "redis": redis_status}
+    healthy = db_status == "ok" and redis_status == "ok"
+    return JSONResponse({"db": db_status, "redis": redis_status}, status_code=200 if healthy else 503)

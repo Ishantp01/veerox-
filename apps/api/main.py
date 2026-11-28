@@ -9,13 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from apps.api.channels.voice.plivo_provisioning import register_all_org_plivo_numbers
 from apps.api.channels.voice.realtime_bridge import router as voice_stream_router
 from apps.api.channels.voice.webhook import router as voice_router
 from apps.api.channels.whatsapp.webhook import router as whatsapp_router
 from apps.api import pilot
 from apps.api.config import settings
-from apps.api.db.session import AsyncSessionLocal
 from apps.api.db.startup_seed import ensure_env_seed_data_on_startup
 from apps.api.logging import setup_logging
 from apps.api.rate_limit import limiter
@@ -44,15 +42,7 @@ from apps.api.routers import (
     usage,
 )
 from apps.api.sentry import init_sentry
-from apps.api.workers.aws_cost_importer import run_aws_cost_importer
-from apps.api.workers.billing_worker import run_late_event_adjustment_sweep
-from apps.api.workers.campaign_dialer import run_campaign_dialer
-from apps.api.workers.follow_up_dispatcher import run_follow_up_dispatcher
-from apps.api.workers.license_expiry_worker import run_license_expiry_worker
-from apps.api.workers.usage_daily_aggregator import run_usage_daily_aggregator
-from apps.api.workers.usage_monthly_aggregator import run_usage_monthly_aggregator
-from apps.api.workers.voice_retention_worker import run_voice_retention_worker
-from apps.api.workers.whatsapp_dispatcher import run_whatsapp_dispatcher
+from apps.api.workers.runner import start_background_workers
 
 
 @asynccontextmanager
@@ -71,44 +61,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:  # noqa: BLE001 - a diagnostic must never block startup
         pass
 
-    async def _register_all_org_plivo_numbers() -> None:
-        try:
-            async with AsyncSessionLocal() as db:
-                await register_all_org_plivo_numbers(db)
-        except Exception:
-            # Best-effort — must never block or crash startup.
-            pass
-
     background_tasks: tuple[asyncio.Task[None], ...] = ()
-    if pilot.workers_enabled():
-        plivo_registration_task = asyncio.create_task(_register_all_org_plivo_numbers())
-        dialer_task = asyncio.create_task(run_campaign_dialer())
-        whatsapp_dispatcher_task = asyncio.create_task(run_whatsapp_dispatcher())
-        follow_up_task = asyncio.create_task(run_follow_up_dispatcher())
-        license_expiry_task = asyncio.create_task(run_license_expiry_worker())
-        usage_daily_task = asyncio.create_task(run_usage_daily_aggregator())
-        usage_monthly_task = asyncio.create_task(run_usage_monthly_aggregator())
-        aws_cost_import_task = asyncio.create_task(run_aws_cost_importer())
-        late_event_sweep_task = asyncio.create_task(run_late_event_adjustment_sweep())
-        voice_retention_task = asyncio.create_task(run_voice_retention_worker())
-        background_tasks = (
-            plivo_registration_task,
-            dialer_task,
-            whatsapp_dispatcher_task,
-            follow_up_task,
-            license_expiry_task,
-            usage_daily_task,
-            usage_monthly_task,
-            aws_cost_import_task,
-            late_event_sweep_task,
-            voice_retention_task,
-        )
+    if settings.run_background_workers:
+        background_tasks = start_background_workers()
     else:
-        # ENVIRONMENT=pilot without PILOT_WORKERS_ENABLED: no dialer, dispatchers, billing jobs or Plivo
-        # re-registration can run against the pilot database with real provider credentials in the environment.
         import structlog
 
-        structlog.get_logger("pilot").warning("pilot_background_workers_disabled")
+        structlog.get_logger("workers").info("background_workers_not_started_in_api_process")
     async def _startup_voice_check() -> None:
         from apps.api.channels.voice import elevenlabs_client
         from apps.api.channels.voice.voice_profile import platform_voice_id

@@ -56,4 +56,6 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8002
 
-CMD ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8002"]
+# Only Caddy can reach this port (compose `expose`), so trusting its X-Forwarded-For is safe and makes
+# per-client rate limits see the real client IP instead of Caddy's.
+CMD ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8002", "--proxy-headers", "--forwarded-allow-ips", "*"]

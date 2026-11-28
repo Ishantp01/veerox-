@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     # module's cp1252 encode fallback on every line). Opt-in only, never
     # tied to `environment` again.
     db_echo: bool = False
+    # Connection pool for the API process (apps/api/db/session.py). 20 + 20 stays under a small RDS's max_connections
+    # even with the worker container's own pool; raise only together with the database size.
+    db_pool_size: int = 20
+    db_max_overflow: int = 20
+    # Run the background workers (dialer, dispatchers, aggregators) inside THIS process. docker-compose turns it off
+    # for the api container and runs them in the separate `worker` container (apps/api/worker_main.py), so a busy
+    # campaign can no longer starve login and live calls on the same event loop.
+    run_background_workers: bool = True
     startup_seed_required: bool = False
     test_database_url: str = "sqlite+aiosqlite:///:memory:"
 

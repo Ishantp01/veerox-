@@ -261,6 +261,26 @@ async def _claim_message_id(msg_id: str) -> bool:
     return bool(acquired)
 
 
+_MAX_FAILED_ATTEMPTS = 3
+_RETRY_DELAY_SECS = 5
+
+
+async def _release_message_id(msg_id: str) -> bool:
+    """Un-claim a message whose processing failed before any reply went out, so Meta's retry is processed
+    instead of dropped as a duplicate. Gives up after ``_MAX_FAILED_ATTEMPTS`` so a poison message can't loop."""
+    try:
+        redis = get_redis_pool()
+        fail_key = f"{_IDEMPOTENCY_KEY_PREFIX}fail:{msg_id}"
+        attempts = int(await redis.incr(fail_key))
+        await redis.expire(fail_key, _IDEMPOTENCY_TTL_SECS)
+        if attempts >= _MAX_FAILED_ATTEMPTS:
+            return False
+        await redis.delete(f"{_IDEMPOTENCY_KEY_PREFIX}{msg_id}")
+        return True
+    except Exception:  # noqa: BLE001 - releasing is best-effort
+        return False
+
+
 async def _find_open_campaign_target(db: AsyncSession, phone: str) -> UUID | None:
     """Find this phone's still-open WhatsApp campaign outreach, if any.
 
@@ -392,6 +412,8 @@ def _log_delivery_statuses(payload: dict[str, Any]) -> None:
 
 async def process_inbound(payload: dict[str, Any]) -> None:
     """Background-task entrypoint — never raises, always logs."""
+    claimed_id: str | None = None
+    reply_sent = False
     try:
         msg = _extract_message(payload)
         if msg is None:
@@ -412,6 +434,7 @@ async def process_inbound(payload: dict[str, Any]) -> None:
         if not await _claim_message_id(msg.id):
             logger.info("whatsapp_inbound_duplicate_skipped", wa_message_id=msg.id)
             return
+        claimed_id = msg.id
 
         phone_number_id = _extract_phone_number_id(payload)
 
@@ -555,6 +578,7 @@ async def process_inbound(payload: dict[str, Any]) -> None:
                 sent = await wa_client.send_text(
                     meta_creds.access_token, msg.from_phone, reply, phone_number_id=phone_number_id
                 )
+                reply_sent = True
                 outbound_id = _outbound_message_id(sent) or f"{msg.id}:reply"
                 try:
                     async with AsyncSessionLocal() as usage_db:
@@ -597,3 +621,9 @@ async def process_inbound(payload: dict[str, Any]) -> None:
             payload_object=payload.get("object"),
         )
         await record_error()
+        # Nothing reached the customer: free the idempotency claim so Meta's retry is handled, not dropped.
+        if claimed_id is not None and not reply_sent and await _release_message_id(claimed_id):
+            logger.info("whatsapp_inbound_claim_released", wa_message_id=claimed_id)
+            # The webhook already returned 200, so Meta will NOT retry: re-run it ourselves after a short pause.
+            await asyncio.sleep(_RETRY_DELAY_SECS)
+            await process_inbound(payload)

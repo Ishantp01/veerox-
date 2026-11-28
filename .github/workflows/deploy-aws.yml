@@ -20,7 +20,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install uv && uv sync --frozen
+      - name: Tests (deploy is blocked if these fail)
+        env:
+          ADMIN_TOKEN: ci-test-token
+          ENVIRONMENT: test
+        run: uv run pytest apps/api/tests -x -q
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

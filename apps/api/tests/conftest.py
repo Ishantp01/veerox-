@@ -284,3 +284,12 @@ def _no_real_db_for_usage_metering(monkeypatch: pytest.MonkeyPatch) -> None:
         raise RuntimeError("real DB blocked in tests")
 
     monkeypatch.setattr(session_module, "AsyncSessionLocal", _blocked)
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Every test starts with empty rate-limit counters (all tests share one client IP and one process)."""
+    from apps.api.rate_limit import limiter
+
+    limiter.reset()
+    yield

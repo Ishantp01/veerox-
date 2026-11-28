@@ -14,6 +14,7 @@ import websockets
 from fastapi import APIRouter, Header, HTTPException
 
 from apps.api.config import settings
+from apps.api.core.security import tokens_match
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/diag", tags=["diag"])
@@ -28,7 +29,7 @@ async def latency_probe(x_admin_token: str | None = Header(None)) -> dict:
     chat completion on the configured model. Temporary, like the realtime
     probe above — delete once the latency investigation is done.
     """
-    if x_admin_token != settings.admin_token:
+    if not tokens_match(x_admin_token, settings.admin_token):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     from sqlalchemy import text
@@ -84,7 +85,7 @@ async def voice_latency(x_admin_token: str | None = Header(None)) -> dict:
     before trusting a percentile; for history run
     scripts/voice_latency_report.py over the JSON logs.
     """
-    if x_admin_token != settings.admin_token:
+    if not tokens_match(x_admin_token, settings.admin_token):
         raise HTTPException(status_code=403, detail="Forbidden")
     from apps.api.channels.voice.latency import STATS
 
@@ -102,7 +103,7 @@ async def voice_latency(x_admin_token: str | None = Header(None)) -> dict:
 @router.get("/voice-active")
 async def voice_active(x_admin_token: str | None = Header(None)) -> dict:
     """Live calls this process is carrying right now (counts only). Check it before a deploy: a restart ends every one."""
-    if x_admin_token != settings.admin_token:
+    if not tokens_match(x_admin_token, settings.admin_token):
         raise HTTPException(status_code=403, detail="Forbidden")
     from apps.api.channels.voice import capacity
 
@@ -112,7 +113,7 @@ async def voice_active(x_admin_token: str | None = Header(None)) -> dict:
 @router.get("/voice-config")
 async def voice_config(x_admin_token: str | None = Header(None)) -> dict:
     """Which voice flags are on in THIS process and any combination that cannot work as intended."""
-    if x_admin_token != settings.admin_token:
+    if not tokens_match(x_admin_token, settings.admin_token):
         raise HTTPException(status_code=403, detail="Forbidden")
     from apps.api.channels.voice.config_check import check_voice_config, flag_snapshot
 
@@ -132,7 +133,7 @@ async def openai_realtime_probe(x_admin_token: str | None = Header(None)) -> dic
     Returns each step's timing so we can tell whether the hang (or drop) is in
     the OpenAI connect, the session.update handshake, or somewhere after.
     """
-    if x_admin_token != settings.admin_token:
+    if not tokens_match(x_admin_token, settings.admin_token):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     url = f"wss://api.openai.com/v1/realtime?model={settings.openai_realtime_model}"

@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import select
 
 from apps.api.config import settings
+from apps.api.core.security import tokens_match
 from apps.api.db.models.aws_cost_pool import AwsCostPool
 from apps.api.db.models.cost_allocation import CostAllocation
 from apps.api.db.models.cost_rate import CostRate
@@ -344,7 +345,7 @@ async def verify_internal_service_token(x_admin_token: str | None = Header(None)
     ingestion is service-to-service, not a dashboard action, so it accepts
     ONLY the shared `X-Admin-Token` — never a session token — and must
     never be reachable anonymously (req §14)."""
-    if x_admin_token is None or x_admin_token != settings.admin_token:
+    if not tokens_match(x_admin_token, settings.admin_token):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 

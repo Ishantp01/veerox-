@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy import select
 
 from apps.api import main as main_module
+from apps.api.workers import runner as runner_module
 from apps.api import pilot
 from apps.api.channels.email import brevo_client
 from apps.api.channels.voice import adapter, failover, plivo_client
@@ -151,7 +152,7 @@ async def _run_lifespan(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     for name in ("run_campaign_dialer", "run_whatsapp_dispatcher", "run_follow_up_dispatcher", "run_license_expiry_worker",
                  "run_usage_daily_aggregator", "run_usage_monthly_aggregator", "run_aws_cost_importer",
                  "run_late_event_adjustment_sweep", "run_voice_retention_worker"):
-        monkeypatch.setattr(main_module, name, make(name))
+        monkeypatch.setattr(runner_module, name, make(name))
 
     async def no_registration(db: Any) -> None:
         started.append("plivo_registration")
@@ -159,7 +160,7 @@ async def _run_lifespan(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     async def no_seed() -> None:
         return None
 
-    monkeypatch.setattr(main_module, "register_all_org_plivo_numbers", no_registration)
+    monkeypatch.setattr(runner_module, "register_all_org_plivo_numbers", no_registration)
     monkeypatch.setattr(main_module, "ensure_env_seed_data_on_startup", no_seed)
     async with main_module.lifespan(main_module.FastAPI()):
         await asyncio.sleep(0.05)
@@ -756,3 +757,47 @@ async def test_outside_pilot_mode_the_documentation_is_unchanged(monkeypatch: py
     monkeypatch.setattr(settings, "environment", "dev")
     docs, redoc, schema = await _docs_statuses()
     assert (docs, redoc, schema) == (200, 200, 200)
+
+
+@pytest.mark.asyncio
+async def test_failed_whatsapp_turn_releases_the_claim_and_retries_once_then_gives_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A turn that fails before any reply must free its idempotency claim (Meta won't retry after our 200)."""
+    calls: list[str] = []
+    released: list[str] = []
+    monkeypatch.setattr(wa_adapter, "_extract_message", lambda payload: SimpleNamespace(id="wamid.9", from_phone="919111111111"))
+    monkeypatch.setattr(wa_adapter, "_RETRY_DELAY_SECS", 0)
+
+    async def claim(msg_id: str) -> bool:
+        calls.append("claim")
+        return True
+
+    async def release(msg_id: str) -> bool:
+        released.append(msg_id)
+        return len(released) < 2  # second failure: give up
+
+    async def record() -> None:
+        return None
+
+    class Boom:
+        async def __aenter__(self):
+            raise RuntimeError("db down")
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(wa_adapter, "_claim_message_id", claim)
+    monkeypatch.setattr(wa_adapter, "_release_message_id", release)
+    monkeypatch.setattr(wa_adapter, "record_error", record)
+    monkeypatch.setattr(wa_adapter, "AsyncSessionLocal", lambda: Boom())
+    monkeypatch.setattr(wa_adapter, "_extract_phone_number_id", lambda p: "1")
+    await wa_adapter.process_inbound({"entry": []})
+    assert calls == ["claim", "claim"] and released == ["wamid.9", "wamid.9"]
+
+
+def test_tokens_match_is_exact_and_handles_none_and_non_ascii() -> None:
+    from apps.api.core.security import tokens_match
+
+    assert tokens_match("secret", "secret")
+    assert not tokens_match("secret", "secreT")
+    assert not tokens_match(None, "secret")
+    assert not tokens_match("sécret", "secret")

@@ -240,13 +240,14 @@ async def _other_admins_count(db: DbDep, org_id: UUID, excluding_account_user_id
 
 @router.patch("/members/{account_user_id}", response_model=TeamMemberOut)
 async def update_member(
-    account_user_id: UUID, payload: UpdateMemberIn, org: ManagerDep, db: DbDep
+    account_user_id: UUID, payload: UpdateMemberIn, org: ManagerDep, db: DbDep, redis: RedisDep
 ) -> TeamMemberOut:
     """Admin-only. Partial update: only fields the caller actually sent are
     touched. `full_name`/`mobile`/`email` edit the AccountUser itself (see
     UpdateMemberIn's docstring — that's shared across every org this person
     belongs to, not just this one)."""
     updates = payload.model_dump(exclude_unset=True)
+    role_changed = False
     membership = await _get_membership(db, org.org_id, account_user_id)
 
     if "role" in updates:
@@ -256,6 +257,7 @@ async def update_member(
         if membership.role == "admin" and role != "admin":
             if await _other_admins_count(db, org.org_id, account_user_id) == 0:
                 raise HTTPException(status_code=400, detail="Org must keep at least one admin")
+        role_changed = role != membership.role
         membership.role = role
 
     account_user_result = await db.execute(select(AccountUser).where(AccountUser.id == account_user_id))
@@ -273,6 +275,11 @@ async def update_member(
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(status_code=409, detail="That email is already in use") from exc
+
+    if role_changed:
+        # Sessions carry the role they were created with: end them so a demoted member loses access now,
+        # not when the 14-day session expires. They simply log in again.
+        await invalidate_user_sessions(redis, account_user_id)
 
     return _member_out(account_user, membership)
 
