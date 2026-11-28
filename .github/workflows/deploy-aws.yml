@@ -33,6 +33,9 @@ jobs:
         env:
           ADMIN_TOKEN: ci-test-token
           ENVIRONMENT: test
+          # Throwaway Fernet key, test-only (never used for real data, never the production key). Not a repo secret:
+          # tests pin the workflow to the four deploy secrets only.
+          SECRET_ENCRYPTION_KEY: "ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oSeSXhs8="
         run: uv run pytest apps/api/tests -x -q
 
   deploy:

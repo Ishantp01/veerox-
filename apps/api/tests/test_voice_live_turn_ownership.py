@@ -155,7 +155,7 @@ async def test_fragments_without_a_segment_id_are_accepted_as_before() -> None:
 async def test_one_provider_segment_continuing_across_turns_is_adopted_after_a_long_silence_of_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(adapter, "LIVE_REBIND_AFTER_SECONDS", 0.05)
+    monkeypatch.setattr(adapter, "LIVE_REBIND_AFTER_SECONDS", 0.3)  # ambiguity window is 2x this (0.6 s); the sleep below must clear it with margin
     call = Call(live=types.SimpleNamespace(healthy=True))
     await call.event("input_audio_buffer.speech_started")
     await delta(call, "pehla", "live_ONE")
@@ -163,7 +163,7 @@ async def test_one_provider_segment_continuing_across_turns_is_adopted_after_a_l
     await call.event("input_audio_buffer.speech_started")
     await delta(call, " turant", "live_ONE")
     assert call.state.utterance_text == ""  # too soon: treated as the old turn's tail
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.9)
     await delta(call, " dusra sawaal", "live_ONE")  # still the only segment and the new turn has no text: adopt
     assert call.state.utterance_text == " dusra sawaal"
     await adapter.cancel_pending_tasks(call.state)
@@ -332,13 +332,13 @@ async def test_limitation_a_segment_whose_first_fragment_arrives_after_the_next_
 
 
 async def test_limitation_a_late_tail_is_adopted_once_the_rebind_window_has_passed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(adapter, "LIVE_REBIND_AFTER_SECONDS", 0.05)
+    monkeypatch.setattr(adapter, "LIVE_REBIND_AFTER_SECONDS", 0.3)  # ambiguity window is 2x this (0.6 s)
     call = Call(live=types.SimpleNamespace(healthy=True))
     await call.event("input_audio_buffer.speech_started")
     await delta(call, "pehla", "live_A")
     await finish_turn(call, "c1")
     await call.event("input_audio_buffer.speech_started")
-    await asyncio.sleep(0.1)  # the new turn has spoken a while with no text of its own...
+    await asyncio.sleep(0.9)  # the new turn has spoken a while with no text of its own...
     await delta(call, " purani baat", "live_A")  # ...so a genuinely old tail looks like a continuing segment
     assert call.state.utterance_text == " purani baat"
     await adapter.cancel_pending_tasks(call.state)
