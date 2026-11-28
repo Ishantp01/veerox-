@@ -317,6 +317,25 @@ async def _warm_greeting_cache(org_id: UUID, campaign_target_id: UUID | None = N
         logger.warning("voice_greeting_warm_failed", exc_info=True)
 
 
+async def warm_all_org_greetings(max_orgs: int = 50) -> int:
+    """At server start, fill the greeting audio cache for every org's default greeting, so the FIRST call after a
+    restart or deploy opens with cached audio instead of a live model greeting (~3 s of silence). Best-effort: never
+    raises and never blocks startup. Returns how many orgs were warmed."""
+    if not (settings.voice_greeting_audio_cache and settings.voice_tts_provider == "elevenlabs"):
+        return 0
+    warmed = 0
+    try:
+        async with AsyncSessionLocal() as db:
+            org_ids = list((await db.execute(select(Org.id).limit(max_orgs))).scalars().all())
+        for org_id in org_ids:
+            await _warm_greeting_cache(org_id, None)
+            warmed += 1
+    except Exception:  # noqa: BLE001 - a warm-up must never affect startup
+        logger.warning("voice_greeting_startup_warm_failed", exc_info=True)
+    logger.info("voice_greeting_startup_warm", orgs=warmed)
+    return warmed
+
+
 async def claim_precall_connect(
     call_uuid: str, expected_org_id: UUID | None = None
 ) -> tuple[Any, str] | None:

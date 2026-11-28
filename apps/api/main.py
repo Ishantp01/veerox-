@@ -128,6 +128,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         else:
             log.info("voice_preflight_ok")
 
+    async def _warm_voice_greetings() -> None:
+        try:
+            from apps.api.channels.voice.realtime_bridge import warm_all_org_greetings
+
+            await warm_all_org_greetings()
+        except Exception:  # noqa: BLE001 - best-effort, never block startup
+            pass
+
+    greeting_warm_task = asyncio.create_task(_warm_voice_greetings())
+
     voice_check_task = (
         asyncio.create_task(_startup_voice_check())
         if settings.voice_preflight_voice_check and settings.voice_tts_provider == "elevenlabs"
@@ -136,6 +146,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         yield
     finally:
+        greeting_warm_task.cancel()
         if voice_check_task is not None:
             voice_check_task.cancel()
         for task in background_tasks:

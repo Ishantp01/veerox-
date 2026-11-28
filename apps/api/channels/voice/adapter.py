@@ -232,6 +232,9 @@ class CallState:
     # yet — the ack waits briefly for these so a filler word ("ok") can be
     # recognised and ignored before the agent reacts to it.
     transcripts_outstanding: int = 0
+    # The caller spoke over the opening greeting and it was cut: answer that turn at once (no transcript wait, no ack
+    # hold). Cleared when the reply fires.
+    greeting_interrupted: bool = False
     # Turn stamping. ``assistant_turn_id`` counts the assistant's responses; each caller utterance gets a
     # sequence number (``utt_seq``) when its audio is committed and remembers the assistant turn that was
     # current when the caller started speaking. A transcript is matched to its utterance by item id (or commit
@@ -1220,6 +1223,7 @@ async def _cut_now(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, 
         return
     if reason == "greeting_barge_in":
         state.greeting_guard_until = 0.0  # the caller has something to say: the greeting stops here
+        state.greeting_interrupted = True
         state.disclosure_owed = settings.voice_greeting_ai_disclosure
     elif state.greeting_guard_until and time.monotonic() < state.greeting_guard_until:
         return
@@ -1825,7 +1829,8 @@ async def _fire_pending_reply(oai_ws: Any, state: CallState) -> None:
     """
     if state.response_active:
         return  # another scheduled task already reserved the response slot
-    if state.transcripts_outstanding > 0 and settings.voice_reply_wait_transcript_ms > 0:
+    greeting_interrupted, state.greeting_interrupted = state.greeting_interrupted, False
+    if state.transcripts_outstanding > 0 and settings.voice_reply_wait_transcript_ms > 0 and not greeting_interrupted:
         if not await _wait_for_own_transcript(state):
             return  # the caller is speaking again; their next commit re-schedules this reply
         if state.response_active or not state.reply_pending:
@@ -2425,7 +2430,8 @@ async def _send_instant_ack(call_ws: WebSocket, state: CallState, log: Any) -> N
     if voice is None:
         return
     # Short hold: if the reply is already starting, the reaction would only talk over it.
-    await asyncio.sleep(max(0, settings.voice_ack_hold_ms) / 1000)
+    if not state.greeting_interrupted:  # the caller talked over the greeting: react at once
+        await asyncio.sleep(max(0, settings.voice_ack_hold_ms) / 1000)
     if state.suppress_response_audio or _agent_busy(state):
         return
     if state.utterance_text.strip() and _is_backchannel(state.utterance_text):
