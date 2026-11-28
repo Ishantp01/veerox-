@@ -16,6 +16,33 @@ from apps.api.sentry import init_sentry
 from apps.api.workers.runner import start_background_workers
 
 
+async def run_until_stopped(tasks: tuple[asyncio.Task[None], ...], stop: asyncio.Event) -> None:
+    """Keep the process alive until ``stop`` is set (SIGTERM/SIGINT), then cancel every task.
+
+    A task that finishes early is NOT a reason to exit: some are one-shot (the Plivo number registration returns
+    right after startup), and a worker that crashes is logged and left to Sentry rather than restarting the whole
+    container, which would re-run every startup requeue pass.
+    """
+    log = structlog.get_logger("worker")
+    stop_wait = asyncio.create_task(stop.wait())
+    running = set(tasks)
+    try:
+        while not stop.is_set() and running:
+            done, _ = await asyncio.wait({stop_wait, *running}, return_when=asyncio.FIRST_COMPLETED)
+            for task in done - {stop_wait}:
+                running.discard(task)
+                if not task.cancelled() and task.exception() is not None:
+                    log.error("worker_task_crashed", error=repr(task.exception()))
+        if not running and not stop.is_set():
+            # Every task ended on its own: nothing left to do, so let the container restart cleanly.
+            log.warning("worker_all_tasks_finished")
+    finally:
+        stop_wait.cancel()
+        for task in running:
+            task.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
+
+
 async def main() -> None:
     setup_logging()
     init_sentry()
@@ -23,6 +50,8 @@ async def main() -> None:
     tasks = start_background_workers()
     if not tasks:
         log.warning("worker_nothing_to_run")
+        # Idle instead of exiting, so `restart: unless-stopped` does not loop a deliberately-empty worker.
+        await asyncio.Event().wait()
         return
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -32,11 +61,7 @@ async def main() -> None:
         except NotImplementedError:  # Windows dev
             pass
     log.info("worker_started", tasks=len(tasks))
-    stop_wait = asyncio.create_task(stop.wait())
-    await asyncio.wait({stop_wait, *tasks}, return_when=asyncio.FIRST_COMPLETED)
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    await run_until_stopped(tasks, stop)
     log.info("worker_stopped")
 
 

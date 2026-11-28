@@ -801,3 +801,24 @@ def test_tokens_match_is_exact_and_handles_none_and_non_ascii() -> None:
     assert not tokens_match("secret", "secreT")
     assert not tokens_match(None, "secret")
     assert not tokens_match("sécret", "secret")
+
+
+async def test_worker_process_keeps_running_when_a_one_shot_task_finishes_and_stops_on_signal() -> None:
+    """Regression: the worker container exited ~1 s after start because the one-shot Plivo registration task
+    finished first and that was treated as 'a worker ended'."""
+    from apps.api import worker_main
+
+    async def one_shot() -> None:
+        return None
+
+    async def forever() -> None:
+        await asyncio.sleep(3600)
+
+    stop = asyncio.Event()
+    tasks = (asyncio.create_task(one_shot()), asyncio.create_task(forever()))
+    runner = asyncio.create_task(worker_main.run_until_stopped(tasks, stop))
+    await asyncio.sleep(0.2)
+    assert not runner.done()  # still alive after the one-shot task ended
+    stop.set()
+    await asyncio.wait_for(runner, timeout=2)
+    assert tasks[1].cancelled()
