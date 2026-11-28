@@ -1254,7 +1254,10 @@ async def _cut_now(oai_ws: Any, call_ws: WebSocket, state: CallState, log: Any, 
         # in handle_openai_event's response.done handler. suppress_response_audio
         # stops its still-arriving deltas reaching the caller in the meantime.
         await _stop_generation(oai_ws, state, log)
-    elif state.reply_pending:
+    elif state.reply_pending and not state.caller_speaking:
+        # While the caller is still talking over the agent, do NOT fire the reply held for their EARLIER turn: it would
+        # take the response slot and their new question would wait for it to finish (~2.5 s seen in prod). Their next
+        # commit schedules one reply, and the model hears both turns in the conversation.
         _schedule_reply(oai_ws, state)
 
 
